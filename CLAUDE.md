@@ -10,7 +10,7 @@ Shieldoo Gate is an open-source supply chain security proxy for Docker, PyPI, np
 
 ## Documentation — MANDATORY
 
-**`docs/` is the source of truth for this project. `docs/index.md` is the main entry point.**
+**`docs/` is the source of truth for this project. `docs/index.md` is the main entry point.** Documentation is in **English** and must be kept up to date with code changes. All design decisions, architecture, API specs, and development conventions are documented here.
 
 ### Rules
 
