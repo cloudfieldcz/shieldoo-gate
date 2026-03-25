@@ -1,0 +1,62 @@
+# Binaries
+/shieldoo-gate
+/bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go
+/vendor/
+*.test
+*.out
+coverage.html
+coverage.txt
+
+# Python (scanner-bridge)
+scanner-bridge/__pycache__/
+scanner-bridge/*.pyc
+scanner-bridge/.venv/
+scanner-bridge/venv/
+*.egg-info/
+
+# Node / UI
+ui/node_modules/
+ui/dist/
+ui/.vite/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# Database (local dev)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Docker
+docker/data/
+
+# Cache & temp
+/tmp/
+/cache/
+*.log
+
+# Helm
+helm/charts/
