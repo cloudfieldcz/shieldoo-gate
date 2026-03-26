@@ -3,20 +3,37 @@ package config
 import (
 	"embed"
 	"fmt"
+	"sort"
 
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
 )
 
-//go:embed migrations/001_init.sql
+//go:embed migrations/*.sql
 var migrationFS embed.FS
 
-func mustReadMigration() string {
-	data, err := migrationFS.ReadFile("migrations/001_init.sql")
+func readMigrations() ([]string, error) {
+	entries, err := migrationFS.ReadDir("migrations")
 	if err != nil {
-		panic(fmt.Sprintf("config: reading migration: %v", err))
+		return nil, fmt.Errorf("config: reading migrations dir: %w", err)
 	}
-	return string(data)
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+
+	var sqls []string
+	for _, name := range names {
+		data, err := migrationFS.ReadFile("migrations/" + name)
+		if err != nil {
+			return nil, fmt.Errorf("config: reading migration %s: %w", name, err)
+		}
+		sqls = append(sqls, string(data))
+	}
+	return sqls, nil
 }
 
 func InitDB(dbPath string) (*sqlx.DB, error) {
@@ -38,11 +55,17 @@ func InitDB(dbPath string) (*sqlx.DB, error) {
 		}
 	}
 
-	// Run migration
-	migration := mustReadMigration()
-	if _, err := db.Exec(migration); err != nil {
+	// Run all migrations in order
+	migrations, err := readMigrations()
+	if err != nil {
 		db.Close()
-		return nil, fmt.Errorf("config: running migration: %w", err)
+		return nil, err
+	}
+	for i, sql := range migrations {
+		if _, err := db.Exec(sql); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("config: running migration %d: %w", i+1, err)
+		}
 	}
 
 	return db, nil
