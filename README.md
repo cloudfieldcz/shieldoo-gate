@@ -42,6 +42,18 @@ Port reference:
 | Docker proxy | 5002 | HTTP |
 | Admin API / Metrics | 8080 | HTTP |
 
+## Testing
+
+```bash
+# Unit tests
+make test
+
+# E2E shell tests (spins up isolated Docker stack, installs real packages, validates API)
+./tests/e2e-shell/run.sh
+```
+
+See [`tests/e2e-shell/README.md`](tests/e2e-shell/README.md) for details and flags (`--no-build`, `--keep`).
+
 ## Documentation
 
 **Full documentation is available in [`docs/`](docs/index.md).**

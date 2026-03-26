@@ -96,8 +96,11 @@ make build
 # Run with a config file
 ./bin/shieldoo-gate -config config.example.yaml
 
-# Run tests
+# Unit tests
 make test
+
+# E2E tests (isolated Docker stack, real package installs, API validation)
+./tests/e2e-shell/run.sh
 
 # Lint
 make lint
