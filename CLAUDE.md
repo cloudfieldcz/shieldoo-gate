@@ -29,23 +29,23 @@ shieldoo-gate/
 ├── internal/
 │   ├── adapter/              # protocol adapters (docker/, pypi/, npm/, nuget/)
 │   ├── scanner/              # scanner integrations (interface.go, guarddog/, trivy/, osv/)
-│   ├── cache/                # storage backends (interface.go, local/, s3/)
+│   ├── cache/                # storage backends (interface.go, local/)
 │   ├── policy/               # policy engine
-│   ├── scheduler/            # rescan scheduler
+│   ├── threatfeed/           # threat feed client
 │   ├── api/                  # REST API handlers
 │   ├── model/                # shared data models
 │   └── config/               # config loading & validation
 ├── ui/                       # React admin UI (Vite, TailwindCSS)
 ├── scanner-bridge/           # Python sidecar for GuardDog (gRPC)
-├── helm/                     # Kubernetes Helm chart
 ├── docker/                   # docker-compose.yml
 ├── docs/                     # Project documentation (MUST be kept up to date)
 │   ├── index.md              # Main documentation entry point
-│   ├── adr/                  # Architecture Decision Records
+│   ├── plans/                # Implementation plans
 │   └── api/                  # OpenAPI spec
+├── examples/                 # Minimal example projects (Python, npm, .NET)
 ├── tests/
-│   ├── integration/
-│   └── e2e/
+│   ├── e2e/                  # Go e2e tests
+│   └── e2e-shell/            # Shell-based e2e tests per ecosystem
 ├── Makefile
 ├── go.mod / go.sum
 └── config.example.yaml
@@ -80,8 +80,8 @@ uv pip compile requirements.in -o requirements.txt  # to generate pinned deps
 - `github.com/go-chi/chi/v5` — HTTP router
 - `github.com/spf13/viper` — config (YAML/env)
 - `github.com/rs/zerolog` — structured logging (JSON)
-- `github.com/jmoiron/sqlx` + `github.com/mattn/go-sqlite3` / `github.com/lib/pq` — database
-- `github.com/robfig/cron/v3` — rescan scheduler
+- `github.com/jmoiron/sqlx` + `github.com/mattn/go-sqlite3` — database (SQLite only currently)
+- `google.golang.org/grpc` + `google.golang.org/protobuf` — gRPC for scanner bridge
 - `github.com/google/go-containerregistry` — OCI/Docker registry client
 - `github.com/prometheus/client_golang` — metrics
 - `github.com/stretchr/testify` — test assertions
@@ -92,7 +92,7 @@ React 18 + TypeScript 5.x, Vite, TailwindCSS, TanStack React Query, Recharts, Ra
 
 ### Database
 
-SQLite (default single-node), PostgreSQL (HA mode). Use only ANSI SQL — no vendor extensions.
+SQLite (default single-node). PostgreSQL HA mode is planned but not yet implemented. Use only ANSI SQL — no vendor extensions.
 
 ### Inter-process Communication
 
@@ -106,7 +106,7 @@ Before implementing any struct, check `internal/*/interface.go`. Verify with com
 
 ```go
 var _ scanner.Scanner = (*trivy.TrivyScanner)(nil)
-var _ cache.CacheStore = (*s3.S3CacheStore)(nil)
+var _ cache.CacheStore = (*local.LocalCacheStore)(nil)
 var _ adapter.Adapter = (*pypi.PyPIAdapter)(nil)
 ```
 

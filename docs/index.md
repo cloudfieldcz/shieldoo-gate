@@ -8,9 +8,20 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
 
 ## Contents
 
-- [Technical Specification](initial-analyse.md) — full architecture, technology stack, interfaces, and deployment
-- [Architecture Decision Records](adr/) — ADRs for key design choices
-- [API Reference](api/) — OpenAPI spec for the REST API
+### Documentation
+
+- [Architecture](architecture.md) — component overview, request flow, startup sequence, concurrency model
+- [Data Model](data-model.md) — database schema, Go structs, table relationships, migrations
+- [Scanners](scanners.md) — scan engine, built-in and external scanners, aggregation, threat feed
+- [Protocol Adapters](adapters.md) — PyPI, npm, NuGet, Docker proxy implementations and routing
+- [Policy Engine](policy.md) — evaluation order, overrides, allowlists, aggregation rules, examples
+- [Configuration](configuration.md) — full `config.yaml` reference, environment variables, Go structs
+- [Deployment](deployment.md) — Docker Compose, local development, client configuration, testing
+
+### Reference
+
+- [API Reference](api/) — OpenAPI 3.1 spec for the REST API
+- [Technical Specification](initial-analyse.md) — original design document and backlog
 
 ## Architecture
 
@@ -32,10 +43,10 @@ Shieldoo Gate Protocol Adapter
 |---|---|
 | **Protocol Adapters** | Native protocol implementations (Docker/OCI, PyPI PEP 503, npm, NuGet V3) |
 | **Scan Engine** | Pluggable scanner framework (GuardDog, Trivy, OSV, built-in heuristics) |
-| **Cache Store** | Local filesystem, S3, or Azure Blob storage with TTL |
+| **Cache Store** | Local filesystem with per-ecosystem TTL (S3 backend planned) |
 | **Policy Engine** | Block / quarantine / warn / allow rules with allowlists |
 | **Policy Overrides** | Dynamic false-positive management and audit trail via UI/API |
-| **Rescan Scheduler** | Periodic rescan of cached artifacts + threat feed updates |
+| **Threat Feed** | Periodic threat feed refresh + manual rescan via API (automatic rescan scheduler planned) |
 | **Admin UI + REST API** | Dashboard, artifact management, audit log |
 
 ## Technology Stack
@@ -43,7 +54,7 @@ Shieldoo Gate Protocol Adapter
 - **Go 1.25+** — core proxy, API, built-in scanners
 - **TypeScript + React 18** — admin UI
 - **Python 3.12+** — GuardDog scanner bridge (gRPC sidecar)
-- **SQLite** (single-node) / **PostgreSQL** (HA mode)
+- **SQLite** (single-node; PostgreSQL HA mode planned)
 
 ## Implementation Status (v1.0)
 
@@ -52,15 +63,19 @@ Shieldoo Gate Protocol Adapter
 | 1 | Skeleton (config, DB, interfaces) | Done |
 | 2 | Scanner engine + built-in scanners | Done |
 | 3 | External scanners (GuardDog, Trivy, OSV) | Done |
-| 4 | Cache & policy engine | Done |
+| 4 | Cache (local) & policy engine | Done |
 | 5 | Protocol adapters (PyPI, npm, Docker, NuGet) | Done |
 | 6 | Admin REST API | Done |
 | 7 | Admin UI (React) | Done |
 | 8 | Main entrypoint, Docker Compose, E2E tests | Done |
+| — | S3 cache backend | Planned |
+| — | PostgreSQL HA backend | Planned |
+| — | Automatic rescan scheduler | Planned |
+| — | Helm chart | Planned |
 
 ## Getting Started
 
-See the [Quick Start in README](../README.md#quick-start) or the [Deployment section](initial-analyse.md#11-deployment) in the technical specification.
+See the [Quick Start in README](../README.md#quick-start) or the [Deployment guide](deployment.md) for detailed setup instructions.
 
 ### Example Projects
 
@@ -113,7 +128,7 @@ The scanner bridge must be started separately:
 cd scanner-bridge
 uv venv .venv && source .venv/bin/activate
 uv pip install -r requirements.txt
-python -m bridge.server
+python main.py
 ```
 
 ### Running E2E Tests
