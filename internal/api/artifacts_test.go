@@ -25,7 +25,7 @@ func TestHandleListArtifacts_Empty_ReturnsEmptyPage(t *testing.T) {
 	assert.Equal(t, float64(0), body["total"])
 	assert.Equal(t, float64(1), body["page"])
 	assert.Equal(t, float64(50), body["per_page"])
-	items := body["items"].([]any)
+	items := body["data"].([]any)
 	assert.Empty(t, items)
 }
 
@@ -45,7 +45,7 @@ func TestHandleListArtifacts_WithData_ReturnsList(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
 	assert.Equal(t, float64(2), body["total"])
-	items := body["items"].([]any)
+	items := body["data"].([]any)
 	assert.Len(t, items, 2)
 }
 

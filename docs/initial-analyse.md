@@ -785,6 +785,9 @@ POST   /api/v1/artifacts/{id}/rescan            trigger manual rescan
 POST   /api/v1/artifacts/{id}/quarantine        manual quarantine
 POST   /api/v1/artifacts/{id}/release           release from quarantine
 
+# Audit log
+GET    /api/v1/audit                            paginated audit log (filter by event_type)
+
 # Statistics
 GET    /api/v1/stats/summary                    traffic summary (last 24h, 7d, 30d)
 GET    /api/v1/stats/blocked                    blocked artifacts history

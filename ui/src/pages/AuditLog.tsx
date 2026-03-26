@@ -5,23 +5,21 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 
 const EVENT_TYPES = [
   '',
-  'ARTIFACT_SERVED',
-  'ARTIFACT_BLOCKED',
-  'ARTIFACT_QUARANTINED',
-  'ARTIFACT_RELEASED',
-  'SCAN_COMPLETED',
-  'RESCAN_TRIGGERED',
+  'SERVED',
+  'BLOCKED',
+  'QUARANTINED',
+  'RELEASED',
+  'SCANNED',
 ]
 
 const PER_PAGE = 50
 
 const eventTypeBadge: Record<string, string> = {
-  ARTIFACT_SERVED: 'bg-green-100 text-green-800',
-  ARTIFACT_BLOCKED: 'bg-red-100 text-red-800',
-  ARTIFACT_QUARANTINED: 'bg-orange-100 text-orange-800',
-  ARTIFACT_RELEASED: 'bg-blue-100 text-blue-800',
-  SCAN_COMPLETED: 'bg-gray-100 text-gray-700',
-  RESCAN_TRIGGERED: 'bg-purple-100 text-purple-800',
+  SERVED: 'bg-green-100 text-green-800',
+  BLOCKED: 'bg-red-100 text-red-800',
+  QUARANTINED: 'bg-orange-100 text-orange-800',
+  RELEASED: 'bg-blue-100 text-blue-800',
+  SCANNED: 'bg-gray-100 text-gray-700',
 }
 
 function formatDate(iso: string) {

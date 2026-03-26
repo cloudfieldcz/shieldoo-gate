@@ -56,6 +56,9 @@ func (s *Server) Routes() chi.Router {
 		r.Post("/artifacts/{id}/quarantine", s.handleQuarantineArtifact)
 		r.Post("/artifacts/{id}/release", s.handleReleaseArtifact)
 
+		// Audit log
+		r.Get("/audit", s.handleListAudit)
+
 		// Stats
 		r.Get("/stats/summary", s.handleStatsSummary)
 		r.Get("/stats/blocked", s.handleStatsBlocked)

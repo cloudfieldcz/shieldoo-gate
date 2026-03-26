@@ -23,7 +23,7 @@ type artifactWithStatus struct {
 }
 
 type paginatedResponse struct {
-	Items   any `json:"items"`
+	Data    any `json:"data"`
 	Page    int `json:"page"`
 	PerPage int `json:"per_page"`
 	Total   int `json:"total"`
@@ -83,7 +83,7 @@ func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, paginatedResponse{
-		Items:   items,
+		Data:    items,
 		Page:    page,
 		PerPage: perPage,
 		Total:   total,
