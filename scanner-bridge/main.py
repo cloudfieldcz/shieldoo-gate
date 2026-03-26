@@ -15,13 +15,13 @@ import proto.scanner_pb2_grpc as scanner_pb2_grpc
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-GUARDDOG_VERSION = "0.1.17"
+GUARDDOG_VERSION = "2.9.0"
 
 
 class ScannerBridgeServicer(scanner_pb2_grpc.ScannerBridgeServicer):
     def __init__(self):
         try:
-            from guarddog import PypiPackageScanner, NpmPackageScanner
+            from guarddog import PypiPackageScanner, NPMPackageScanner as NpmPackageScanner
             self.pypi_scanner = PypiPackageScanner()
             self.npm_scanner = NpmPackageScanner()
             logger.info("GuardDog scanners initialized")

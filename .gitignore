@@ -66,3 +66,5 @@ examples/dotnet-json/obj/
 
 # Helm
 helm/charts/
+
+config.yaml

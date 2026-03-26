@@ -8,7 +8,7 @@ COPY ui/ ./
 RUN npm run build
 
 # Stage 2: Build Go binary
-FROM golang:1.23-alpine AS go-builder
+FROM golang:1.25-alpine AS go-builder
 
 RUN apk add --no-cache gcc musl-dev sqlite-dev
 

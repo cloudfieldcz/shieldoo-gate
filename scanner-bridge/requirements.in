@@ -1,0 +1,4 @@
+# Direct dependencies for scanner-bridge
+guarddog==2.9.0
+grpcio==1.68.1
+grpcio-tools==1.68.1
