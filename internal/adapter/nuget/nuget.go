@@ -15,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jmoiron/sqlx"
+	"github.com/rs/zerolog/log"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/cache"
@@ -126,8 +127,17 @@ func (a *NuGetAdapter) handleRegistration(w http.ResponseWriter, r *http.Request
 // handlePassthrough proxies unrecognized NuGet API paths to upstream.
 // This handles ancillary resources like repository-signatures, vulnerability
 // info, and other V3 endpoints that don't need scanning.
+// Only paths starting with known NuGet V3 prefixes are allowed.
 func (a *NuGetAdapter) handlePassthrough(w http.ResponseWriter, r *http.Request) {
-	a.proxyUpstream(w, r, r.URL.Path)
+	path := r.URL.Path
+	allowed := strings.HasPrefix(path, "/v3/") ||
+		strings.HasPrefix(path, "/v3-flatcontainer/") ||
+		strings.HasPrefix(path, "/v3-vulnerabilities/")
+	if !allowed {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	a.proxyUpstream(w, r, path)
 }
 
 // handleNupkgDownload runs the scan pipeline for .nupkg files.
@@ -163,8 +173,14 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 	// 1. Check cache.
 	cachedPath, cacheErr := a.cache.Get(ctx, artifactID)
 	if cacheErr == nil {
+		// Fail closed: refuse to serve if we cannot verify artifact status.
 		status, err := adapter.GetArtifactStatus(a.db, artifactID)
-		if err == nil && status != nil && status.Status == model.StatusQuarantined {
+		if err != nil {
+			log.Error().Err(err).Str("artifact", artifactID).Msg("failed to check artifact status, refusing to serve")
+			http.Error(w, "internal error checking artifact status", http.StatusServiceUnavailable)
+			return
+		}
+		if status != nil && status.Status == model.StatusQuarantined {
 			adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
 				Error:    "quarantined",
 				Artifact: artifactID,
@@ -182,7 +198,31 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	// 2. Download.
+	// 2. Acquire per-artifact lock to prevent concurrent download/scan races.
+	unlock := adapter.ArtifactLocker.Lock(artifactID)
+	defer unlock()
+
+	// Re-check cache after acquiring lock.
+	if cachedPath, err := a.cache.Get(ctx, artifactID); err == nil {
+		status, err := adapter.GetArtifactStatus(a.db, artifactID)
+		if err != nil {
+			log.Error().Err(err).Str("artifact", artifactID).Msg("failed to check artifact status, refusing to serve")
+			http.Error(w, "internal error checking artifact status", http.StatusServiceUnavailable)
+			return
+		}
+		if status != nil && status.Status == model.StatusQuarantined {
+			adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+				Error:    "quarantined",
+				Artifact: artifactID,
+				Reason:   status.QuarantineReason,
+			})
+			return
+		}
+		http.ServeFile(w, r, cachedPath)
+		return
+	}
+
+	// 3. Download.
 	tmpPath, size, sha, err := downloadToTemp(ctx, upstreamURL, a.httpClient)
 	if err != nil {
 		http.Error(w, "failed to fetch upstream package", http.StatusBadGateway)
@@ -347,7 +387,9 @@ func (a *NuGetAdapter) proxyUpstreamRewrite(w http.ResponseWriter, r *http.Reque
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	// Cap metadata responses at 10 MB to prevent DoS from malicious upstreams.
+	const maxMetadataSize = 10 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataSize))
 	if err != nil {
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
 		return
@@ -356,7 +398,11 @@ func (a *NuGetAdapter) proxyUpstreamRewrite(w http.ResponseWriter, r *http.Reque
 	// Replace upstream base URL with the proxy's own URL so that all
 	// discovery URLs in service index and registration responses resolve
 	// through the proxy rather than hitting api.nuget.org directly.
-	rewritten := strings.ReplaceAll(string(body), a.upstreamURL+"/", "http://"+r.Host+"/")
+	scheme := "http"
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	rewritten := strings.ReplaceAll(string(body), a.upstreamURL+"/", scheme+"://"+r.Host+"/")
 
 	for key, vals := range resp.Header {
 		if strings.EqualFold(key, "Content-Length") {
@@ -395,7 +441,9 @@ func downloadToTemp(ctx context.Context, rawURL string, client *http.Client) (st
 
 	h := sha256.New()
 	mw := io.MultiWriter(tmp, h)
-	size, err := io.Copy(mw, resp.Body)
+	// Cap artifact download at 2 GB to prevent disk exhaustion from malicious upstreams.
+	const maxArtifactSize int64 = 2 << 30
+	size, err := io.Copy(mw, io.LimitReader(resp.Body, maxArtifactSize))
 	if err != nil {
 		os.Remove(tmp.Name())
 		return "", 0, "", fmt.Errorf("nuget: download: writing temp file: %w", err)

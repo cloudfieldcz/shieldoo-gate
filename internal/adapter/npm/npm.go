@@ -15,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jmoiron/sqlx"
+	"github.com/rs/zerolog/log"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/cache"
@@ -134,6 +135,14 @@ func (a *NPMAdapter) handleTarballDownload(w http.ResponseWriter, r *http.Reques
 func (a *NPMAdapter) handleScopedMetadata(w http.ResponseWriter, r *http.Request) {
 	scope := chi.URLParam(r, "scope")
 	pkg := chi.URLParam(r, "package")
+	if err := adapter.ValidatePackageName(scope); err != nil {
+		adapter.WriteJSONError(w, http.StatusBadRequest, adapter.ErrorResponse{Error: "invalid scope name"})
+		return
+	}
+	if err := adapter.ValidatePackageName(pkg); err != nil {
+		adapter.WriteJSONError(w, http.StatusBadRequest, adapter.ErrorResponse{Error: "invalid package name"})
+		return
+	}
 	a.proxyUpstreamRewrite(w, r, "/@"+scope+"/"+pkg)
 }
 
@@ -142,6 +151,14 @@ func (a *NPMAdapter) handleScopedVersionMetadata(w http.ResponseWriter, r *http.
 	scope := chi.URLParam(r, "scope")
 	pkg := chi.URLParam(r, "package")
 	version := chi.URLParam(r, "version")
+	if err := adapter.ValidatePackageName(scope); err != nil {
+		adapter.WriteJSONError(w, http.StatusBadRequest, adapter.ErrorResponse{Error: "invalid scope name"})
+		return
+	}
+	if err := adapter.ValidatePackageName(pkg); err != nil {
+		adapter.WriteJSONError(w, http.StatusBadRequest, adapter.ErrorResponse{Error: "invalid package name"})
+		return
+	}
 	a.proxyUpstream(w, r, "/@"+scope+"/"+pkg+"/"+version)
 }
 
@@ -150,6 +167,14 @@ func (a *NPMAdapter) handleScopedTarballDownload(w http.ResponseWriter, r *http.
 	scope := chi.URLParam(r, "scope")
 	pkg := chi.URLParam(r, "package")
 	tarball := chi.URLParam(r, "tarball")
+	if err := adapter.ValidatePackageName(scope); err != nil {
+		adapter.WriteJSONError(w, http.StatusBadRequest, adapter.ErrorResponse{Error: "invalid scope name"})
+		return
+	}
+	if err := adapter.ValidatePackageName(pkg); err != nil {
+		adapter.WriteJSONError(w, http.StatusBadRequest, adapter.ErrorResponse{Error: "invalid package name"})
+		return
+	}
 	upstreamPath := "/@" + scope + "/" + pkg + "/-/" + tarball
 	fullPkg := "@" + scope + "/" + pkg
 	a.downloadScanServe(w, r, a.upstreamURL+upstreamPath, fullPkg, tarball)
@@ -169,8 +194,14 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 	// 1. Check cache.
 	cachedPath, cacheErr := a.cache.Get(ctx, artifactID)
 	if cacheErr == nil {
+		// Fail closed: refuse to serve if we cannot verify artifact status.
 		status, err := adapter.GetArtifactStatus(a.db, artifactID)
-		if err == nil && status != nil && status.Status == model.StatusQuarantined {
+		if err != nil {
+			log.Error().Err(err).Str("artifact", artifactID).Msg("failed to check artifact status, refusing to serve")
+			http.Error(w, "internal error checking artifact status", http.StatusServiceUnavailable)
+			return
+		}
+		if status != nil && status.Status == model.StatusQuarantined {
 			adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
 				Error:    "quarantined",
 				Artifact: artifactID,
@@ -188,7 +219,31 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 		return
 	}
 
-	// 2. Download.
+	// 2. Acquire per-artifact lock to prevent concurrent download/scan races.
+	unlock := adapter.ArtifactLocker.Lock(artifactID)
+	defer unlock()
+
+	// Re-check cache after acquiring lock.
+	if cachedPath, err := a.cache.Get(ctx, artifactID); err == nil {
+		status, err := adapter.GetArtifactStatus(a.db, artifactID)
+		if err != nil {
+			log.Error().Err(err).Str("artifact", artifactID).Msg("failed to check artifact status, refusing to serve")
+			http.Error(w, "internal error checking artifact status", http.StatusServiceUnavailable)
+			return
+		}
+		if status != nil && status.Status == model.StatusQuarantined {
+			adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+				Error:    "quarantined",
+				Artifact: artifactID,
+				Reason:   status.QuarantineReason,
+			})
+			return
+		}
+		http.ServeFile(w, r, cachedPath)
+		return
+	}
+
+	// 3. Download.
 	tmpPath, size, sha, err := downloadToTemp(ctx, upstreamURL, a.httpClient)
 	if err != nil {
 		http.Error(w, "failed to fetch upstream package", http.StatusBadGateway)
@@ -358,16 +413,22 @@ func (a *NPMAdapter) proxyUpstreamRewrite(w http.ResponseWriter, r *http.Request
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	// Cap metadata responses at 10 MB to prevent DoS from malicious upstreams.
+	const maxMetadataSize = 10 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataSize))
 	if err != nil {
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
 		return
 	}
 
 	// Rewrite upstream tarball URLs to proxy-relative URLs so downloads pass
-	// through the scan pipeline.
+	// through the scan pipeline. Detect scheme from the incoming request.
+	scheme := "http"
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
 	old := []byte(`"` + a.upstreamURL + "/")
-	replacement := []byte(`"http://` + r.Host + "/")
+	replacement := []byte(`"` + scheme + "://" + r.Host + "/")
 	rewritten := strings.ReplaceAll(string(body), string(old), string(replacement))
 
 	for key, vals := range resp.Header {
@@ -407,7 +468,9 @@ func downloadToTemp(ctx context.Context, rawURL string, client *http.Client) (st
 
 	h := sha256.New()
 	mw := io.MultiWriter(tmp, h)
-	size, err := io.Copy(mw, resp.Body)
+	// Cap artifact download at 2 GB to prevent disk exhaustion from malicious upstreams.
+	const maxArtifactSize int64 = 2 << 30
+	size, err := io.Copy(mw, io.LimitReader(resp.Body, maxArtifactSize))
 	if err != nil {
 		os.Remove(tmp.Name())
 		return "", 0, "", fmt.Errorf("npm: download: writing temp file: %w", err)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -13,6 +14,24 @@ import (
 	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
 )
+
+// ArtifactLocker provides per-artifact-ID locking so that only one
+// download/scan pipeline runs for a given artifact at a time.
+// Subsequent requests for the same artifact wait for the first to complete.
+var ArtifactLocker artifactLocker
+
+type artifactLocker struct {
+	locks sync.Map // map[string]*sync.Mutex
+}
+
+// Lock acquires a lock for the given artifact ID.
+// Returns an unlock function that must be called when done.
+func (al *artifactLocker) Lock(artifactID string) func() {
+	val, _ := al.locks.LoadOrStore(artifactID, &sync.Mutex{})
+	mu := val.(*sync.Mutex)
+	mu.Lock()
+	return func() { mu.Unlock() }
+}
 
 // validNameRe matches safe package name characters — no path traversal or shell metacharacters.
 var validNameRe = regexp.MustCompile(`^[a-zA-Z0-9._\-]+$`)

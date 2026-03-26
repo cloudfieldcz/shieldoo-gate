@@ -1,5 +1,5 @@
 # Stage 1: Build React UI
-FROM node:20-alpine AS ui-builder
+FROM node:20.19.0-alpine3.21 AS ui-builder
 
 WORKDIR /ui
 COPY ui/package.json ui/package-lock.json ./
@@ -26,7 +26,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build -o /shieldoo-gate ./cmd/shieldoo-gate
 FROM aquasec/trivy:0.50.0 AS trivy
 
 # Stage 3: Runtime image
-FROM alpine:3.20 AS runtime
+FROM alpine:3.20.6 AS runtime
 
 RUN apk add --no-cache ca-certificates sqlite-libs
 

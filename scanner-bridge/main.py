@@ -115,8 +115,8 @@ def serve():
     )
     server.add_insecure_port(f"unix:{socket_path}")
     server.start()
-    # Make socket accessible to other containers sharing the volume
-    os.chmod(socket_path, 0o777)
+    # Restrict socket to owner + group (Go core and Python bridge should share a group).
+    os.chmod(socket_path, 0o660)
     logger.info("Scanner bridge listening on %s", socket_path)
     server.wait_for_termination()
 

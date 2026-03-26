@@ -148,9 +148,14 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 	// 1. Check if already in cache with a known status.
 	cachedPath, cacheErr := a.cache.Get(ctx, artifactID)
 	if cacheErr == nil {
-		// Cached — check status before serving.
+		// Cached — check status before serving. Fail closed on DB errors.
 		status, err := adapter.GetArtifactStatus(a.db, artifactID)
-		if err == nil && status != nil && status.Status == model.StatusQuarantined {
+		if err != nil {
+			log.Error().Err(err).Str("artifact", artifactID).Msg("failed to check artifact status, refusing to serve")
+			http.Error(w, "internal error checking artifact status", http.StatusServiceUnavailable)
+			return
+		}
+		if status != nil && status.Status == model.StatusQuarantined {
 			adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
 				Error:    "quarantined",
 				Artifact: artifactID,
@@ -176,7 +181,31 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// 2. Download to temp file.
+	// 2. Acquire per-artifact lock to prevent concurrent download/scan races.
+	unlock := adapter.ArtifactLocker.Lock(artifactID)
+	defer unlock()
+
+	// Re-check cache after acquiring lock — another request may have completed the pipeline.
+	if cachedPath, err := a.cache.Get(ctx, artifactID); err == nil {
+		status, err := adapter.GetArtifactStatus(a.db, artifactID)
+		if err != nil {
+			log.Error().Err(err).Str("artifact", artifactID).Msg("failed to check artifact status, refusing to serve")
+			http.Error(w, "internal error checking artifact status", http.StatusServiceUnavailable)
+			return
+		}
+		if status != nil && status.Status == model.StatusQuarantined {
+			adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+				Error:    "quarantined",
+				Artifact: artifactID,
+				Reason:   status.QuarantineReason,
+			})
+			return
+		}
+		http.ServeFile(w, r, cachedPath)
+		return
+	}
+
+	// 3. Download to temp file.
 	tmpPath, size, sha, err := downloadToTemp(ctx, upstreamURL, a.httpClient)
 	if err != nil {
 		http.Error(w, "failed to fetch upstream package", http.StatusBadGateway)
@@ -393,7 +422,9 @@ func (a *PyPIAdapter) proxyUpstreamRewrite(w http.ResponseWriter, r *http.Reques
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	// Cap metadata responses at 10 MB to prevent DoS from malicious upstreams.
+	const maxMetadataSize = 10 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataSize))
 	if err != nil {
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
 		return
@@ -440,7 +471,9 @@ func downloadToTemp(ctx context.Context, rawURL string, client *http.Client) (st
 	h := sha256.New()
 	mw := io.MultiWriter(tmp, h)
 
-	size, err := io.Copy(mw, resp.Body)
+	// Cap artifact download at 2 GB to prevent disk exhaustion from malicious upstreams.
+	const maxArtifactSize int64 = 2 << 30
+	size, err := io.Copy(mw, io.LimitReader(resp.Body, maxArtifactSize))
 	if err != nil {
 		os.Remove(tmp.Name())
 		return "", 0, "", fmt.Errorf("pypi: download: writing temp file: %w", err)

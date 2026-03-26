@@ -1,13 +1,13 @@
 # scanner-bridge/Dockerfile
-FROM python:3.12-slim
+FROM python:3.12.11-slim
 
 # Install uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.7.12 /uv /usr/local/bin/uv
 
 WORKDIR /app
 
 COPY requirements.txt .
-RUN uv pip install --system --no-cache -r requirements.txt
+RUN uv pip install --system --no-cache --require-hashes -r requirements.txt
 
 COPY proto/ proto/
 RUN python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. proto/scanner.proto
