@@ -75,7 +75,7 @@ cp config.example.yaml docker/config.yaml
 docker compose -f docker/docker-compose.yml up -d
 
 # Point pip and npm at the proxy
-pip config set global.index-url http://localhost:5000/simple/
+pip config set global.index-url http://localhost:5010/simple/
 npm config set registry http://localhost:4873/
 
 # Open the Admin API

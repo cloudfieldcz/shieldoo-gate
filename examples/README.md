@@ -28,7 +28,7 @@ Each example has **one dependency** and a tiny script that uses it, serving as a
 
 | Example | Proxy Port | Dependency | Description |
 |---------|-----------|------------|-------------|
-| [python-requests](python-requests/) | PyPI `:5000` | `requests` | HTTP GET request |
+| [python-requests](python-requests/) | PyPI `:5010` | `requests` | HTTP GET request |
 | [npm-chalk](npm-chalk/) | npm `:4873` | `chalk` | Colored terminal output |
 | [dotnet-json](dotnet-json/) | NuGet `:5001` | `Newtonsoft.Json` | JSON serialization |
 
@@ -40,4 +40,4 @@ Shieldoo Gate also proxies Docker images on port `5002`. Docker registry configu
 
 ## macOS Note
 
-Port 5000 may conflict with AirPlay Receiver on macOS Monterey+. If you get a connection error for the PyPI proxy, disable AirPlay Receiver in **System Settings > General > AirDrop & Handoff**, or change the PyPI port in `docker/config.yaml`.
+The default PyPI host port is `5010` (instead of the conventional `5000`) to avoid conflicts with macOS AirPlay Receiver on Monterey+.

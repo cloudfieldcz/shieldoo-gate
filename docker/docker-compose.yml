@@ -10,7 +10,7 @@ services:
       scanner-bridge:
         condition: service_started
     ports:
-      - "5000:5000"   # PyPI
+      - "5010:5000"   # PyPI (host 5010 to avoid macOS AirPlay conflict on 5000)
       - "4873:4873"   # npm
       - "5001:5001"   # NuGet
       - "5002:5002"   # Docker registry

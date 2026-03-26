@@ -24,15 +24,15 @@ func TestHandleStatsSummary_Empty_ReturnsZeroCounts(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
 
-	// All three periods must be present.
-	assert.Contains(t, body, "last_24h")
-	assert.Contains(t, body, "last_7d")
-	assert.Contains(t, body, "last_30d")
+	assert.Contains(t, body, "total_artifacts")
+	assert.Contains(t, body, "total_blocked")
+	assert.Contains(t, body, "total_quarantined")
+	assert.Contains(t, body, "total_served")
+	assert.Contains(t, body, "by_period")
 
-	// With no audit log rows all counts must be zero.
-	period := body["last_24h"].(map[string]any)
-	assert.Equal(t, float64(0), period["served"])
-	assert.Equal(t, float64(0), period["blocked"])
+	assert.Equal(t, float64(0), body["total_artifacts"])
+	assert.Equal(t, float64(0), body["total_served"])
+	assert.Equal(t, float64(0), body["total_blocked"])
 }
 
 func TestHandleStatsSummary_WithEvents_ReturnsCorrectCounts(t *testing.T) {
@@ -61,9 +61,18 @@ func TestHandleStatsSummary_WithEvents_ReturnsCorrectCounts(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
 
-	period := body["last_24h"].(map[string]any)
-	assert.Equal(t, float64(2), period["served"])
-	assert.Equal(t, float64(1), period["blocked"])
+	assert.Equal(t, float64(2), body["total_served"])
+	assert.Equal(t, float64(1), body["total_blocked"])
+
+	// by_period should have 7 daily buckets.
+	byPeriod := body["by_period"].(map[string]any)
+	assert.Len(t, byPeriod, 7)
+
+	// Today's bucket should contain the events.
+	todayKey := now.Format("2006-01-02")
+	todayBucket := byPeriod[todayKey].(map[string]any)
+	assert.Equal(t, float64(2), todayBucket["served"])
+	assert.Equal(t, float64(1), todayBucket["blocked"])
 }
 
 func TestHandleStatsBlocked_ReturnsJSONArray(t *testing.T) {

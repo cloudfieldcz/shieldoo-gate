@@ -17,10 +17,13 @@ type periodStats struct {
 }
 
 // summaryResponse is the JSON body for GET /api/v1/stats/summary.
+// Fields match the frontend StatsSummary type.
 type summaryResponse struct {
-	Last24h periodStats `json:"last_24h"`
-	Last7d  periodStats `json:"last_7d"`
-	Last30d periodStats `json:"last_30d"`
+	TotalArtifacts  int64                        `json:"total_artifacts"`
+	TotalBlocked    int64                        `json:"total_blocked"`
+	TotalQuarantined int64                       `json:"total_quarantined"`
+	TotalServed     int64                        `json:"total_served"`
+	ByPeriod        map[string]map[string]int64  `json:"by_period"`
 }
 
 func (s *Server) queryPeriodStats(r *http.Request, since time.Time) (periodStats, error) {
@@ -59,30 +62,63 @@ func (s *Server) queryPeriodStats(r *http.Request, since time.Time) (periodStats
 
 // handleStatsSummary handles GET /api/v1/stats/summary.
 func (s *Server) handleStatsSummary(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Total artifacts count.
+	var totalArtifacts int64
+	_ = s.db.GetContext(ctx, &totalArtifacts, `SELECT COUNT(*) FROM artifacts`)
+
+	// Total quarantined.
+	var totalQuarantined int64
+	_ = s.db.GetContext(ctx, &totalQuarantined,
+		`SELECT COUNT(*) FROM artifact_status WHERE status = 'QUARANTINED'`)
+
+	// Audit log totals (all time).
 	now := time.Now().UTC()
+	allTime, _ := s.queryPeriodStats(r, time.Time{})
+	h24, _ := s.queryPeriodStats(r, now.Add(-24*time.Hour))
 
-	h24, err := s.queryPeriodStats(r, now.Add(-24*time.Hour))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to query 24h stats")
-		return
-	}
+	// Build by_period: daily buckets for last 7 days.
+	byPeriod := make(map[string]map[string]int64)
+	for i := 6; i >= 0; i-- {
+		dayStart := now.AddDate(0, 0, -i).Truncate(24 * time.Hour)
+		dayEnd := dayStart.Add(24 * time.Hour)
+		label := dayStart.Format("2006-01-02")
 
-	d7, err := s.queryPeriodStats(r, now.Add(-7*24*time.Hour))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to query 7d stats")
-		return
-	}
-
-	d30, err := s.queryPeriodStats(r, now.Add(-30*24*time.Hour))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to query 30d stats")
-		return
+		rows, err := s.db.QueryxContext(ctx,
+			`SELECT event_type, COUNT(*) AS cnt
+			 FROM audit_log
+			 WHERE ts >= ? AND ts < ?
+			 GROUP BY event_type`, dayStart, dayEnd)
+		if err != nil {
+			continue
+		}
+		bucket := map[string]int64{"served": 0, "blocked": 0, "quarantined": 0}
+		for rows.Next() {
+			var eventType string
+			var cnt int64
+			if err := rows.Scan(&eventType, &cnt); err != nil {
+				continue
+			}
+			switch model.EventType(eventType) {
+			case model.EventServed:
+				bucket["served"] = cnt
+			case model.EventBlocked:
+				bucket["blocked"] = cnt
+			case model.EventQuarantined:
+				bucket["quarantined"] = cnt
+			}
+		}
+		rows.Close()
+		byPeriod[label] = bucket
 	}
 
 	writeJSON(w, http.StatusOK, summaryResponse{
-		Last24h: h24,
-		Last7d:  d7,
-		Last30d: d30,
+		TotalArtifacts:   totalArtifacts,
+		TotalBlocked:     h24.Blocked,
+		TotalQuarantined: totalQuarantined,
+		TotalServed:      allTime.Served,
+		ByPeriod:         byPeriod,
 	})
 }
 

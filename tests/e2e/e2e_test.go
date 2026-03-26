@@ -36,7 +36,7 @@ func pypiURL() string {
 	if v := os.Getenv("SGW_PYPI_URL"); v != "" {
 		return strings.TrimRight(v, "/")
 	}
-	return "http://localhost:5000"
+	return "http://localhost:5010"
 }
 
 func npmURL() string {

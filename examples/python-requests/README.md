@@ -10,7 +10,7 @@ uv venv .venv
 source .venv/bin/activate
 
 # Install requests via the proxy
-uv pip install --index-url http://localhost:5000/simple/ -r requirements.txt
+uv pip install --index-url http://localhost:5010/simple/ -r requirements.txt
 
 # Run the script
 python main.py
@@ -40,6 +40,6 @@ Done!
 
 ## What This Tests
 
-- PyPI proxy on `localhost:5000` correctly proxies the `simple/` index
+- PyPI proxy on `localhost:5010` correctly proxies the `simple/` index
 - Package download (including transitive dependencies like `urllib3`, `certifi`) goes through the scan pipeline
 - Check the admin UI at `http://localhost:8080` to see the scanned artifacts

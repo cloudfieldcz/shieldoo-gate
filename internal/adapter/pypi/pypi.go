@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jmoiron/sqlx"
+	"github.com/rs/zerolog/log"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/cache"
@@ -96,7 +98,8 @@ func (a *PyPIAdapter) handleSimpleIndex(w http.ResponseWriter, r *http.Request) 
 	a.proxyUpstream(w, r, "/simple/")
 }
 
-// handleSimplePackage proxies the per-package simple page.
+// handleSimplePackage proxies the per-package simple page, rewriting download
+// URLs to route through the proxy's /packages/ handler so artifacts get scanned.
 func (a *PyPIAdapter) handleSimplePackage(w http.ResponseWriter, r *http.Request) {
 	pkg := chi.URLParam(r, "package")
 	if err := adapter.ValidatePackageName(pkg); err != nil {
@@ -106,18 +109,25 @@ func (a *PyPIAdapter) handleSimplePackage(w http.ResponseWriter, r *http.Request
 		})
 		return
 	}
-	a.proxyUpstream(w, r, "/simple/"+pkg+"/")
+	a.proxyUpstreamRewrite(w, r, "/simple/"+pkg+"/")
 }
+
+// pypiFilesHost is the CDN that serves actual PyPI package files.
+const pypiFilesHost = "https://files.pythonhosted.org"
 
 // handlePackageDownload runs the full download → scan → policy → serve pipeline.
 func (a *PyPIAdapter) handlePackageDownload(w http.ResponseWriter, r *http.Request) {
-	// chi's wildcard strip leaves "packages/" prefix intact — we just forward the full path.
 	filePath := chi.URLParam(r, "*")
-	upstreamPath := "/packages/" + filePath
 
-	// Build a synthetic artifact identifier from the URL path.
-	// Full scan-based identification is done after download.
-	upstreamFull := a.upstreamURL + upstreamPath
+	// PyPI serves package files from files.pythonhosted.org, not pypi.org.
+	// Our rewritten URLs use relative /packages/ paths, so we map back to the CDN.
+	upstreamFull := pypiFilesHost + "/packages/" + filePath
+
+	// uv requests .metadata files — proxy those directly without scanning.
+	if strings.HasSuffix(filePath, ".metadata") {
+		a.proxyDirect(w, r, upstreamFull)
+		return
+	}
 
 	a.downloadScanServe(w, r, upstreamFull, filePath)
 }
@@ -187,14 +197,35 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 	}
 
 	// 4. Scan.
+	log.Info().Str("artifact", artifactID).Msg("starting scan pipeline")
 	scanResults, err := a.scanEngine.ScanAll(ctx, scanArtifact)
 	if err != nil {
-		// Fail open.
+		log.Error().Err(err).Str("artifact", artifactID).Msg("scan engine error, failing open")
 		scanResults = nil
+	}
+	for _, sr := range scanResults {
+		l := log.Info().
+			Str("artifact", artifactID).
+			Str("scanner", sr.ScannerID).
+			Str("verdict", string(sr.Verdict)).
+			Float32("confidence", sr.Confidence).
+			Dur("duration", sr.Duration)
+		if sr.Error != nil {
+			l = l.Err(sr.Error)
+		}
+		if len(sr.Findings) > 0 {
+			l = l.Int("findings", len(sr.Findings))
+		}
+		l.Msg("scan result")
 	}
 
 	// 5. Policy evaluation.
 	policyResult := a.policyEngine.Evaluate(ctx, scanArtifact, scanResults)
+	log.Info().
+		Str("artifact", artifactID).
+		Str("action", string(policyResult.Action)).
+		Str("reason", policyResult.Reason).
+		Msg("policy decision")
 
 	// 6. Act on policy result.
 	switch policyResult.Action {
@@ -309,6 +340,79 @@ func (a *PyPIAdapter) proxyUpstream(w http.ResponseWriter, r *http.Request, path
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+}
+
+// proxyDirect fetches the given absolute URL and relays the response.
+func (a *PyPIAdapter) proxyDirect(w http.ResponseWriter, r *http.Request, target string) {
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
+	if err != nil {
+		http.Error(w, "upstream request error", http.StatusInternalServerError)
+		return
+	}
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		http.Error(w, "upstream unreachable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	for key, vals := range resp.Header {
+		for _, v := range vals {
+			w.Header().Add(key, v)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
+}
+
+// pypiDownloadURLRe matches PyPI download URLs (files.pythonhosted.org).
+var pypiDownloadURLRe = regexp.MustCompile(`https://files\.pythonhosted\.org/packages/`)
+
+// proxyUpstreamRewrite fetches the upstream simple page and rewrites download
+// URLs from files.pythonhosted.org to relative /packages/ paths so that
+// package downloads are routed through the scan pipeline.
+func (a *PyPIAdapter) proxyUpstreamRewrite(w http.ResponseWriter, r *http.Request, path string) {
+	target, err := url.JoinPath(a.upstreamURL, path)
+	if err != nil {
+		http.Error(w, "bad upstream path", http.StatusInternalServerError)
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
+	if err != nil {
+		http.Error(w, "upstream request error", http.StatusInternalServerError)
+		return
+	}
+	if accept := r.Header.Get("Accept"); accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		http.Error(w, "upstream unreachable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
+		return
+	}
+
+	// Rewrite absolute download URLs to proxy-relative paths.
+	rewritten := pypiDownloadURLRe.ReplaceAll(body, []byte("/packages/"))
+
+	for key, vals := range resp.Header {
+		if strings.EqualFold(key, "Content-Length") {
+			continue // length changed after rewrite
+		}
+		for _, v := range vals {
+			w.Header().Add(key, v)
+		}
+	}
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(rewritten)))
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(rewritten)
 }
 
 // downloadToTemp downloads url into a temporary file, returning (path, size, sha256hex, error).

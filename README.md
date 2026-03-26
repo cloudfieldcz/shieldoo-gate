@@ -23,7 +23,7 @@ cp config.example.yaml docker/config.yaml
 docker compose -f docker/docker-compose.yml up -d
 
 # 3. Point your package managers at the proxy
-pip config set global.index-url http://localhost:5000/simple/
+pip config set global.index-url http://localhost:5010/simple/
 npm config set registry http://localhost:4873/
 # NuGet:  dotnet nuget add source http://localhost:5001/v3/index.json
 # Docker: configure daemon mirror to http://localhost:5002
@@ -36,7 +36,7 @@ Port reference:
 
 | Service | Port | Protocol |
 |---|---|---|
-| PyPI proxy | 5000 | HTTP |
+| PyPI proxy | 5010 | HTTP |
 | npm proxy | 4873 | HTTP |
 | NuGet proxy | 5001 | HTTP |
 | Docker proxy | 5002 | HTTP |

@@ -48,9 +48,24 @@ class ScannerBridgeServicer(scanner_pb2_grpc.ScannerBridgeServicer):
             verdict = "CLEAN"
             confidence = 1.0
 
-            if results:
-                for rule_name, matches in results.items():
+            # GuardDog scan_local returns {"results": {rule: matches}, "path": str}
+            rule_results = results.get("results", {}) if isinstance(results, dict) else results
+            logger.info(
+                "GuardDog raw results for %s:%s — %s",
+                request.package_name, request.version, str(rule_results)[:1000],
+            )
+
+            if rule_results:
+                for rule_name, matches in rule_results.items():
+                    # Skip rules with no actual matches (empty dict/list).
+                    if not matches:
+                        continue
                     severity = "HIGH"
+                    logger.info(
+                        "GuardDog rule %s triggered for %s:%s — %s",
+                        rule_name, request.package_name, request.version,
+                        str(matches)[:500],
+                    )
                     findings.append(scanner_pb2.Finding(
                         severity=severity,
                         category=rule_name,
