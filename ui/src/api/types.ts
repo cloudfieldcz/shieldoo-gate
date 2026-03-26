@@ -1,0 +1,65 @@
+export interface Artifact {
+  id: string
+  ecosystem: string
+  name: string
+  version: string
+  upstream_url: string
+  sha256: string
+  size_bytes: number
+  cached_at: string
+  last_accessed_at: string
+  storage_path: string
+}
+
+export interface ArtifactStatus {
+  artifact_id: string
+  status: 'CLEAN' | 'SUSPICIOUS' | 'QUARANTINED' | 'PENDING_SCAN'
+  quarantine_reason?: string
+  quarantined_at?: string
+  released_at?: string
+}
+
+export interface ScanResult {
+  id: number
+  artifact_id: string
+  scanned_at: string
+  scanner_name: string
+  scanner_version: string
+  verdict: 'CLEAN' | 'SUSPICIOUS' | 'MALICIOUS'
+  confidence: number
+  findings_json: string
+  duration_ms: number
+}
+
+export interface AuditEntry {
+  id: number
+  ts: string
+  event_type: string
+  artifact_id?: string
+  client_ip?: string
+  user_agent?: string
+  reason?: string
+}
+
+export interface StatsSummary {
+  total_artifacts: number
+  total_blocked: number
+  total_quarantined: number
+  total_served: number
+  by_period: Record<string, Record<string, number>>
+}
+
+export interface HealthStatus {
+  status: string
+  scanners: Record<string, string>
+}
+
+export interface PaginatedResponse<T> {
+  data: T[]
+  page: number
+  per_page: number
+  total: number
+}
+
+export type ArtifactWithStatus = Artifact & { status: ArtifactStatus }
+export type ArtifactDetail = Artifact & { status: ArtifactStatus; scan_results: ScanResult[] }
