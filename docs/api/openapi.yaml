@@ -1,0 +1,459 @@
+openapi: 3.1.0
+info:
+  title: Shieldoo Gate REST API
+  description: |
+    Administration and observability API for Shieldoo Gate — an open-source
+    supply chain security proxy for Docker, PyPI, npm, NuGet, and more.
+  version: 1.0.0
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: http://localhost:8080
+    description: Local development (admin port)
+
+tags:
+  - name: health
+    description: Service health
+  - name: artifacts
+    description: Cached artifact management
+  - name: stats
+    description: Request and scan statistics
+  - name: feed
+    description: Threat feed management
+  - name: metrics
+    description: Prometheus metrics
+
+paths:
+  /api/v1/health:
+    get:
+      summary: Service health check
+      operationId: getHealth
+      tags: [health]
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /api/v1/artifacts:
+    get:
+      summary: List cached artifacts
+      operationId: listArtifacts
+      tags: [artifacts]
+      parameters:
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/per_page"
+      responses:
+        "200":
+          description: Paginated list of artifacts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactPage"
+
+  /api/v1/artifacts/{id}:
+    parameters:
+      - $ref: "#/components/parameters/artifactId"
+    get:
+      summary: Get artifact detail
+      operationId: getArtifact
+      tags: [artifacts]
+      responses:
+        "200":
+          description: Artifact with current status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactWithStatus"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/artifacts/{id}/scan-results:
+    parameters:
+      - $ref: "#/components/parameters/artifactId"
+    get:
+      summary: Get scan history for an artifact
+      operationId: getArtifactScanResults
+      tags: [artifacts]
+      responses:
+        "200":
+          description: List of scan results (newest first)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ScanResult"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/artifacts/{id}/rescan:
+    parameters:
+      - $ref: "#/components/parameters/artifactId"
+    post:
+      summary: Trigger an async rescan of the artifact
+      operationId: rescanArtifact
+      tags: [artifacts]
+      responses:
+        "202":
+          description: Rescan queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AcceptedResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/artifacts/{id}/quarantine:
+    parameters:
+      - $ref: "#/components/parameters/artifactId"
+    post:
+      summary: Manually quarantine an artifact
+      operationId: quarantineArtifact
+      tags: [artifacts]
+      responses:
+        "200":
+          description: Artifact quarantined
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusUpdate"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/artifacts/{id}/release:
+    parameters:
+      - $ref: "#/components/parameters/artifactId"
+    post:
+      summary: Release a quarantined artifact back to CLEAN status
+      operationId: releaseArtifact
+      tags: [artifacts]
+      responses:
+        "200":
+          description: Artifact released
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusUpdate"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/stats/summary:
+    get:
+      summary: Aggregated request and scan statistics
+      operationId: getStatsSummary
+      tags: [stats]
+      responses:
+        "200":
+          description: Event counts for last 24h, 7d, and 30d
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatsSummary"
+
+  /api/v1/stats/blocked:
+    get:
+      summary: List of blocked artifact events
+      operationId: getStatsBlocked
+      tags: [stats]
+      responses:
+        "200":
+          description: Audit log entries with event_type=BLOCKED (newest first, max 500)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BlockedEntry"
+
+  /api/v1/feed:
+    get:
+      summary: List threat feed entries
+      operationId: listFeed
+      tags: [feed]
+      responses:
+        "200":
+          description: Threat feed entries (newest first, max 1000)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ThreatFeedEntry"
+
+  /api/v1/feed/refresh:
+    post:
+      summary: Trigger an async threat feed refresh
+      operationId: refreshFeed
+      tags: [feed]
+      responses:
+        "202":
+          description: Refresh queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AcceptedResponse"
+
+  /metrics:
+    get:
+      summary: Prometheus metrics endpoint
+      operationId: getMetrics
+      tags: [metrics]
+      responses:
+        "200":
+          description: Prometheus text exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+components:
+  parameters:
+    artifactId:
+      name: id
+      in: path
+      required: true
+      description: Artifact identifier in the form `ecosystem:name:version`
+      schema:
+        type: string
+        example: "pypi:requests:2.31.0"
+    page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        default: 1
+        minimum: 1
+    per_page:
+      name: per_page
+      in: query
+      schema:
+        type: integer
+        default: 50
+        minimum: 1
+        maximum: 200
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+          example: ok
+        scanners:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/ScannerHealth"
+
+    ScannerHealth:
+      type: object
+      required: [healthy]
+      properties:
+        healthy:
+          type: boolean
+        error:
+          type: string
+
+    Artifact:
+      type: object
+      required: [ecosystem, name, version, upstream_url, sha256, size_bytes, cached_at, last_accessed_at, storage_path]
+      properties:
+        ecosystem:
+          type: string
+          example: pypi
+        name:
+          type: string
+          example: requests
+        version:
+          type: string
+          example: 2.31.0
+        upstream_url:
+          type: string
+          format: uri
+        sha256:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        cached_at:
+          type: string
+          format: date-time
+        last_accessed_at:
+          type: string
+          format: date-time
+        storage_path:
+          type: string
+
+    ArtifactWithStatus:
+      allOf:
+        - $ref: "#/components/schemas/Artifact"
+        - type: object
+          properties:
+            status:
+              type: string
+              enum: [CLEAN, SUSPICIOUS, QUARANTINED, PENDING_SCAN]
+            quarantine_reason:
+              type: string
+            quarantined_at:
+              type: string
+              format: date-time
+              nullable: true
+            released_at:
+              type: string
+              format: date-time
+              nullable: true
+
+    ArtifactPage:
+      type: object
+      required: [items, page, per_page, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArtifactWithStatus"
+        page:
+          type: integer
+        per_page:
+          type: integer
+        total:
+          type: integer
+
+    ScanResult:
+      type: object
+      required: [id, artifact_id, scanned_at, scanner_name, scanner_version, verdict, confidence, findings_json, duration_ms]
+      properties:
+        id:
+          type: integer
+          format: int64
+        artifact_id:
+          type: string
+        scanned_at:
+          type: string
+          format: date-time
+        scanner_name:
+          type: string
+        scanner_version:
+          type: string
+        verdict:
+          type: string
+          enum: [CLEAN, SUSPICIOUS, MALICIOUS]
+        confidence:
+          type: number
+          format: float
+        findings_json:
+          type: string
+          description: JSON-encoded array of findings
+        duration_ms:
+          type: integer
+          format: int64
+
+    StatsSummary:
+      type: object
+      required: [last_24h, last_7d, last_30d]
+      properties:
+        last_24h:
+          $ref: "#/components/schemas/PeriodStats"
+        last_7d:
+          $ref: "#/components/schemas/PeriodStats"
+        last_30d:
+          $ref: "#/components/schemas/PeriodStats"
+
+    PeriodStats:
+      type: object
+      required: [served, blocked, quarantined, released, scanned]
+      properties:
+        served:
+          type: integer
+          format: int64
+        blocked:
+          type: integer
+          format: int64
+        quarantined:
+          type: integer
+          format: int64
+        released:
+          type: integer
+          format: int64
+        scanned:
+          type: integer
+          format: int64
+
+    BlockedEntry:
+      type: object
+      required: [id, ts]
+      properties:
+        id:
+          type: integer
+          format: int64
+        ts:
+          type: string
+          format: date-time
+        artifact_id:
+          type: string
+        client_ip:
+          type: string
+        reason:
+          type: string
+
+    ThreatFeedEntry:
+      type: object
+      required: [sha256, ecosystem, package_name, reported_at]
+      properties:
+        sha256:
+          type: string
+        ecosystem:
+          type: string
+        package_name:
+          type: string
+        version:
+          type: string
+        reported_at:
+          type: string
+          format: date-time
+        source_url:
+          type: string
+          format: uri
+        iocs_json:
+          type: string
+          description: JSON-encoded array of indicators of compromise
+
+    AcceptedResponse:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: string
+          enum: [accepted]
+        message:
+          type: string
+
+    StatusUpdate:
+      type: object
+      required: [status, artifact_id]
+      properties:
+        status:
+          type: string
+          enum: [CLEAN, QUARANTINED]
+        artifact_id:
+          type: string
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
