@@ -5,7 +5,7 @@ import type { ArtifactWithStatus } from '../api/types'
 import ArtifactTable from '../components/ArtifactTable'
 import StatusBadge from '../components/StatusBadge'
 import ScanResultCard from '../components/ScanResultCard'
-import { X, RefreshCw, ShieldX, ShieldCheck, ChevronLeft, ChevronRight } from 'lucide-react'
+import { X, RefreshCw, ShieldX, ShieldCheck, ShieldAlert, ChevronLeft, ChevronRight } from 'lucide-react'
 
 const ECOSYSTEMS = ['', 'docker', 'pypi', 'npm', 'nuget']
 const STATUSES = ['', 'CLEAN', 'SUSPICIOUS', 'QUARANTINED', 'PENDING_SCAN']
@@ -55,6 +55,14 @@ export default function Artifacts() {
 
   const releaseMutation = useMutation({
     mutationFn: (id: string) => artifactsApi.release(id),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['artifacts'] })
+      void qc.invalidateQueries({ queryKey: ['artifact-detail', selected?.id] })
+    },
+  })
+
+  const overrideMutation = useMutation({
+    mutationFn: (id: string) => artifactsApi.override(id, { reason: 'false positive', scope: 'version' }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['artifacts'] })
       void qc.invalidateQueries({ queryKey: ['artifact-detail', selected?.id] })
@@ -225,6 +233,17 @@ export default function Artifacts() {
                   >
                     <ShieldCheck className="w-3.5 h-3.5" />
                     Release
+                  </button>
+                )}
+
+                {(selected.status.status === 'QUARANTINED' || selected.status.status === 'SUSPICIOUS') && (
+                  <button
+                    onClick={() => overrideMutation.mutate(selected.id)}
+                    disabled={overrideMutation.isPending}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-amber-300 text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+                  >
+                    <ShieldAlert className="w-3.5 h-3.5" />
+                    False Positive
                   </button>
                 )}
               </div>

@@ -41,6 +41,20 @@ export interface AuditEntry {
   reason?: string
 }
 
+export interface PolicyOverride {
+  id: number
+  ecosystem: string
+  name: string
+  version: string
+  scope: 'version' | 'package'
+  reason: string
+  created_by: string
+  created_at: string
+  expires_at?: string
+  revoked: boolean
+  revoked_at?: string
+}
+
 export interface StatsSummary {
   total_artifacts: number
   total_blocked: number

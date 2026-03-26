@@ -3,6 +3,7 @@ import type {
   ArtifactWithStatus,
   ArtifactDetail,
   AuditEntry,
+  PolicyOverride,
   StatsSummary,
   HealthStatus,
   PaginatedResponse,
@@ -31,6 +32,9 @@ export const artifactsApi = {
 
   release: (id: string) =>
     api.post(`/artifacts/${encodeURIComponent(id)}/release`).then((r) => r.data),
+
+  override: (id: string, data?: { reason?: string; scope?: string }) =>
+    api.post(`/artifacts/${encodeURIComponent(id)}/override`, data ?? {}).then((r) => r.data),
 }
 
 export const statsApi = {
@@ -50,6 +54,21 @@ export const auditApi = {
 export const feedApi = {
   list: () => api.get('/feed').then((r) => r.data),
   refresh: () => api.post('/feed/refresh').then((r) => r.data),
+}
+
+export const overridesApi = {
+  list: (page = 1, perPage = 50, active?: boolean) =>
+    api
+      .get<PaginatedResponse<PolicyOverride>>('/overrides', {
+        params: { page, per_page: perPage, active: active ? 'true' : undefined },
+      })
+      .then((r) => r.data),
+
+  create: (data: { ecosystem: string; name: string; version: string; scope: string; reason: string }) =>
+    api.post('/overrides', data).then((r) => r.data),
+
+  revoke: (id: number) =>
+    api.delete(`/overrides/${id}`).then((r) => r.data),
 }
 
 export const healthApi = {
