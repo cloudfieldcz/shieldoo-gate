@@ -730,6 +730,74 @@ When a cached artifact is reclassified as MALICIOUS after rescan:
 }
 ```
 
+### 8.1 Tag Mutability Detection *(v1.1)*
+
+A common supply chain attack vector: an attacker compromises a registry account or CI/CD pipeline and **re-points an existing tag to a malicious digest**. For example, `python:3.12-slim` on Docker Hub or `litellm==1.82.6` on PyPI could suddenly resolve to a completely different artifact. This applies to all ecosystems:
+
+- **Docker:** tag `v1.0` re-pointed from digest `sha256:aaa...` to `sha256:bbb...`
+- **PyPI:** same version `1.82.6` replaced with a new `.whl` with different SHA256
+- **npm:** same version `1.0.0` replaced with a new tarball (npm allows republish within 72h)
+- **NuGet:** package re-pushed with same version but different content
+
+**Detection mechanism:**
+
+```
+Client requests artifact (tag/version)
+    │
+    ├── Artifact in cache with CLEAN status?
+    │       └── YES → resolve upstream tag/version to current digest
+    │                   │
+    │                   ├── Digest matches cached? → serve from cache
+    │                   │
+    │                   └── Digest CHANGED → ⚠️ TAG MUTABILITY ALERT
+    │                           │
+    │                           ├── 1. Quarantine NEW artifact (do NOT serve)
+    │                           ├── 2. Keep OLD cached artifact in CLEAN state
+    │                           ├── 3. Log event: TAG_MUTATED with old/new digests
+    │                           ├── 4. Fire alert on all channels
+    │                           └── 5. Require manual review to release new version
+    │
+    └── NO → normal flow (download, scan, cache)
+```
+
+**Database support:**
+
+```sql
+-- Track tag-to-digest mapping history (v1.1)
+CREATE TABLE tag_digest_history (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ecosystem       TEXT NOT NULL,
+    name            TEXT NOT NULL,
+    tag_or_version  TEXT NOT NULL,
+    digest_sha256   TEXT NOT NULL,
+    first_seen_at   DATETIME NOT NULL,
+    last_seen_at    DATETIME NOT NULL,
+    superseded_at   DATETIME,          -- set when a new digest is seen for same tag
+    UNIQUE(ecosystem, name, tag_or_version, digest_sha256)
+);
+
+CREATE INDEX idx_tag_digest_lookup ON tag_digest_history(ecosystem, name, tag_or_version);
+```
+
+**Audit log event type:** `TAG_MUTATED` — added to the `event_type` enum alongside `SERVED | BLOCKED | QUARANTINED | RELEASED | SCANNED`.
+
+**Configuration:**
+
+```yaml
+policy:
+  tag_mutability:
+    enabled: true
+    action: quarantine          # quarantine | block | warn
+    exclude_tags:               # tags expected to mutate (e.g., "latest", "nightly")
+      - "latest"
+      - "nightly"
+      - "dev"
+    check_on_cache_hit: true    # re-resolve upstream digest even on cache hits
+    check_interval: "1h"        # periodic re-check for cached artifacts
+```
+
+> **Note:** This adds latency to cache hits (upstream HEAD request to resolve current digest). The `check_on_cache_hit` option can be disabled if latency is critical, relying instead on periodic `check_interval` background checks.
+
 ---
 
 ## 9. Policy Engine
@@ -1007,6 +1075,7 @@ chore(deps): pin trivy to commit abc1234
 - Dynamic sandbox execution (gVisor)
 - OIDC admin authentication
 - PostgreSQL HA mode
+- **Tag mutability detection** — detect when an upstream tag/version resolves to a different digest than previously cached; auto-quarantine the new artifact and alert (see §8.1)
 - E2E test sandbox: containerized test clients (uv, npm, dotnet) running inside Docker so that E2E tests have zero dependency on host-installed toolchains and avoid local package-manager cache interference (~/.npm, ~/.nuget)
 
 ### v1.2 — Enterprise features
