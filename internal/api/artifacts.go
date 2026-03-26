@@ -13,13 +13,69 @@ import (
 	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 )
 
-// artifactWithStatus combines an artifact row with its status row.
-type artifactWithStatus struct {
+// artifactDBRow is used for scanning DB rows that join artifacts + artifact_status.
+type artifactDBRow struct {
 	model.Artifact
-	Status           string     `db:"status" json:"status,omitempty"`
-	QuarantineReason string     `db:"quarantine_reason" json:"quarantine_reason,omitempty"`
-	QuarantinedAt    *time.Time `db:"quarantined_at" json:"quarantined_at,omitempty"`
-	ReleasedAt       *time.Time `db:"released_at" json:"released_at,omitempty"`
+	Status           string     `db:"status"`
+	QuarantineReason string     `db:"quarantine_reason"`
+	QuarantinedAt    *time.Time `db:"quarantined_at"`
+	ReleasedAt       *time.Time `db:"released_at"`
+}
+
+// artifactStatusResponse is the nested status object the UI expects.
+type artifactStatusResponse struct {
+	Status           string     `json:"status"`
+	QuarantineReason string     `json:"quarantine_reason,omitempty"`
+	QuarantinedAt    *time.Time `json:"quarantined_at,omitempty"`
+	ReleasedAt       *time.Time `json:"released_at,omitempty"`
+}
+
+// artifactResponse is the JSON shape returned by list/get endpoints.
+type artifactResponse struct {
+	ID             string                 `json:"id"`
+	Ecosystem      string                 `json:"ecosystem"`
+	Name           string                 `json:"name"`
+	Version        string                 `json:"version"`
+	UpstreamURL    string                 `json:"upstream_url"`
+	SHA256         string                 `json:"sha256"`
+	SizeBytes      int64                  `json:"size_bytes"`
+	CachedAt       time.Time              `json:"cached_at"`
+	LastAccessedAt time.Time              `json:"last_accessed_at"`
+	StoragePath    string                 `json:"storage_path"`
+	Status         artifactStatusResponse `json:"status"`
+}
+
+// artifactID extracts and URL-decodes the {id} route parameter.
+// Artifact IDs contain colons (e.g. "pypi:requests:2.32.3") which get
+// percent-encoded by browsers; Chi may return the raw encoded form.
+func artifactID(r *http.Request) string {
+	raw := chi.URLParam(r, "id")
+	decoded, err := url.PathUnescape(raw)
+	if err != nil {
+		return raw
+	}
+	return decoded
+}
+
+func toArtifactResponse(row artifactDBRow) artifactResponse {
+	return artifactResponse{
+		ID:             row.Artifact.ID(),
+		Ecosystem:      row.Ecosystem,
+		Name:           row.Name,
+		Version:        row.Version,
+		UpstreamURL:    row.UpstreamURL,
+		SHA256:         row.SHA256,
+		SizeBytes:      row.SizeBytes,
+		CachedAt:       row.CachedAt,
+		LastAccessedAt: row.LastAccessedAt,
+		StoragePath:    row.StoragePath,
+		Status: artifactStatusResponse{
+			Status:           row.Status,
+			QuarantineReason: row.QuarantineReason,
+			QuarantinedAt:    row.QuarantinedAt,
+			ReleasedAt:       row.ReleasedAt,
+		},
+	}
 }
 
 type paginatedResponse struct {
@@ -68,14 +124,14 @@ func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	items := make([]artifactWithStatus, 0, perPage)
+	items := make([]artifactResponse, 0, perPage)
 	for rows.Next() {
-		var row artifactWithStatus
+		var row artifactDBRow
 		if err := rows.StructScan(&row); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to scan artifact row")
 			return
 		}
-		items = append(items, row)
+		items = append(items, toArtifactResponse(row))
 	}
 	if err := rows.Err(); err != nil {
 		writeError(w, http.StatusInternalServerError, "error iterating artifact rows")
@@ -92,9 +148,9 @@ func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 
 // handleGetArtifact handles GET /api/v1/artifacts/{id}.
 func (s *Server) handleGetArtifact(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := artifactID(r)
 
-	var row artifactWithStatus
+	var row artifactDBRow
 	err := s.db.QueryRowxContext(r.Context(),
 		`SELECT a.ecosystem, a.name, a.version, a.upstream_url, a.sha256,
 		        a.size_bytes, a.cached_at, a.last_accessed_at, a.storage_path,
@@ -113,12 +169,43 @@ func (s *Server) handleGetArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, row)
+	// Fetch scan results for the detail view.
+	scanRows, err := s.db.QueryxContext(r.Context(),
+		`SELECT id, artifact_id, scanned_at, scanner_name, scanner_version,
+		        verdict, confidence, findings_json, duration_ms
+		 FROM scan_results
+		 WHERE artifact_id = ?
+		 ORDER BY scanned_at DESC`, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to query scan results")
+		return
+	}
+	defer scanRows.Close()
+
+	scanResults := make([]model.ScanResult, 0)
+	for scanRows.Next() {
+		var sr model.ScanResult
+		if err := scanRows.StructScan(&sr); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to scan result row")
+			return
+		}
+		scanResults = append(scanResults, sr)
+	}
+
+	resp := toArtifactResponse(row)
+	type detailResponse struct {
+		artifactResponse
+		ScanResults []model.ScanResult `json:"scan_results"`
+	}
+	writeJSON(w, http.StatusOK, detailResponse{
+		artifactResponse: resp,
+		ScanResults:      scanResults,
+	})
 }
 
 // handleGetArtifactScanResults handles GET /api/v1/artifacts/{id}/scan-results.
 func (s *Server) handleGetArtifactScanResults(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := artifactID(r)
 
 	// Verify artifact exists.
 	var count int
@@ -162,7 +249,8 @@ func (s *Server) handleGetArtifactScanResults(w http.ResponseWriter, r *http.Req
 
 // handleRescanArtifact handles POST /api/v1/artifacts/{id}/rescan.
 func (s *Server) handleRescanArtifact(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := artifactID(r)
+	now := time.Now().UTC()
 
 	var count int
 	if err := s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM artifacts WHERE id = ?`, id).Scan(&count); err != nil {
@@ -174,15 +262,47 @@ func (s *Server) handleRescanArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tx, err := s.db.BeginTxx(r.Context(), nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to begin transaction")
+		return
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	_, err = tx.ExecContext(r.Context(),
+		`INSERT INTO artifact_status (artifact_id, status, rescan_due_at)
+		 VALUES (?, 'PENDING_SCAN', ?)
+		 ON CONFLICT(artifact_id) DO UPDATE SET status='PENDING_SCAN', rescan_due_at=excluded.rescan_due_at`,
+		id, now)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to queue rescan")
+		return
+	}
+
+	_, err = tx.ExecContext(r.Context(),
+		`INSERT INTO audit_log (ts, event_type, artifact_id, reason)
+		 VALUES (?, 'RESCAN_QUEUED', ?, 'manual rescan via API')`,
+		now, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to write audit log")
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit transaction")
+		return
+	}
+
 	writeJSON(w, http.StatusAccepted, map[string]string{
-		"status":  "accepted",
-		"message": "rescan queued",
+		"status":      "PENDING_SCAN",
+		"artifact_id": id,
+		"message":     "rescan queued",
 	})
 }
 
 // handleQuarantineArtifact handles POST /api/v1/artifacts/{id}/quarantine.
 func (s *Server) handleQuarantineArtifact(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := artifactID(r)
 	now := time.Now().UTC()
 
 	var count int
@@ -234,7 +354,7 @@ func (s *Server) handleQuarantineArtifact(w http.ResponseWriter, r *http.Request
 
 // handleReleaseArtifact handles POST /api/v1/artifacts/{id}/release.
 func (s *Server) handleReleaseArtifact(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := artifactID(r)
 	now := time.Now().UTC()
 
 	var count int

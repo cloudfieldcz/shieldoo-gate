@@ -224,7 +224,7 @@ func (s *Server) handleRevokeOverride(w http.ResponseWriter, r *http.Request) {
 // handleCreateArtifactOverride handles POST /api/v1/artifacts/{id}/override.
 // This is a convenience endpoint that creates an override from an artifact ID.
 func (s *Server) handleCreateArtifactOverride(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := artifactID(r)
 
 	// Parse artifact ID: "ecosystem:name:version"
 	parts := strings.SplitN(id, ":", 3)
