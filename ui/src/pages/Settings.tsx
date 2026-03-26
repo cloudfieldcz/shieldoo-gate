@@ -59,7 +59,7 @@ export default function Settings() {
                 <h3 className="text-sm font-semibold text-gray-700 mb-3">Scanners</h3>
                 <div className="space-y-2">
                   {Object.entries(health.scanners).map(([name, status]) => {
-                    const isOk = status === 'ok' || status === 'healthy'
+                    const isOk = status.healthy
                     return (
                       <div
                         key={name}
@@ -82,7 +82,7 @@ export default function Settings() {
                             isOk ? 'text-green-700' : 'text-red-700'
                           }`}
                         >
-                          {status}
+                          {isOk ? 'ok' : status.error ?? 'unhealthy'}
                         </span>
                       </div>
                     )

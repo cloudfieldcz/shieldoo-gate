@@ -54,7 +54,7 @@ export default function Dashboard() {
   const stats = statsQuery.data
   const health = healthQuery.data
   const isDegraded =
-    health && Object.values(health.scanners).some((s) => s !== 'ok' && s !== 'healthy')
+    health && Object.values(health.scanners).some((s) => !s.healthy)
 
   const chartData = stats?.by_period ? buildChartData(stats.by_period) : []
 
@@ -78,7 +78,8 @@ export default function Dashboard() {
               {health &&
                 Object.entries(health.scanners).map(([name, status]) => (
                   <li key={name} className="text-xs text-yellow-700">
-                    <span className="font-mono font-semibold">{name}</span>: {status}
+                    <span className="font-mono font-semibold">{name}</span>:{' '}
+                    {status.healthy ? 'ok' : status.error ?? 'unhealthy'}
                   </li>
                 ))}
             </ul>

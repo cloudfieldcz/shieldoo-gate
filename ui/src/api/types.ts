@@ -49,9 +49,14 @@ export interface StatsSummary {
   by_period: Record<string, Record<string, number>>
 }
 
+export interface ScannerHealth {
+  healthy: boolean
+  error?: string
+}
+
 export interface HealthStatus {
   status: string
-  scanners: Record<string, string>
+  scanners: Record<string, ScannerHealth>
 }
 
 export interface PaginatedResponse<T> {
