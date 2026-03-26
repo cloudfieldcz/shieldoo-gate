@@ -3,31 +3,31 @@ package policy
 import (
 	"context"
 	"fmt"
+	"time"
+
+	"github.com/jmoiron/sqlx"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
 )
 
 // EngineConfig configures the policy engine thresholds and allowlist.
 type EngineConfig struct {
-	// BlockIfVerdict is the verdict that triggers a block action (e.g. "MALICIOUS").
-	BlockIfVerdict scanner.Verdict
-	// QuarantineIfVerdict is the verdict that triggers quarantine (e.g. "SUSPICIOUS").
+	BlockIfVerdict      scanner.Verdict
 	QuarantineIfVerdict scanner.Verdict
-	// MinimumConfidence is forwarded to the aggregator.
-	MinimumConfidence float32
-	// Allowlist is a list of "eco:name:==version" entries that override block/quarantine.
-	Allowlist []string
+	MinimumConfidence   float32
+	Allowlist           []string
 }
 
 // Engine evaluates scan results against policy rules and returns a PolicyResult.
 type Engine struct {
 	cfg       EngineConfig
 	allowlist []AllowlistEntry
+	db        *sqlx.DB
 }
 
 // NewEngine creates a new Engine with the supplied configuration.
-// Invalid allowlist entries are ignored (logged in production; skipped in tests).
-func NewEngine(cfg EngineConfig) *Engine {
+// db may be nil — in that case only static allowlist is used.
+func NewEngine(cfg EngineConfig, db *sqlx.DB) *Engine {
 	var parsed []AllowlistEntry
 	for _, raw := range cfg.Allowlist {
 		entry, err := ParseAllowlistEntry(raw)
@@ -35,13 +35,44 @@ func NewEngine(cfg EngineConfig) *Engine {
 			parsed = append(parsed, entry)
 		}
 	}
-	return &Engine{cfg: cfg, allowlist: parsed}
+	return &Engine{cfg: cfg, allowlist: parsed, db: db}
+}
+
+// hasDBOverride checks if there is an active, non-revoked, non-expired override
+// in the database for the given artifact.
+func (e *Engine) hasDBOverride(ctx context.Context, artifact scanner.Artifact) bool {
+	if e.db == nil {
+		return false
+	}
+
+	now := time.Now().UTC()
+	var count int
+	err := e.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM policy_overrides
+		 WHERE ecosystem = ? AND name = ? AND revoked = 0
+		   AND (expires_at IS NULL OR expires_at > ?)
+		   AND (scope = 'package' OR (scope = 'version' AND version = ?))`,
+		string(artifact.Ecosystem), artifact.Name, now, artifact.Version,
+	).Scan(&count)
+	if err != nil {
+		// Fail open — DB errors should not block artifacts
+		return false
+	}
+	return count > 0
 }
 
 // Evaluate applies the policy to the given artifact and scan results.
-// Allowlist entries are checked first; matching artifacts are always allowed.
-func (e *Engine) Evaluate(_ context.Context, artifact scanner.Artifact, scanResults []scanner.ScanResult) PolicyResult {
-	// Allowlist check — overrides everything.
+// DB overrides are checked first, then static allowlist, then verdict rules.
+func (e *Engine) Evaluate(ctx context.Context, artifact scanner.Artifact, scanResults []scanner.ScanResult) PolicyResult {
+	// DB override check — highest priority.
+	if e.hasDBOverride(ctx, artifact) {
+		return PolicyResult{
+			Action: ActionAllow,
+			Reason: fmt.Sprintf("policy override: %s:%s:%s", artifact.Ecosystem, artifact.Name, artifact.Version),
+		}
+	}
+
+	// Static allowlist check.
 	if isAllowlisted(artifact, e.allowlist) {
 		return PolicyResult{
 			Action: ActionAllow,

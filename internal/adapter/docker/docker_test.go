@@ -31,7 +31,7 @@ func setupTestDocker(t *testing.T, upstreamHandler http.HandlerFunc) (*docker.Do
 		BlockIfVerdict:      scanner.VerdictMalicious,
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
 		MinimumConfidence:   0.7,
-	})
+	}, nil)
 	return docker.NewDockerAdapter(db, cacheStore, policyEngine, upstream.URL), upstream
 }
 
@@ -66,7 +66,7 @@ func TestDockerAdapter_V2Check_NoUpstream_StillReturnsHeader(t *testing.T) {
 	cacheStore, err := local.NewLocalCacheStore(t.TempDir(), 10)
 	require.NoError(t, err)
 
-	policyEngine := policy.NewEngine(policy.EngineConfig{})
+	policyEngine := policy.NewEngine(policy.EngineConfig{}, nil)
 	a := docker.NewDockerAdapter(db, cacheStore, policyEngine, upstream.URL)
 
 	req := httptest.NewRequest(http.MethodGet, "/v2/", nil)

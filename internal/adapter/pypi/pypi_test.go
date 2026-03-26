@@ -33,7 +33,7 @@ func setupTestPyPI(t *testing.T, upstreamHandler http.HandlerFunc) (*pypi.PyPIAd
 		BlockIfVerdict:      scanner.VerdictMalicious,
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
 		MinimumConfidence:   0.7,
-	})
+	}, nil)
 	return pypi.NewPyPIAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL), upstream
 }
 

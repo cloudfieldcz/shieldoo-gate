@@ -33,7 +33,7 @@ func setupTestNuGet(t *testing.T, upstreamHandler http.HandlerFunc) (*nuget.NuGe
 		BlockIfVerdict:      scanner.VerdictMalicious,
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
 		MinimumConfidence:   0.7,
-	})
+	}, nil)
 	return nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL), upstream
 }
 

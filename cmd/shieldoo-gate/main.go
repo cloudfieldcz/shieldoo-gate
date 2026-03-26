@@ -121,7 +121,7 @@ func main() {
 		QuarantineIfVerdict: scanner.Verdict(cfg.Policy.QuarantineIfVerdict),
 		MinimumConfidence:   cfg.Policy.MinimumConfidence,
 		Allowlist:           cfg.Policy.Allowlist,
-	})
+	}, db)
 
 	// Init threat feed client with periodic refresh (if enabled)
 	if cfg.ThreatFeed.Enabled && cfg.ThreatFeed.URL != "" {

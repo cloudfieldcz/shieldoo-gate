@@ -28,7 +28,7 @@ func pypiArtifact(name, version string) scanner.Artifact {
 }
 
 func TestPolicyEngine_MaliciousVerdict_ReturnsBlock(t *testing.T) {
-	engine := policy.NewEngine(defaultEngineConfig())
+	engine := policy.NewEngine(defaultEngineConfig(), nil)
 	results := []scanner.ScanResult{
 		{ScannerID: "guarddog", Verdict: scanner.VerdictMalicious, Confidence: 0.9},
 	}
@@ -37,7 +37,7 @@ func TestPolicyEngine_MaliciousVerdict_ReturnsBlock(t *testing.T) {
 }
 
 func TestPolicyEngine_SuspiciousVerdict_ReturnsQuarantine(t *testing.T) {
-	engine := policy.NewEngine(defaultEngineConfig())
+	engine := policy.NewEngine(defaultEngineConfig(), nil)
 	results := []scanner.ScanResult{
 		{ScannerID: "osv", Verdict: scanner.VerdictSuspicious, Confidence: 0.8},
 	}
@@ -46,7 +46,7 @@ func TestPolicyEngine_SuspiciousVerdict_ReturnsQuarantine(t *testing.T) {
 }
 
 func TestPolicyEngine_CleanVerdict_ReturnsAllow(t *testing.T) {
-	engine := policy.NewEngine(defaultEngineConfig())
+	engine := policy.NewEngine(defaultEngineConfig(), nil)
 	results := []scanner.ScanResult{
 		{ScannerID: "trivy", Verdict: scanner.VerdictClean, Confidence: 0.95},
 	}
@@ -57,7 +57,7 @@ func TestPolicyEngine_CleanVerdict_ReturnsAllow(t *testing.T) {
 func TestPolicyEngine_AllowlistOverride_AllowsMalicious(t *testing.T) {
 	cfg := defaultEngineConfig()
 	cfg.Allowlist = []string{"pypi:litellm:==1.82.6"}
-	engine := policy.NewEngine(cfg)
+	engine := policy.NewEngine(cfg, nil)
 
 	results := []scanner.ScanResult{
 		{ScannerID: "guarddog", Verdict: scanner.VerdictMalicious, Confidence: 0.99},
@@ -70,7 +70,7 @@ func TestPolicyEngine_AllowlistOverride_AllowsMalicious(t *testing.T) {
 func TestPolicyEngine_AllowlistNoMatch_StillBlocks(t *testing.T) {
 	cfg := defaultEngineConfig()
 	cfg.Allowlist = []string{"pypi:litellm:==1.82.6"}
-	engine := policy.NewEngine(cfg)
+	engine := policy.NewEngine(cfg, nil)
 
 	results := []scanner.ScanResult{
 		{ScannerID: "guarddog", Verdict: scanner.VerdictMalicious, Confidence: 0.99},
