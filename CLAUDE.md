@@ -4,7 +4,7 @@
 
 Shieldoo Gate is an open-source supply chain security proxy for Docker, PyPI, npm, NuGet, and more. It transparently proxies package requests, scans artifacts before serving, and blocks malicious content in real time.
 
-- **Language:** Go 1.23+ (core proxy & API), TypeScript + React (admin UI), Python 3.12+ (scanner bridge)
+- **Language:** Go 1.25+ (core proxy & API), TypeScript + React (admin UI), Python 3.12+ (scanner bridge)
 - **License:** Apache 2.0
 - **Status:** Early development (v1.0 in progress)
 
@@ -59,7 +59,7 @@ These are **normative** — do not substitute without creating an ADR in `docs/a
 
 All component versions MUST be pinned explicitly. No floating or `latest` specifiers.
 
-- **Go:** Pin in `go.mod` (e.g., `go 1.23.x`). Pin all dependencies to exact versions.
+- **Go:** Pin in `go.mod` (e.g., `go 1.25.x`). Pin all dependencies to exact versions.
 - **Python:** Pin in `requirements.txt` with `==` and hashes. Use `uv` for package management.
 - **Node/Frontend:** Pin in `package-lock.json`. Use exact versions in `package.json`.
 - **Docker base images:** Pin to digest or exact tag (e.g., `python:3.12.x-slim`).

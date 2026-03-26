@@ -6,7 +6,7 @@
 
 **Architecture:** GuardDog requires a Python sidecar process communicating via gRPC over Unix socket. Trivy runs as a subprocess with JSON output parsing. OSV is a pure HTTP client against `api.osv.dev`. All three follow fail-open design: errors return `VerdictClean` + logged error.
 
-**Tech Stack:** Go 1.23+, gRPC (protobuf), Python 3.12+ (GuardDog bridge), `os/exec` (Trivy subprocess), `net/http` (OSV client), testify
+**Tech Stack:** Go 1.25+, gRPC (protobuf), Python 3.12+ (GuardDog bridge), `os/exec` (Trivy subprocess), `net/http` (OSV client), testify
 
 **Index:** [`plan-index.md`](./2026-03-25-v1-core-plan-index.md)
 

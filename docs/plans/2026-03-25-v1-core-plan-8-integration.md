@@ -6,7 +6,7 @@
 
 **Architecture:** The main entrypoint uses `errgroup.Group` to manage 5 HTTP servers (PyPI:5000, npm:4873, NuGet:5001, Docker:5002, Admin:8080) with graceful shutdown. Docker multi-stage build for Go+UI. Docker Compose runs shieldoo-gate + scanner-bridge with a shared Unix socket volume. E2E tests use real `pip`, `npm`, `docker`, and `dotnet` clients against the running stack.
 
-**Tech Stack:** Go 1.23+, errgroup, Docker, docker-compose, testify
+**Tech Stack:** Go 1.25+, errgroup, Docker, docker-compose, testify
 
 **Index:** [`plan-index.md`](./2026-03-25-v1-core-plan-index.md)
 

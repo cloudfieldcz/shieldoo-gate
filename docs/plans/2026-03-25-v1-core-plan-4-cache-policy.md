@@ -6,7 +6,7 @@
 
 **Architecture:** The local cache uses `{basePath}/{ecosystem}/{name}/{version}/{filename}` layout with atomic writes via `os.Rename`. The policy engine evaluates rules in order (first match wins) with actions: allow/block/quarantine/warn. The aggregator combines multiple scan results into a single verdict. The threat feed client polls a remote JSON feed and stores entries in the `threat_feed` DB table.
 
-**Tech Stack:** Go 1.23+, `os` (filesystem), `sqlx` (DB operations), `net/http` (threat feed client), testify
+**Tech Stack:** Go 1.25+, `os` (filesystem), `sqlx` (DB operations), `net/http` (threat feed client), testify
 
 **Index:** [`plan-index.md`](./2026-03-25-v1-core-plan-index.md)
 

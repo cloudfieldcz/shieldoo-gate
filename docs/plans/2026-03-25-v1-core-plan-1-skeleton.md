@@ -6,7 +6,7 @@
 
 **Architecture:** Standard Go project layout with `cmd/` entrypoint and `internal/` packages. Viper handles YAML+env config, sqlx+go-sqlite3 for database, zerolog for structured logging. All core interfaces defined upfront so later phases can implement against them.
 
-**Tech Stack:** Go 1.23+, chi/v5, viper, zerolog, sqlx, go-sqlite3, testify
+**Tech Stack:** Go 1.25+, chi/v5, viper, zerolog, sqlx, go-sqlite3, testify
 
 **Index:** [`plan-index.md`](./2026-03-25-v1-core-plan-index.md)
 

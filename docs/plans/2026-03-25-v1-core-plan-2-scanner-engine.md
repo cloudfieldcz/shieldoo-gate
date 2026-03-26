@@ -6,7 +6,7 @@
 
 **Architecture:** The `Engine` holds a slice of `Scanner` implementations and runs them in parallel using goroutines with a shared context for timeout. Each built-in scanner implements the `Scanner` interface from `internal/scanner/interface.go`. Scanners that fail return `VerdictClean` + error (fail-open design). The engine collects all results; aggregation happens later in the policy engine (Phase 4).
 
-**Tech Stack:** Go 1.23+, `sync` (goroutines/WaitGroup), `archive/zip`/`archive/tar` (artifact extraction), `regexp` (pattern matching), testify
+**Tech Stack:** Go 1.25+, `sync` (goroutines/WaitGroup), `archive/zip`/`archive/tar` (artifact extraction), `regexp` (pattern matching), testify
 
 **Index:** [`plan-index.md`](./2026-03-25-v1-core-plan-index.md)
 

@@ -6,7 +6,7 @@
 
 **Architecture:** Each adapter implements `adapter.Adapter` (which embeds `http.Handler`). The shared flow is: parse request → check cache (including `artifact_status`) → on miss: download from upstream → scan → evaluate policy → cache write (if allowed) → serve or block. Adapters share a common base for DB operations and audit logging but implement protocol-specific request/response handling. Package names and versions are validated with a whitelist character pattern to prevent path traversal.
 
-**Tech Stack:** Go 1.23+, chi/v5 (routing), `net/http` (upstream proxying), `google/go-containerregistry` (Docker), sqlx, testify
+**Tech Stack:** Go 1.25+, chi/v5 (routing), `net/http` (upstream proxying), `google/go-containerregistry` (Docker), sqlx, testify
 
 **Index:** [`plan-index.md`](./2026-03-25-v1-core-plan-index.md)
 

@@ -6,7 +6,7 @@
 
 **Architecture:** Chi router serves JSON REST API on the admin port (8080). Endpoints operate against SQLite via sqlx. Rescan endpoint invokes the scanner engine. Prometheus metrics use `client_golang` for standard counters/gauges/histograms. The OpenAPI spec documents the API contract.
 
-**Tech Stack:** Go 1.23+, chi/v5, sqlx, `prometheus/client_golang`, testify
+**Tech Stack:** Go 1.25+, chi/v5, sqlx, `prometheus/client_golang`, testify
 
 **Index:** [`plan-index.md`](./2026-03-25-v1-core-plan-index.md)
 

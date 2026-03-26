@@ -39,7 +39,7 @@ Shieldoo Gate Protocol Adapter
 
 ## Technology Stack
 
-- **Go 1.23+** — core proxy, API, built-in scanners
+- **Go 1.25+** — core proxy, API, built-in scanners
 - **TypeScript + React 18** — admin UI
 - **Python 3.12+** — GuardDog scanner bridge (gRPC sidecar)
 - **SQLite** (single-node) / **PostgreSQL** (HA mode)
@@ -80,6 +80,36 @@ npm config set registry http://localhost:4873/
 
 # Open the Admin API
 curl http://localhost:8080/api/v1/health
+```
+
+### Local Development (without Docker)
+
+Prerequisites: Go 1.25+, Node.js 20+, Python 3.12+ with [uv](https://docs.astral.sh/uv/), `protoc` (Protocol Buffers compiler).
+
+```bash
+# Generate gRPC code (requires protoc + Go gRPC plugins)
+make proto
+
+# Build the binary
+make build
+
+# Run with a config file
+./bin/shieldoo-gate -config config.example.yaml
+
+# Run tests
+make test
+
+# Lint
+make lint
+```
+
+The scanner bridge must be started separately:
+
+```bash
+cd scanner-bridge
+uv venv .venv && source .venv/bin/activate
+uv pip install -r requirements.txt
+python -m bridge.server
 ```
 
 ### Running E2E Tests
