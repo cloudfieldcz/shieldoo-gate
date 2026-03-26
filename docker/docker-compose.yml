@@ -1,0 +1,39 @@
+version: "3.9"
+
+services:
+  shieldoo-gate:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    depends_on:
+      scanner-bridge:
+        condition: service_started
+    ports:
+      - "5000:5000"   # PyPI
+      - "4873:4873"   # npm
+      - "5001:5001"   # NuGet
+      - "5002:5002"   # Docker registry
+      - "8080:8080"   # Admin API
+    volumes:
+      - bridge-socket:/tmp
+      - gate-data:/var/lib/shieldoo-gate
+      - gate-cache:/var/cache/shieldoo-gate
+      - ./config.yaml:/etc/shieldoo-gate/config.yaml:ro
+    environment:
+      SGW_SCANNERS_GUARDDOG_BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
+    restart: unless-stopped
+
+  scanner-bridge:
+    build:
+      context: ../scanner-bridge
+      dockerfile: Dockerfile
+    volumes:
+      - bridge-socket:/tmp
+    environment:
+      BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
+    restart: unless-stopped
+
+volumes:
+  bridge-socket:
+  gate-data:
+  gate-cache:
