@@ -2,6 +2,11 @@
 package api
 
 import (
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jmoiron/sqlx"
@@ -18,6 +23,7 @@ type Server struct {
 	cacheStore   cache.CacheStore
 	scanEngine   *scanner.Engine
 	policyEngine *policy.Engine
+	uiDir        string
 }
 
 // NewServer creates a new Server with the given dependencies.
@@ -27,6 +33,7 @@ func NewServer(db *sqlx.DB, cacheStore cache.CacheStore, scanEngine *scanner.Eng
 		cacheStore:   cacheStore,
 		scanEngine:   scanEngine,
 		policyEngine: policyEngine,
+		uiDir:        "/var/www/shieldoo-gate/ui",
 	}
 }
 
@@ -61,5 +68,26 @@ func (s *Server) Routes() chi.Router {
 	// Prometheus metrics
 	r.Handle("/metrics", promhttp.Handler())
 
+	// Serve admin UI (SPA fallback)
+	r.Get("/*", s.serveSPA)
+
 	return r
+}
+
+// serveSPA serves the React SPA from uiDir with fallback to index.html.
+func (s *Server) serveSPA(w http.ResponseWriter, r *http.Request) {
+	path := filepath.Join(s.uiDir, filepath.Clean(r.URL.Path))
+
+	// Prevent path traversal
+	if !strings.HasPrefix(path, s.uiDir) {
+		http.NotFound(w, r)
+		return
+	}
+
+	// If the file exists, serve it; otherwise fall back to index.html for SPA routing
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		http.ServeFile(w, r, filepath.Join(s.uiDir, "index.html"))
+		return
+	}
+	http.ServeFile(w, r, path)
 }

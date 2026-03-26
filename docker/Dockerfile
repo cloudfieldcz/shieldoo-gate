@@ -30,7 +30,9 @@ RUN apk add --no-cache ca-certificates sqlite-libs
 COPY --from=go-builder /shieldoo-gate /usr/local/bin/shieldoo-gate
 COPY --from=ui-builder /ui/dist /var/www/shieldoo-gate/ui
 
-RUN addgroup -S sgw && adduser -S sgw -G sgw
+RUN addgroup -S sgw && adduser -S sgw -G sgw \
+ && mkdir -p /var/lib/shieldoo-gate /var/cache/shieldoo-gate \
+ && chown sgw:sgw /var/lib/shieldoo-gate /var/cache/shieldoo-gate
 USER sgw
 
 EXPOSE 5000 4873 5001 5002 8080
