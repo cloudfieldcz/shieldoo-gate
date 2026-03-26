@@ -12,7 +12,7 @@ func TestInitDB_CreatesAllTables(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	tables := []string{"artifacts", "scan_results", "artifact_status", "audit_log", "threat_feed"}
+	tables := []string{"artifacts", "scan_results", "artifact_status", "audit_log", "threat_feed", "policy_overrides"}
 	for _, table := range tables {
 		var name string
 		err := db.Get(&name, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", table)
@@ -49,7 +49,11 @@ func TestInitDB_Idempotent(t *testing.T) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	// Running migration again should not error (CREATE TABLE IF NOT EXISTS)
-	_, err = db.Exec(mustReadMigration())
-	assert.NoError(t, err)
+	// Running migrations again should not error (CREATE TABLE IF NOT EXISTS)
+	migrations, err := readMigrations()
+	require.NoError(t, err)
+	for _, sql := range migrations {
+		_, err = db.Exec(sql)
+		assert.NoError(t, err)
+	}
 }
