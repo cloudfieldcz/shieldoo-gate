@@ -55,9 +55,15 @@ func (s *Server) Routes() chi.Router {
 		r.Post("/artifacts/{id}/rescan", s.handleRescanArtifact)
 		r.Post("/artifacts/{id}/quarantine", s.handleQuarantineArtifact)
 		r.Post("/artifacts/{id}/release", s.handleReleaseArtifact)
+		r.Post("/artifacts/{id}/override", s.handleCreateArtifactOverride)
 
 		// Audit log
 		r.Get("/audit", s.handleListAudit)
+
+		// Policy overrides
+		r.Get("/overrides", s.handleListOverrides)
+		r.Post("/overrides", s.handleCreateOverride)
+		r.Delete("/overrides/{id}", s.handleRevokeOverride)
 
 		// Stats
 		r.Get("/stats/summary", s.handleStatsSummary)
