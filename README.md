@@ -16,15 +16,31 @@ Shieldoo Gate acts as a transparent caching proxy for all major package ecosyste
 ## Quick Start
 
 ```bash
-docker compose -f docker/docker-compose.yml up
-```
+# 1. Copy and customise the example config
+cp config.example.yaml docker/config.yaml
 
-Then point your package manager at the Gate:
+# 2. Start the full stack (Shieldoo Gate + GuardDog scanner bridge)
+docker compose -f docker/docker-compose.yml up -d
 
-```bash
+# 3. Point your package managers at the proxy
 pip config set global.index-url http://localhost:5000/simple/
 npm config set registry http://localhost:4873/
+# NuGet:  dotnet nuget add source http://localhost:5001/v3/index.json
+# Docker: configure daemon mirror to http://localhost:5002
+
+# 4. Check the Admin API
+curl http://localhost:8080/api/v1/health
 ```
+
+Port reference:
+
+| Service | Port | Protocol |
+|---|---|---|
+| PyPI proxy | 5000 | HTTP |
+| npm proxy | 4873 | HTTP |
+| NuGet proxy | 5001 | HTTP |
+| Docker proxy | 5002 | HTTP |
+| Admin API / Metrics | 8080 | HTTP |
 
 ## Documentation
 

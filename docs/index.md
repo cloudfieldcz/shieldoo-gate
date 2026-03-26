@@ -44,9 +44,46 @@ Shieldoo Gate Protocol Adapter
 - **Python 3.12+** — GuardDog scanner bridge (gRPC sidecar)
 - **SQLite** (single-node) / **PostgreSQL** (HA mode)
 
+## Implementation Status (v1.0)
+
+| Phase | Module | Status |
+|---|---|---|
+| 1 | Skeleton (config, DB, interfaces) | Done |
+| 2 | Scanner engine + built-in scanners | Done |
+| 3 | External scanners (GuardDog, Trivy, OSV) | Done |
+| 4 | Cache & policy engine | Done |
+| 5 | Protocol adapters (PyPI, npm, Docker, NuGet) | Done |
+| 6 | Admin REST API | Done |
+| 7 | Admin UI (React) | Done |
+| 8 | Main entrypoint, Docker Compose, E2E tests | Done |
+
 ## Getting Started
 
 See the [Quick Start in README](../README.md#quick-start) or the [Deployment section](initial-analyse.md#11-deployment) in the technical specification.
+
+### Running with Docker Compose
+
+```bash
+# Copy and edit the example config
+cp config.example.yaml docker/config.yaml
+
+# Start the full stack (Shieldoo Gate + scanner-bridge)
+docker compose -f docker/docker-compose.yml up -d
+
+# Point pip and npm at the proxy
+pip config set global.index-url http://localhost:5000/simple/
+npm config set registry http://localhost:4873/
+
+# Open the Admin API
+curl http://localhost:8080/api/v1/health
+```
+
+### Running E2E Tests
+
+```bash
+# Start the full stack first (see above), then:
+make test-e2e
+```
 
 ## Contributing
 
