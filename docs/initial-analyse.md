@@ -788,6 +788,12 @@ POST   /api/v1/artifacts/{id}/release           release from quarantine
 # Audit log
 GET    /api/v1/audit                            paginated audit log (filter by event_type)
 
+# Policy overrides
+GET    /api/v1/overrides                        list overrides (pagination, filter by active)
+POST   /api/v1/overrides                        create new override
+DELETE /api/v1/overrides/{id}                   revoke (soft-delete) an override
+POST   /api/v1/artifacts/{id}/override          create override from artifact (convenience)
+
 # Statistics
 GET    /api/v1/stats/summary                    traffic summary (last 24h, 7d, 30d)
 GET    /api/v1/stats/blocked                    blocked artifacts history

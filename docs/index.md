@@ -34,6 +34,7 @@ Shieldoo Gate Protocol Adapter
 | **Scan Engine** | Pluggable scanner framework (GuardDog, Trivy, OSV, built-in heuristics) |
 | **Cache Store** | Local filesystem, S3, or Azure Blob storage with TTL |
 | **Policy Engine** | Block / quarantine / warn / allow rules with allowlists |
+| **Policy Overrides** | Dynamic false-positive management and audit trail via UI/API |
 | **Rescan Scheduler** | Periodic rescan of cached artifacts + threat feed updates |
 | **Admin UI + REST API** | Dashboard, artifact management, audit log |
 
