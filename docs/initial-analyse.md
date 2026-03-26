@@ -1001,6 +1001,7 @@ chore(deps): pin trivy to commit abc1234
 - Dynamic sandbox execution (gVisor)
 - OIDC admin authentication
 - PostgreSQL HA mode
+- E2E test sandbox: containerized test clients (uv, npm, dotnet) running inside Docker so that E2E tests have zero dependency on host-installed toolchains and avoid local package-manager cache interference (~/.npm, ~/.nuget)
 
 ### v1.2 — Enterprise features
 - SBOM generation per artifact

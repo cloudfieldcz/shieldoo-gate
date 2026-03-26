@@ -1,0 +1,32 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "examples", "examples", "{B36A84DF-456D-A817-6EDD-3EC3E7F6E11F}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "dotnet-json", "dotnet-json", "{BA2542D4-CF52-68C4-E0F7-10E508AB2409}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ExampleApp", "examples\dotnet-json\ExampleApp.csproj", "{8AB3CA77-D41C-5E73-AF03-51688C0AEC09}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{8AB3CA77-D41C-5E73-AF03-51688C0AEC09}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8AB3CA77-D41C-5E73-AF03-51688C0AEC09}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8AB3CA77-D41C-5E73-AF03-51688C0AEC09}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8AB3CA77-D41C-5E73-AF03-51688C0AEC09}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{BA2542D4-CF52-68C4-E0F7-10E508AB2409} = {B36A84DF-456D-A817-6EDD-3EC3E7F6E11F}
+		{8AB3CA77-D41C-5E73-AF03-51688C0AEC09} = {BA2542D4-CF52-68C4-E0F7-10E508AB2409}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {00EB1F29-37E0-4782-BA63-DFEC13340AC5}
+	EndGlobalSection
+EndGlobal

@@ -10,7 +10,7 @@ uv venv .venv
 source .venv/bin/activate
 
 # Install requests via the proxy
-uv pip install --index-url http://localhost:5010/simple/ -r requirements.txt
+uv pip install --no-cache --reinstall --index-url http://localhost:5010/simple/ -r requirements.txt
 
 # Run the script
 python main.py

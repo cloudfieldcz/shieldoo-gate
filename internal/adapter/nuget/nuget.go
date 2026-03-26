@@ -96,15 +96,21 @@ func (a *NuGetAdapter) buildRouter() http.Handler {
 	// Route: /v3-flatcontainer/{id}/{version}/{id}.{version}.nupkg
 	r.Get("/v3-flatcontainer/{id}/{version}/{filename}", a.handleNupkgDownload)
 
+	// Catch-all for additional NuGet V3 resources (repository-signatures,
+	// vulnerability info, etc.) — proxy to upstream without scanning.
+	r.Get("/*", a.handlePassthrough)
+
 	return r
 }
 
-// handleServiceIndex proxies the NuGet V3 service index.
+// handleServiceIndex proxies the NuGet V3 service index, rewriting upstream
+// URLs so the NuGet client routes all subsequent requests through the proxy.
 func (a *NuGetAdapter) handleServiceIndex(w http.ResponseWriter, r *http.Request) {
-	a.proxyUpstream(w, r, "/v3/index.json")
+	a.proxyUpstreamRewrite(w, r, "/v3/index.json")
 }
 
-// handleRegistration proxies package registration (metadata) responses.
+// handleRegistration proxies package registration (metadata) responses,
+// rewriting upstream URLs so flat-container downloads go through the proxy.
 func (a *NuGetAdapter) handleRegistration(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if err := adapter.ValidatePackageName(id); err != nil {
@@ -114,7 +120,14 @@ func (a *NuGetAdapter) handleRegistration(w http.ResponseWriter, r *http.Request
 		})
 		return
 	}
-	a.proxyUpstream(w, r, "/v3/registration/"+id+"/index.json")
+	a.proxyUpstreamRewrite(w, r, "/v3/registration/"+id+"/index.json")
+}
+
+// handlePassthrough proxies unrecognized NuGet API paths to upstream.
+// This handles ancillary resources like repository-signatures, vulnerability
+// info, and other V3 endpoints that don't need scanning.
+func (a *NuGetAdapter) handlePassthrough(w http.ResponseWriter, r *http.Request) {
+	a.proxyUpstream(w, r, r.URL.Path)
 }
 
 // handleNupkgDownload runs the scan pipeline for .nupkg files.
@@ -304,6 +317,58 @@ func (a *NuGetAdapter) proxyUpstream(w http.ResponseWriter, r *http.Request, pat
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+}
+
+// proxyUpstreamRewrite fetches the upstream response and rewrites all
+// occurrences of the upstream base URL with the proxy's own base URL
+// (http://{r.Host}). This ensures that absolute URLs embedded in JSON
+// responses (e.g. the NuGet V3 service index or registration pages) point
+// back through the proxy so that package downloads are routed through the
+// scan pipeline.
+func (a *NuGetAdapter) proxyUpstreamRewrite(w http.ResponseWriter, r *http.Request, path string) {
+	target, err := url.JoinPath(a.upstreamURL, path)
+	if err != nil {
+		http.Error(w, "bad upstream path", http.StatusInternalServerError)
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
+	if err != nil {
+		http.Error(w, "upstream request error", http.StatusInternalServerError)
+		return
+	}
+	if accept := r.Header.Get("Accept"); accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		http.Error(w, "upstream unreachable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
+		return
+	}
+
+	// Replace upstream base URL with the proxy's own URL so that all
+	// discovery URLs in service index and registration responses resolve
+	// through the proxy rather than hitting api.nuget.org directly.
+	rewritten := strings.ReplaceAll(string(body), a.upstreamURL+"/", "http://"+r.Host+"/")
+
+	for key, vals := range resp.Header {
+		if strings.EqualFold(key, "Content-Length") {
+			continue // length changed after rewrite
+		}
+		for _, v := range vals {
+			w.Header().Add(key, v)
+		}
+	}
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(rewritten)))
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.WriteString(w, rewritten)
 }
 
 // downloadToTemp downloads url to a temp file, returning (path, size, sha256hex, error).

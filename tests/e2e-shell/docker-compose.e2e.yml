@@ -1,0 +1,42 @@
+name: shieldoo-e2e
+
+services:
+  shieldoo-gate:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    platform: linux/amd64
+    depends_on:
+      scanner-bridge:
+        condition: service_started
+    ports:
+      - "15010:5000"   # PyPI
+      - "14873:4873"   # npm
+      - "15001:5001"   # NuGet
+      - "18080:8080"   # Admin
+    volumes:
+      - e2e-bridge-socket:/tmp
+      - e2e-gate-data:/var/lib/shieldoo-gate
+      - e2e-gate-cache:/var/cache/shieldoo-gate
+      - e2e-trivy-cache:/var/cache/trivy
+      - ./config.e2e.yaml:/etc/shieldoo-gate/config.yaml:ro
+    environment:
+      SGW_SCANNERS_GUARDDOG_BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
+    restart: "no"
+
+  scanner-bridge:
+    build:
+      context: ../../scanner-bridge
+      dockerfile: Dockerfile
+    platform: linux/amd64
+    volumes:
+      - e2e-bridge-socket:/tmp
+    environment:
+      BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
+    restart: "no"
+
+volumes:
+  e2e-bridge-socket:
+  e2e-gate-data:
+  e2e-gate-cache:
+  e2e-trivy-cache:

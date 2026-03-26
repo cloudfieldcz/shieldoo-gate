@@ -42,38 +42,50 @@ func TestNuGetAdapter_Ecosystem_ReturnsNuGet(t *testing.T) {
 	assert.Equal(t, scanner.EcosystemNuGet, a.Ecosystem())
 }
 
-func TestNuGetAdapter_ServiceIndex_ProxiesUpstream(t *testing.T) {
-	const body = `{"version":"3.0.0","resources":[]}`
+func TestNuGetAdapter_ServiceIndex_RewritesUpstreamURLs(t *testing.T) {
+	var upstreamBase string
 
-	a, _ := setupTestNuGet(t, func(w http.ResponseWriter, r *http.Request) {
+	a, upstream := setupTestNuGet(t, func(w http.ResponseWriter, r *http.Request) {
+		// Simulate api.nuget.org returning absolute URLs referencing itself.
+		body := `{"version":"3.0.0","resources":[{"@id":"` + upstreamBase + `/v3-flatcontainer/","@type":"PackageBaseAddress/3.0.0"}]}`
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(body))
 	})
+	upstreamBase = upstream.URL
 
 	req := httptest.NewRequest(http.MethodGet, "/v3/index.json", nil)
+	req.Host = "proxy.example.com"
 	w := httptest.NewRecorder()
 	a.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "version")
+	body := w.Body.String()
+	// Upstream URL must be replaced with proxy host.
+	assert.NotContains(t, body, upstreamBase, "upstream base URL must not appear in rewritten response")
+	assert.Contains(t, body, "http://proxy.example.com/v3-flatcontainer/")
 }
 
-func TestNuGetAdapter_Registration_ProxiesUpstream(t *testing.T) {
-	const body = `{"count":1,"items":[]}`
+func TestNuGetAdapter_Registration_RewritesUpstreamURLs(t *testing.T) {
+	var upstreamBase string
 
-	a, _ := setupTestNuGet(t, func(w http.ResponseWriter, r *http.Request) {
+	a, upstream := setupTestNuGet(t, func(w http.ResponseWriter, r *http.Request) {
+		body := `{"count":1,"items":[{"@id":"` + upstreamBase + `/v3/registration/newtonsoft.json/index.json"}]}`
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(body))
 	})
+	upstreamBase = upstream.URL
 
 	req := httptest.NewRequest(http.MethodGet, "/v3/registration/Newtonsoft.Json/index.json", nil)
+	req.Host = "proxy.example.com"
 	w := httptest.NewRecorder()
 	a.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "count")
+	body := w.Body.String()
+	assert.NotContains(t, body, upstreamBase, "upstream base URL must not appear in rewritten response")
+	assert.Contains(t, body, "http://proxy.example.com/v3/registration/newtonsoft.json/index.json")
 }
 
 func TestNuGetAdapter_NupkgDownload_CleanPackage_Serves200(t *testing.T) {

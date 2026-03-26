@@ -96,7 +96,8 @@ func (a *NPMAdapter) buildRouter() http.Handler {
 	return r
 }
 
-// handlePackageMetadata proxies the package metadata JSON.
+// handlePackageMetadata proxies the package metadata JSON, rewriting tarball
+// URLs so that downloads are routed through the proxy's scan pipeline.
 func (a *NPMAdapter) handlePackageMetadata(w http.ResponseWriter, r *http.Request) {
 	pkg := chi.URLParam(r, "package")
 	if err := adapter.ValidatePackageName(pkg); err != nil {
@@ -106,7 +107,7 @@ func (a *NPMAdapter) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 		})
 		return
 	}
-	a.proxyUpstream(w, r, "/"+pkg)
+	a.proxyUpstreamRewrite(w, r, "/"+pkg)
 }
 
 // handleVersionMetadata proxies version-specific metadata JSON.
@@ -128,11 +129,12 @@ func (a *NPMAdapter) handleTarballDownload(w http.ResponseWriter, r *http.Reques
 	a.downloadScanServe(w, r, a.upstreamURL+upstreamPath, pkg, tarball)
 }
 
-// handleScopedMetadata proxies metadata for @scope/package.
+// handleScopedMetadata proxies metadata for @scope/package, rewriting tarball
+// URLs so that downloads are routed through the proxy's scan pipeline.
 func (a *NPMAdapter) handleScopedMetadata(w http.ResponseWriter, r *http.Request) {
 	scope := chi.URLParam(r, "scope")
 	pkg := chi.URLParam(r, "package")
-	a.proxyUpstream(w, r, "/@"+scope+"/"+pkg)
+	a.proxyUpstreamRewrite(w, r, "/@"+scope+"/"+pkg)
 }
 
 // handleScopedVersionMetadata proxies version metadata for @scope/package/version.
@@ -321,6 +323,64 @@ func (a *NPMAdapter) proxyUpstream(w http.ResponseWriter, r *http.Request, path 
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+}
+
+// proxyUpstreamRewrite fetches the upstream metadata JSON and rewrites tarball
+// URLs so that npm clients download packages through the proxy's scan pipeline
+// rather than directly from the upstream registry.
+//
+// The upstream registry embeds absolute tarball URLs such as:
+//
+//	"tarball":"https://registry.npmjs.org/is-odd/-/is-odd-3.0.1.tgz"
+//
+// This method replaces the upstream origin (a.upstreamURL + "/") with the
+// proxy's own origin ("http://" + r.Host + "/") so the npm client follows
+// URLs that route back through the proxy.
+func (a *NPMAdapter) proxyUpstreamRewrite(w http.ResponseWriter, r *http.Request, path string) {
+	target, err := url.JoinPath(a.upstreamURL, path)
+	if err != nil {
+		http.Error(w, "bad upstream path", http.StatusInternalServerError)
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
+	if err != nil {
+		http.Error(w, "upstream request error", http.StatusInternalServerError)
+		return
+	}
+	if accept := r.Header.Get("Accept"); accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		http.Error(w, "upstream unreachable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
+		return
+	}
+
+	// Rewrite upstream tarball URLs to proxy-relative URLs so downloads pass
+	// through the scan pipeline.
+	old := []byte(`"` + a.upstreamURL + "/")
+	replacement := []byte(`"http://` + r.Host + "/")
+	rewritten := strings.ReplaceAll(string(body), string(old), string(replacement))
+
+	for key, vals := range resp.Header {
+		if strings.EqualFold(key, "Content-Length") {
+			continue // length may have changed after rewrite
+		}
+		for _, v := range vals {
+			w.Header().Add(key, v)
+		}
+	}
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(rewritten)))
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write([]byte(rewritten))
 }
 
 // downloadToTemp downloads url to a temp file, returning (path, size, sha256hex, error).
