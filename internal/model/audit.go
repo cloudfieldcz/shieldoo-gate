@@ -5,11 +5,13 @@ import "time"
 type EventType string
 
 const (
-	EventServed      EventType = "SERVED"
-	EventBlocked     EventType = "BLOCKED"
-	EventQuarantined EventType = "QUARANTINED"
-	EventReleased    EventType = "RELEASED"
-	EventScanned     EventType = "SCANNED"
+	EventServed          EventType = "SERVED"
+	EventBlocked         EventType = "BLOCKED"
+	EventQuarantined     EventType = "QUARANTINED"
+	EventReleased        EventType = "RELEASED"
+	EventScanned         EventType = "SCANNED"
+	EventOverrideCreated EventType = "OVERRIDE_CREATED"
+	EventOverrideRevoked EventType = "OVERRIDE_REVOKED"
 )
 
 type AuditEntry struct {
