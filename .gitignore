@@ -58,5 +58,11 @@ docker/data/
 /cache/
 *.log
 
+# Examples (build artifacts)
+examples/python-requests/.venv/
+examples/npm-chalk/node_modules/
+examples/dotnet-json/bin/
+examples/dotnet-json/obj/
+
 # Helm
 helm/charts/

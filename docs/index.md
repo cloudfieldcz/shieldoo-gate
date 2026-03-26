@@ -61,6 +61,10 @@ Shieldoo Gate Protocol Adapter
 
 See the [Quick Start in README](../README.md#quick-start) or the [Deployment section](initial-analyse.md#11-deployment) in the technical specification.
 
+### Example Projects
+
+The [`examples/`](../examples/) directory contains minimal projects (Python, npm, .NET) configured to install dependencies through the local proxy. Each has one dependency and a tiny script — a quick way to verify the proxy works.
+
 ### Running with Docker Compose
 
 ```bash
