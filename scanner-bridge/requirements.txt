@@ -1,0 +1,6 @@
+# scanner-bridge/requirements.txt
+# ALL dependencies pinned with == — NEVER use floating specifiers
+guarddog==0.1.17
+grpcio==1.62.0
+grpcio-tools==1.62.0
+protobuf==4.25.3
