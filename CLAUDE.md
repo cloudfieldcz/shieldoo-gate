@@ -55,6 +55,26 @@ shieldoo-gate/
 
 These are **normative** — do not substitute without creating an ADR in `docs/adr/`.
 
+### Version Pinning — MANDATORY
+
+All component versions MUST be pinned explicitly. No floating or `latest` specifiers.
+
+- **Go:** Pin in `go.mod` (e.g., `go 1.23.x`). Pin all dependencies to exact versions.
+- **Python:** Pin in `requirements.txt` with `==` and hashes. Use `uv` for package management.
+- **Node/Frontend:** Pin in `package-lock.json`. Use exact versions in `package.json`.
+- **Docker base images:** Pin to digest or exact tag (e.g., `python:3.12.x-slim`).
+- **CI tools (protoc, trivy, etc.):** Pin to exact version in Makefile or CI config.
+
+### Python Package Manager
+
+Use **`uv`** for all Python package management (scanner-bridge, etc.). Do NOT use pip, poetry, or pipenv directly.
+
+```bash
+uv venv .venv
+uv pip install -r requirements.txt
+uv pip compile requirements.in -o requirements.txt  # to generate pinned deps
+```
+
 ### Go Dependencies (approved)
 
 - `github.com/go-chi/chi/v5` — HTTP router
