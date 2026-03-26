@@ -1,9 +1,10 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import { LayoutDashboard, Package, ScrollText, Settings, ShieldCheck } from 'lucide-react'
+import { LayoutDashboard, Package, ScrollText, Settings, ShieldAlert, ShieldCheck } from 'lucide-react'
 
 const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/artifacts', label: 'Artifacts', icon: Package },
+  { to: '/overrides', label: 'Overrides', icon: ShieldAlert },
   { to: '/audit-log', label: 'Audit Log', icon: ScrollText },
   { to: '/settings', label: 'Settings', icon: Settings },
 ]

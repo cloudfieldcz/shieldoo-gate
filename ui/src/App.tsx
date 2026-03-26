@@ -4,6 +4,7 @@ import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
 import Artifacts from './pages/Artifacts'
 import AuditLog from './pages/AuditLog'
+import Overrides from './pages/Overrides'
 import Settings from './pages/Settings'
 
 const queryClient = new QueryClient({
@@ -24,6 +25,7 @@ export default function App() {
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/artifacts" element={<Artifacts />} />
+            <Route path="/overrides" element={<Overrides />} />
             <Route path="/audit-log" element={<AuditLog />} />
             <Route path="/settings" element={<Settings />} />
           </Route>
