@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/crane"
 	"github.com/jmoiron/sqlx"
 	"github.com/rs/zerolog/log"
@@ -532,6 +533,10 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 	// 5. Download full image to temp OCI tarball for scanning.
 	// Build the image ref: strip any http:// or https:// scheme from upstreamURL for crane.
 	upstreamHost := strings.TrimPrefix(strings.TrimPrefix(upstreamURL, "https://"), "http://")
+	// Docker Hub images must use index.docker.io for crane to handle OAuth2 token exchange.
+	if upstreamHost == "registry-1.docker.io" {
+		upstreamHost = "index.docker.io"
+	}
 	imageRef := upstreamHost + "/" + imagePath + ":" + ref
 	// For plain tag refs (not digests), crane uses the ref as-is.
 	// If ref looks like a digest (sha256:...), use @ notation.
@@ -539,7 +544,11 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 		imageRef = upstreamHost + "/" + imagePath + "@" + ref
 	}
 
-	tarPath, tarSize, tarSHA, err := pullImageToTar(ctx, imageRef)
+	craneOpts := []crane.Option{
+		crane.WithContext(ctx),
+		crane.WithAuthFromKeychain(authn.DefaultKeychain),
+	}
+	tarPath, tarSize, tarSHA, err := pullImageToTar(ctx, imageRef, craneOpts...)
 	if err != nil {
 		log.Error().Err(err).Str("artifact", artifactID).Str("image_ref", imageRef).Msg("docker: failed to pull image for scanning")
 		http.Error(w, "failed to pull image for scanning", http.StatusBadGateway)
@@ -721,8 +730,8 @@ func (a *DockerAdapter) fetchManifest(ctx context.Context, r *http.Request, upst
 
 // pullImageToTar pulls the image using crane and saves it as an OCI tarball.
 // Returns (tarPath, sizeBytes, sha256hex, error).
-func pullImageToTar(ctx context.Context, imageRef string) (string, int64, string, error) {
-	img, err := crane.Pull(imageRef, crane.WithContext(ctx))
+func pullImageToTar(ctx context.Context, imageRef string, opts ...crane.Option) (string, int64, string, error) {
+	img, err := crane.Pull(imageRef, opts...)
 	if err != nil {
 		return "", 0, "", fmt.Errorf("docker: crane pull %s: %w", imageRef, err)
 	}
