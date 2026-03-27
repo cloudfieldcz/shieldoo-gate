@@ -44,6 +44,7 @@ type DockerAdapter struct {
 	cfg         config.DockerUpstreamConfig
 	router      http.Handler
 	httpClient  *http.Client
+	tokenExch   *tokenExchanger
 	blobStore   *BlobStore
 	pushHandler *pushHandler
 }
@@ -56,6 +57,7 @@ func NewDockerAdapter(
 	policyEngine *policy.Engine,
 	cfg config.DockerUpstreamConfig,
 ) *DockerAdapter {
+	httpClient := &http.Client{Timeout: 10 * time.Minute}
 	a := &DockerAdapter{
 		db:         db,
 		cache:      cacheStore,
@@ -63,7 +65,8 @@ func NewDockerAdapter(
 		policyEng:  policyEngine,
 		resolver:   NewRegistryResolver(cfg),
 		cfg:        cfg,
-		httpClient: &http.Client{Timeout: 10 * time.Minute},
+		httpClient: httpClient,
+		tokenExch:  newTokenExchanger(httpClient),
 	}
 	a.router = a.buildRouter()
 	return a
@@ -79,6 +82,7 @@ func NewDockerAdapterWithPush(
 	cfg config.DockerUpstreamConfig,
 	blobStore *BlobStore,
 ) *DockerAdapter {
+	httpClient := &http.Client{Timeout: 10 * time.Minute}
 	a := &DockerAdapter{
 		db:         db,
 		cache:      cacheStore,
@@ -86,7 +90,8 @@ func NewDockerAdapterWithPush(
 		policyEng:  policyEngine,
 		resolver:   NewRegistryResolver(cfg),
 		cfg:        cfg,
-		httpClient: &http.Client{Timeout: 10 * time.Minute},
+		httpClient: httpClient,
+		tokenExch:  newTokenExchanger(httpClient),
 		blobStore:  blobStore,
 	}
 	if cfg.Push.Enabled && blobStore != nil {
@@ -703,6 +708,33 @@ func (a *DockerAdapter) fetchManifest(ctx context.Context, r *http.Request, upst
 	if err != nil {
 		return nil, "", fmt.Errorf("docker: fetch manifest: %w", err)
 	}
+
+	// Handle 401 — Bearer token exchange (Docker Registry v2 auth flow).
+	if resp.StatusCode == http.StatusUnauthorized {
+		wwwAuth := resp.Header.Get("Www-Authenticate")
+		resp.Body.Close()
+		realm, service, scope, ok := parseWwwAuthenticate(wwwAuth)
+		if !ok {
+			return nil, "", fmt.Errorf("docker: fetch manifest: 401 but no parseable Www-Authenticate header")
+		}
+		token, tokenErr := a.tokenExch.exchangeToken(ctx, realm, service, scope)
+		if tokenErr != nil {
+			return nil, "", fmt.Errorf("docker: fetch manifest: token exchange: %w", tokenErr)
+		}
+		// Retry with Bearer token.
+		req2, err2 := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err2 != nil {
+			return nil, "", fmt.Errorf("docker: fetch manifest: building retry request: %w", err2)
+		}
+		if v := r.Header.Get("Accept"); v != "" {
+			req2.Header.Set("Accept", v)
+		}
+		req2.Header.Set("Authorization", "Bearer "+token)
+		resp, err = a.httpClient.Do(req2)
+		if err != nil {
+			return nil, "", fmt.Errorf("docker: fetch manifest: retry after token exchange: %w", err)
+		}
+	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -839,6 +871,37 @@ func (a *DockerAdapter) proxyUpstream(w http.ResponseWriter, r *http.Request, up
 	if err != nil {
 		http.Error(w, "upstream unreachable", http.StatusBadGateway)
 		return
+	}
+
+	// Handle 401 — Bearer token exchange (Docker Registry v2 auth flow).
+	if resp.StatusCode == http.StatusUnauthorized {
+		wwwAuth := resp.Header.Get("Www-Authenticate")
+		resp.Body.Close()
+		realm, service, scope, ok := parseWwwAuthenticate(wwwAuth)
+		if ok {
+			token, tokenErr := a.tokenExch.exchangeToken(r.Context(), realm, service, scope)
+			if tokenErr != nil {
+				log.Error().Err(tokenErr).Str("target", target).Msg("docker: proxy upstream: token exchange failed")
+				http.Error(w, "upstream auth failed", http.StatusBadGateway)
+				return
+			}
+			// Retry with Bearer token.
+			req2, err2 := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
+			if err2 != nil {
+				http.Error(w, "upstream request error", http.StatusInternalServerError)
+				return
+			}
+			if v := r.Header.Get("Accept"); v != "" {
+				req2.Header.Set("Accept", v)
+			}
+			req2.Header.Set("Authorization", "Bearer "+token)
+			resp, err = a.httpClient.Do(req2)
+			if err != nil {
+				http.Error(w, "upstream unreachable", http.StatusBadGateway)
+				return
+			}
+		}
+		// If Www-Authenticate was not parseable, fall through and proxy the 401 as-is.
 	}
 	defer resp.Body.Close()
 

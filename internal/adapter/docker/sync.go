@@ -34,6 +34,7 @@ type SyncService struct {
 	cfg            config.DockerSyncConfig
 	sem            *semaphore.Weighted
 	httpClient     *http.Client
+	tokenExch      *tokenExchanger
 	rescanInterval time.Duration
 }
 
@@ -54,6 +55,7 @@ func NewSyncService(
 	if err != nil {
 		rescanInterval = 24 * time.Hour
 	}
+	httpClient := &http.Client{Timeout: 10 * time.Minute}
 	return &SyncService{
 		db:             db,
 		cache:          cacheStore,
@@ -62,7 +64,8 @@ func NewSyncService(
 		resolver:       resolver,
 		cfg:            cfg,
 		sem:            semaphore.NewWeighted(maxConc),
-		httpClient:     &http.Client{Timeout: 10 * time.Minute},
+		httpClient:     httpClient,
+		tokenExch:      newTokenExchanger(httpClient),
 		rescanInterval: rescanInterval,
 	}
 }
@@ -300,6 +303,29 @@ func (s *SyncService) fetchManifestForSync(ctx context.Context, upstreamURL, reg
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("docker sync: fetching manifest %s/%s:%s: %w", registryHost, name, ref, err)
+	}
+
+	// Handle 401 — Bearer token exchange (Docker Registry v2 auth flow).
+	if resp.StatusCode == http.StatusUnauthorized && s.tokenExch != nil {
+		wwwAuth := resp.Header.Get("Www-Authenticate")
+		resp.Body.Close()
+		realm, service, scope, ok := parseWwwAuthenticate(wwwAuth)
+		if ok {
+			token, tokenErr := s.tokenExch.exchangeToken(ctx, realm, service, scope)
+			if tokenErr != nil {
+				return nil, http.StatusUnauthorized, fmt.Errorf("docker sync: token exchange for %s/%s:%s: %w", registryHost, name, ref, tokenErr)
+			}
+			req2, err2 := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+			if err2 != nil {
+				return nil, 0, fmt.Errorf("docker sync: building retry request: %w", err2)
+			}
+			req2.Header.Set("Accept", req.Header.Get("Accept"))
+			req2.Header.Set("Authorization", "Bearer "+token)
+			resp, err = s.httpClient.Do(req2)
+			if err != nil {
+				return nil, 0, fmt.Errorf("docker sync: retry after token exchange %s/%s:%s: %w", registryHost, name, ref, err)
+			}
+		}
 	}
 	defer resp.Body.Close()
 
