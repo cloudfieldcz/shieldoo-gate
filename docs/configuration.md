@@ -32,7 +32,23 @@ upstreams:
   pypi: "https://pypi.org"
   npm: "https://registry.npmjs.org"
   nuget: "https://api.nuget.org"
-  docker: "https://registry-1.docker.io"
+  docker:
+    default_registry: "https://registry-1.docker.io"  # Default upstream for Docker Hub images
+    allowed_registries:              # Non-default registries that clients can pull from
+      - host: "ghcr.io"             # Registry hostname (matched against first path segment)
+        url: "https://ghcr.io"      # Upstream URL to proxy to
+      - host: "quay.io"
+        url: "https://quay.io"
+        auth:                        # Optional per-registry credentials
+          type: "bearer"             # "bearer" or "basic"
+          token_env: "QUAY_TOKEN"    # Env var name containing the token (NEVER stored in config)
+    sync:
+      enabled: true                  # Enable scheduled background sync (Phase 3)
+      interval: "6h"                 # How often to sync repositories
+      rescan_interval: "24h"         # How often to rescan synced images
+      max_concurrent: 3              # Max concurrent sync workers
+    push:
+      enabled: false                 # Enable push support (Phase 2)
 
 # ─── Cache ─────────────────────────────────────────────────────────
 cache:
@@ -124,7 +140,12 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 | `Config` | root | Top-level container for all sections |
 | `ServerConfig` | `server` | `Host` |
 | `PortsConfig` | `ports` | `PyPI`, `NPM`, `NuGet`, `Docker`, `Admin` |
-| `UpstreamsConfig` | `upstreams` | `PyPI`, `NPM`, `NuGet`, `Docker` |
+| `UpstreamsConfig` | `upstreams` | `PyPI`, `NPM`, `NuGet`, `Docker` (struct) |
+| `DockerUpstreamConfig` | `upstreams.docker` | `DefaultRegistry`, `AllowedRegistries`, `Sync`, `Push` |
+| `DockerRegistryEntry` | `upstreams.docker.allowed_registries[]` | `Host`, `URL`, `Auth` |
+| `DockerRegistryAuth` | `...allowed_registries[].auth` | `Type`, `TokenEnv` |
+| `DockerSyncConfig` | `upstreams.docker.sync` | `Enabled`, `Interval`, `RescanInterval`, `MaxConcurrent` |
+| `DockerPushConfig` | `upstreams.docker.push` | `Enabled` |
 | `CacheConfig` | `cache` | `Backend`, `Local`, `TTL` |
 | `LocalCacheConfig` | `cache.local` | `Path`, `MaxSizeGB` |
 | `TTLConfig` | `cache.ttl` | `PyPI`, `NPM`, `NuGet`, `Docker` |

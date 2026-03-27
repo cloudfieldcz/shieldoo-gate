@@ -163,29 +163,53 @@ dotnet nuget add source http://shieldoo-gate:5001/v3/index.json --name shieldoo-
 | **Package** | `internal/adapter/docker/` |
 | **Protocol** | [OCI Distribution Spec](https://github.com/opencontainers/distribution-spec) v1.1 |
 | **Default port** | 5002 |
-| **Default upstream** | `https://registry-1.docker.io` |
+| **Default upstream** | `https://registry-1.docker.io` (configurable, multi-registry) |
 | **Compatible clients** | `docker`, `podman`, `containerd` |
+
+### Multi-Upstream Routing
+
+The Docker adapter supports pulling from **multiple upstream registries**. The first path segment after `/v2/` determines the target registry:
+
+- If the first segment contains a **dot** (`.`) or **colon** (`:`), it is treated as a registry hostname and matched against the `allowed_registries` allowlist.
+- If no dot/colon is found, the request goes to the **default registry** (Docker Hub).
+- **Bare image names** (e.g. `nginx`) automatically get `library/` prepended per Docker Hub convention.
+- Requests to registries **not in the allowlist** are rejected with HTTP 403.
+
+**Examples:**
+| Client Request | Resolved Upstream |
+|---|---|
+| `docker pull shieldoo:5002/nginx` | Docker Hub → `library/nginx` |
+| `docker pull shieldoo:5002/myuser/myapp` | Docker Hub → `myuser/myapp` |
+| `docker pull shieldoo:5002/ghcr.io/org/image` | `ghcr.io` → `org/image` |
+| `docker pull shieldoo:5002/evil.io/pkg` | **403 Forbidden** (not in allowlist) |
+
+**SECURITY:** Client `Authorization` headers are **never forwarded** to upstream registries. Gate authenticates to each upstream independently using per-registry credentials from config (`auth.token_env` environment variable reference).
 
 ### Routes
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/v2/` | Version check |
-| `GET` | `/v2/{name}/manifests/{reference}` | Pull manifest (by tag or digest) |
-| `GET` | `/v2/{name}/blobs/{digest}` | Pull layer blob |
-| `GET` | `/v2/*` | Other OCI distribution spec routes |
+| `GET` | `/v2/` | Version check — responds locally with `Docker-Distribution-API-Version: registry/2.0` |
+| `GET` | `/v2/{name}/manifests/{reference}` | Pull manifest (by tag or digest) — triggers scan pipeline |
+| `GET` | `/v2/{name}/blobs/{digest}` | Pull layer blob — proxied to resolved upstream |
 
 ### How It Works
 
 The Docker adapter implements a **scan-on-pull pipeline** for manifest requests. When a client pulls an image:
 
-1. **Manifest request** triggers the full scan pipeline: the adapter fetches the manifest from upstream, then pulls the complete image to a temporary OCI tarball using `go-containerregistry` (crane).
-2. **Trivy scans** the tarball (CVEs, misconfigurations, secrets in layers).
-3. **Policy evaluation** determines whether to serve, block, or quarantine the image.
-4. **Clean images** have their manifest cached and served to the client. Subsequent pulls for the same image:tag are served from cache.
-5. **Blob requests** (`/v2/{name}/blobs/{digest}`) are passed through directly to upstream — scanning happens at the manifest/image level, not per-layer.
+1. **Registry resolution** — the `RegistryResolver` determines the upstream from the image name and validates against the allowlist.
+2. **Repository tracking** — the `docker_repositories` table is updated via `EnsureRepository` (atomic INSERT OR IGNORE + SELECT).
+3. **Manifest request** triggers the full scan pipeline: the adapter fetches the manifest from upstream (with per-registry auth), verifies the manifest digest against upstream's `Docker-Content-Digest` header, then pulls the complete image to a temporary OCI tarball using `go-containerregistry` (crane).
+4. **Trivy scans** the tarball (CVEs, misconfigurations, secrets in layers).
+5. **Policy evaluation** determines whether to serve, block, or quarantine the image.
+6. **Clean images** have their manifest cached and served to the client. Subsequent pulls for the same image:tag are served from cache.
+7. **Blob requests** (`/v2/{name}/blobs/{digest}`) are passed through directly to the resolved upstream — scanning happens at the manifest/image level, not per-layer.
 
 The `X-Shieldoo-Scanned: true` response header is set on all scanned manifest responses so clients and CI systems can verify inspection occurred.
+
+### Artifact ID Format
+
+Artifact IDs use safe names: `docker:{safe_name}:{ref}` where `safe_name` replaces dots and slashes with underscores. For example, `ghcr.io/org/image:latest` becomes `docker:ghcr_io_org_image:latest`.
 
 ### Client Configuration
 

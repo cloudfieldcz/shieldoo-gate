@@ -4,10 +4,11 @@
 
 ## Overview
 
-Shieldoo Gate uses **SQLite** (WAL mode, foreign keys enabled) with embedded SQL migrations. The schema is managed by `internal/config/db.go` using Go's `embed` package. Two migration files define the complete schema:
+Shieldoo Gate uses **SQLite** (WAL mode, foreign keys enabled) with embedded SQL migrations. The schema is managed by `internal/config/db.go` using Go's `embed` package with a `schema_migrations` tracking table for run-once semantics. Migration files:
 
 - `internal/config/migrations/001_init.sql` — Core tables (artifacts, scan_results, artifact_status, audit_log, threat_feed)
 - `internal/config/migrations/002_policy_overrides.sql` — Policy overrides table
+- `internal/config/migrations/003_docker_registry.sql` — Docker repositories table + schema_migrations bootstrap
 
 SQLite PRAGMAs applied at startup:
 ```sql
