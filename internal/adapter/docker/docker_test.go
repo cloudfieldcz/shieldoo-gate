@@ -38,7 +38,10 @@ func setupTestDocker(t *testing.T, upstreamHandler http.HandlerFunc) (*docker.Do
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
 		MinimumConfidence:   0.7,
 	}, nil)
-	a := docker.NewDockerAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL)
+	cfg := config.DockerUpstreamConfig{
+		DefaultRegistry: upstream.URL,
+	}
+	a := docker.NewDockerAdapter(db, cacheStore, scanEngine, policyEngine, cfg)
 	return a, upstream, db, cacheStore
 }
 
@@ -62,9 +65,6 @@ func TestDockerAdapter_V2Check_Returns200WithHeader(t *testing.T) {
 }
 
 func TestDockerAdapter_V2Check_NoUpstream_StillReturnsHeader(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	upstream.Close()
-
 	db, err := config.InitDB(":memory:")
 	require.NoError(t, err)
 	defer db.Close()
@@ -74,7 +74,10 @@ func TestDockerAdapter_V2Check_NoUpstream_StillReturnsHeader(t *testing.T) {
 
 	scanEngine := scanner.NewEngine(nil, 30*time.Second)
 	policyEngine := policy.NewEngine(policy.EngineConfig{}, nil)
-	a := docker.NewDockerAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL)
+	cfg := config.DockerUpstreamConfig{
+		DefaultRegistry: "http://does-not-exist.invalid",
+	}
+	a := docker.NewDockerAdapter(db, cacheStore, scanEngine, policyEngine, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/v2/", nil)
 	w := httptest.NewRecorder()
@@ -106,14 +109,14 @@ func TestDockerAdapter_Manifest_CachedClean_ServesFromCache(t *testing.T) {
 		t.Fatal("upstream should not be called for cached manifests")
 	})
 
-	artifactID := "docker:library_alpine:3.20"
+	artifactID := "docker:docker_io_library_alpine:3.20"
 	manifestContent := `{"schemaVersion":2,"mediaType":"application/vnd.docker.distribution.manifest.v2+json"}`
 
 	// Pre-populate cache: write manifest file and insert DB records.
 	art := scanner.Artifact{
 		ID:        artifactID,
 		Ecosystem: scanner.EcosystemDocker,
-		Name:      "library_alpine",
+		Name:      "docker_io_library_alpine",
 		Version:   "3.20",
 	}
 	tmpFile := filepath.Join(t.TempDir(), "manifest.json")
@@ -149,13 +152,13 @@ func TestDockerAdapter_Manifest_QuarantinedImage_Returns403(t *testing.T) {
 		t.Fatal("upstream should not be called for quarantined manifests")
 	})
 
-	artifactID := "docker:library_malicious:latest"
+	artifactID := "docker:docker_io_library_malicious:latest"
 
 	// Pre-populate cache with quarantined image.
 	art := scanner.Artifact{
 		ID:        artifactID,
 		Ecosystem: scanner.EcosystemDocker,
-		Name:      "library_malicious",
+		Name:      "docker_io_library_malicious",
 		Version:   "latest",
 	}
 	tmpFile := filepath.Join(t.TempDir(), "manifest.json")
