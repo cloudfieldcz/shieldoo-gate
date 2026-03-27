@@ -1,0 +1,966 @@
+openapi: 3.1.0
+info:
+  title: Shieldoo Gate REST API
+  description: |
+    Administration and observability API for Shieldoo Gate — an open-source
+    supply chain security proxy for Docker, PyPI, npm, NuGet, and more.
+  version: 1.0.0
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: http://localhost:8080
+    description: Local development (admin port)
+
+tags:
+  - name: health
+    description: Service health
+  - name: artifacts
+    description: Cached artifact management
+  - name: audit
+    description: Append-only audit log
+  - name: overrides
+    description: Policy override management
+  - name: stats
+    description: Request and scan statistics
+  - name: feed
+    description: Threat feed management
+  - name: docker
+    description: Docker repository and tag management
+  - name: metrics
+    description: Prometheus metrics
+
+paths:
+  /api/v1/health:
+    get:
+      summary: Service health check
+      operationId: getHealth
+      tags: [health]
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /api/v1/artifacts:
+    get:
+      summary: List cached artifacts
+      operationId: listArtifacts
+      tags: [artifacts]
+      parameters:
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/per_page"
+      responses:
+        "200":
+          description: Paginated list of artifacts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactPage"
+
+  /api/v1/artifacts/{id}:
+    parameters:
+      - $ref: "#/components/parameters/artifactId"
+    get:
+      summary: Get artifact detail
+      operationId: getArtifact
+      tags: [artifacts]
+      responses:
+        "200":
+          description: Artifact with current status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactWithStatus"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/artifacts/{id}/scan-results:
+    parameters:
+      - $ref: "#/components/parameters/artifactId"
+    get:
+      summary: Get scan history for an artifact
+      operationId: getArtifactScanResults
+      tags: [artifacts]
+      responses:
+        "200":
+          description: List of scan results (newest first)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ScanResult"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/artifacts/{id}/rescan:
+    parameters:
+      - $ref: "#/components/parameters/artifactId"
+    post:
+      summary: Trigger an async rescan of the artifact
+      operationId: rescanArtifact
+      tags: [artifacts]
+      responses:
+        "202":
+          description: Rescan queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AcceptedResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/artifacts/{id}/quarantine:
+    parameters:
+      - $ref: "#/components/parameters/artifactId"
+    post:
+      summary: Manually quarantine an artifact
+      operationId: quarantineArtifact
+      tags: [artifacts]
+      responses:
+        "200":
+          description: Artifact quarantined
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusUpdate"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/artifacts/{id}/release:
+    parameters:
+      - $ref: "#/components/parameters/artifactId"
+    post:
+      summary: Release a quarantined artifact back to CLEAN status
+      operationId: releaseArtifact
+      tags: [artifacts]
+      responses:
+        "200":
+          description: Artifact released
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusUpdate"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/audit:
+    get:
+      summary: List audit log entries
+      operationId: listAudit
+      tags: [audit]
+      parameters:
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/per_page"
+        - name: event_type
+          in: query
+          required: false
+          description: Filter by event type
+          schema:
+            type: string
+            enum: [SERVED, BLOCKED, QUARANTINED, RELEASED, SCANNED, OVERRIDE_CREATED, OVERRIDE_REVOKED, RESCAN_QUEUED]
+      responses:
+        "200":
+          description: Paginated list of audit log entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditPage"
+
+  /api/v1/overrides:
+    get:
+      summary: List policy overrides
+      operationId: listOverrides
+      tags: [overrides]
+      parameters:
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/per_page"
+        - name: active
+          in: query
+          required: false
+          description: Filter by active status (revoked=false if true, revoked=true if false)
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Paginated list of policy overrides
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PolicyOverridePage"
+    post:
+      summary: Create a new policy override
+      operationId: createOverride
+      tags: [overrides]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePolicyOverrideRequest"
+      responses:
+        "201":
+          description: Override created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PolicyOverride"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/overrides/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Override ID
+        schema:
+          type: integer
+          format: int64
+    delete:
+      summary: Revoke (soft-delete) a policy override
+      operationId: revokeOverride
+      tags: [overrides]
+      responses:
+        "200":
+          description: Override revoked successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OverrideRevokeResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Override already revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/artifacts/{id}/override:
+    parameters:
+      - $ref: "#/components/parameters/artifactId"
+    post:
+      summary: Create policy override from artifact
+      operationId: createArtifactOverride
+      tags: [overrides]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateArtifactOverrideRequest"
+      responses:
+        "201":
+          description: Override created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PolicyOverride"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/v1/stats/summary:
+    get:
+      summary: Aggregated request and scan statistics
+      operationId: getStatsSummary
+      tags: [stats]
+      responses:
+        "200":
+          description: Event counts for last 24h, 7d, and 30d
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatsSummary"
+
+  /api/v1/stats/blocked:
+    get:
+      summary: List of blocked artifact events
+      operationId: getStatsBlocked
+      tags: [stats]
+      responses:
+        "200":
+          description: Audit log entries with event_type=BLOCKED (newest first, max 500)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BlockedEntry"
+
+  /api/v1/feed:
+    get:
+      summary: List threat feed entries
+      operationId: listFeed
+      tags: [feed]
+      responses:
+        "200":
+          description: Threat feed entries (newest first, max 1000)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ThreatFeedEntry"
+
+  /api/v1/feed/refresh:
+    post:
+      summary: Trigger an async threat feed refresh
+      operationId: refreshFeed
+      tags: [feed]
+      responses:
+        "202":
+          description: Refresh queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AcceptedResponse"
+
+  /api/v1/docker/repositories:
+    get:
+      summary: List Docker repositories
+      operationId: listDockerRepositories
+      tags: [docker]
+      parameters:
+        - name: registry
+          in: query
+          required: false
+          description: Filter by registry host (e.g. ghcr.io)
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of Docker repositories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DockerRepository"
+
+  /api/v1/docker/repositories/{id}/tags:
+    parameters:
+      - $ref: "#/components/parameters/dockerRepoId"
+    get:
+      summary: List tags for a Docker repository
+      operationId: listDockerTags
+      tags: [docker]
+      responses:
+        "200":
+          description: List of tags
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DockerTag"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      summary: Create or move a tag on a Docker repository
+      operationId: createDockerTag
+      tags: [docker]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDockerTagRequest"
+      responses:
+        "201":
+          description: Tag created or moved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateDockerTagResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/docker/repositories/{id}/tags/{tag}:
+    parameters:
+      - $ref: "#/components/parameters/dockerRepoId"
+      - name: tag
+        in: path
+        required: true
+        description: Tag name
+        schema:
+          type: string
+          example: "v1.0"
+    delete:
+      summary: Delete a tag from a Docker repository
+      operationId: deleteDockerTag
+      tags: [docker]
+      responses:
+        "204":
+          description: Tag deleted (artifact is NOT removed)
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/docker/sync/{id}:
+    parameters:
+      - $ref: "#/components/parameters/dockerRepoId"
+    post:
+      summary: Trigger a manual sync for a Docker repository
+      operationId: triggerDockerSync
+      tags: [docker]
+      responses:
+        "202":
+          description: Sync queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AcceptedResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          description: Sync service not enabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/docker/registries:
+    get:
+      summary: List allowed Docker registries from config
+      operationId: listDockerRegistries
+      tags: [docker]
+      responses:
+        "200":
+          description: List of allowed registries (credentials are never exposed)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DockerRegistry"
+
+  /metrics:
+    get:
+      summary: Prometheus metrics endpoint
+      operationId: getMetrics
+      tags: [metrics]
+      responses:
+        "200":
+          description: Prometheus text exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+components:
+  parameters:
+    artifactId:
+      name: id
+      in: path
+      required: true
+      description: Artifact identifier in the form `ecosystem:name:version`
+      schema:
+        type: string
+        example: "pypi:requests:2.31.0"
+    dockerRepoId:
+      name: id
+      in: path
+      required: true
+      description: Docker repository ID
+      schema:
+        type: integer
+        format: int64
+    page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        default: 1
+        minimum: 1
+    per_page:
+      name: per_page
+      in: query
+      schema:
+        type: integer
+        default: 50
+        minimum: 1
+        maximum: 200
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+          example: ok
+        scanners:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/ScannerHealth"
+
+    ScannerHealth:
+      type: object
+      required: [healthy]
+      properties:
+        healthy:
+          type: boolean
+        error:
+          type: string
+
+    Artifact:
+      type: object
+      required: [ecosystem, name, version, upstream_url, sha256, size_bytes, cached_at, last_accessed_at, storage_path]
+      properties:
+        ecosystem:
+          type: string
+          example: pypi
+        name:
+          type: string
+          example: requests
+        version:
+          type: string
+          example: 2.31.0
+        upstream_url:
+          type: string
+          format: uri
+        sha256:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        cached_at:
+          type: string
+          format: date-time
+        last_accessed_at:
+          type: string
+          format: date-time
+        storage_path:
+          type: string
+
+    ArtifactWithStatus:
+      allOf:
+        - $ref: "#/components/schemas/Artifact"
+        - type: object
+          properties:
+            status:
+              type: string
+              enum: [CLEAN, SUSPICIOUS, QUARANTINED, PENDING_SCAN]
+            quarantine_reason:
+              type: string
+            quarantined_at:
+              type: string
+              format: date-time
+              nullable: true
+            released_at:
+              type: string
+              format: date-time
+              nullable: true
+
+    ArtifactPage:
+      type: object
+      required: [data, page, per_page, total]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArtifactWithStatus"
+        page:
+          type: integer
+        per_page:
+          type: integer
+        total:
+          type: integer
+
+    ScanResult:
+      type: object
+      required: [id, artifact_id, scanned_at, scanner_name, scanner_version, verdict, confidence, findings_json, duration_ms]
+      properties:
+        id:
+          type: integer
+          format: int64
+        artifact_id:
+          type: string
+        scanned_at:
+          type: string
+          format: date-time
+        scanner_name:
+          type: string
+        scanner_version:
+          type: string
+        verdict:
+          type: string
+          enum: [CLEAN, SUSPICIOUS, MALICIOUS]
+        confidence:
+          type: number
+          format: float
+        findings_json:
+          type: string
+          description: JSON-encoded array of findings
+        duration_ms:
+          type: integer
+          format: int64
+
+    StatsSummary:
+      type: object
+      required: [last_24h, last_7d, last_30d]
+      properties:
+        last_24h:
+          $ref: "#/components/schemas/PeriodStats"
+        last_7d:
+          $ref: "#/components/schemas/PeriodStats"
+        last_30d:
+          $ref: "#/components/schemas/PeriodStats"
+
+    PeriodStats:
+      type: object
+      required: [served, blocked, quarantined, released, scanned]
+      properties:
+        served:
+          type: integer
+          format: int64
+        blocked:
+          type: integer
+          format: int64
+        quarantined:
+          type: integer
+          format: int64
+        released:
+          type: integer
+          format: int64
+        scanned:
+          type: integer
+          format: int64
+
+    BlockedEntry:
+      type: object
+      required: [id, ts]
+      properties:
+        id:
+          type: integer
+          format: int64
+        ts:
+          type: string
+          format: date-time
+        artifact_id:
+          type: string
+        client_ip:
+          type: string
+        reason:
+          type: string
+
+    ThreatFeedEntry:
+      type: object
+      required: [sha256, ecosystem, package_name, reported_at]
+      properties:
+        sha256:
+          type: string
+        ecosystem:
+          type: string
+        package_name:
+          type: string
+        version:
+          type: string
+        reported_at:
+          type: string
+          format: date-time
+        source_url:
+          type: string
+          format: uri
+        iocs_json:
+          type: string
+          description: JSON-encoded array of indicators of compromise
+
+    AcceptedResponse:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: string
+          enum: [accepted]
+        message:
+          type: string
+
+    StatusUpdate:
+      type: object
+      required: [status, artifact_id]
+      properties:
+        status:
+          type: string
+          enum: [CLEAN, QUARANTINED]
+        artifact_id:
+          type: string
+
+    AuditEntry:
+      type: object
+      required: [id, ts, event_type]
+      properties:
+        id:
+          type: integer
+          format: int64
+        ts:
+          type: string
+          format: date-time
+        event_type:
+          type: string
+          enum: [SERVED, BLOCKED, QUARANTINED, RELEASED, SCANNED, OVERRIDE_CREATED, OVERRIDE_REVOKED, RESCAN_QUEUED]
+        artifact_id:
+          type: string
+        client_ip:
+          type: string
+        user_agent:
+          type: string
+        reason:
+          type: string
+        metadata_json:
+          type: string
+          description: JSON-encoded additional metadata
+
+    AuditPage:
+      type: object
+      required: [data, page, per_page, total]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditEntry"
+        page:
+          type: integer
+        per_page:
+          type: integer
+        total:
+          type: integer
+
+    PolicyOverride:
+      type: object
+      required: [id, ecosystem, name, scope, created_by, created_at, revoked]
+      properties:
+        id:
+          type: integer
+          format: int64
+        ecosystem:
+          type: string
+          description: Package ecosystem
+          example: pypi
+        name:
+          type: string
+          description: Package name
+          example: requests
+        version:
+          type: string
+          description: Package version (null for package-scope overrides)
+          example: 2.32.3
+          nullable: true
+        scope:
+          type: string
+          description: Override scope
+          enum: [version, package]
+          example: version
+        reason:
+          type: string
+          description: Reason for override
+          example: "False positive: safe package"
+        created_by:
+          type: string
+          description: User ID or API key that created the override
+          example: admin
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-03-25T10:30:00Z"
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Optional expiration timestamp
+          example: "2026-06-25T10:30:00Z"
+        revoked:
+          type: boolean
+          description: Whether this override has been revoked
+          example: false
+        revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Timestamp when override was revoked
+          example: null
+
+    PolicyOverridePage:
+      type: object
+      required: [data, page, per_page, total]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/PolicyOverride"
+        page:
+          type: integer
+        per_page:
+          type: integer
+        total:
+          type: integer
+
+    CreatePolicyOverrideRequest:
+      type: object
+      required: [ecosystem, name, scope]
+      properties:
+        ecosystem:
+          type: string
+          description: Package ecosystem
+          example: pypi
+        name:
+          type: string
+          description: Package name
+          example: requests
+        version:
+          type: string
+          description: Package version (required if scope is version)
+          example: 2.32.3
+        scope:
+          type: string
+          description: Override scope
+          enum: [version, package]
+          example: version
+        reason:
+          type: string
+          description: Reason for override
+          example: "False positive: safe package"
+
+    CreateArtifactOverrideRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          description: Reason for override
+          example: "False positive: safe package"
+        scope:
+          type: string
+          description: Override scope (default: version)
+          enum: [version, package]
+          example: version
+
+    OverrideRevokeResponse:
+      type: object
+      required: [status, id]
+      properties:
+        status:
+          type: string
+          enum: [revoked]
+          example: revoked
+        id:
+          type: integer
+          format: int64
+
+    DockerRepository:
+      type: object
+      required: [id, registry, name, is_internal, created_at, sync_enabled]
+      properties:
+        id:
+          type: integer
+          format: int64
+        registry:
+          type: string
+          example: docker.io
+        name:
+          type: string
+          example: library/nginx
+        is_internal:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        last_synced_at:
+          type: string
+          format: date-time
+          nullable: true
+        sync_enabled:
+          type: boolean
+
+    DockerTag:
+      type: object
+      required: [id, repo_id, tag, manifest_digest, created_at, updated_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        repo_id:
+          type: integer
+          format: int64
+        tag:
+          type: string
+          example: "v1.0"
+        manifest_digest:
+          type: string
+          example: "sha256:abc123..."
+        artifact_id:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateDockerTagRequest:
+      type: object
+      required: [tag, manifest_digest]
+      properties:
+        tag:
+          type: string
+          example: "v1.0"
+        manifest_digest:
+          type: string
+          example: "sha256:abc123..."
+
+    CreateDockerTagResponse:
+      type: object
+      required: [tag, manifest_digest, tag_moved]
+      properties:
+        tag:
+          type: string
+        manifest_digest:
+          type: string
+        tag_moved:
+          type: boolean
+          description: True if an existing tag was moved to a new digest
+        rescan_triggered:
+          type: boolean
+          description: True if a re-scan was triggered due to tag movement
+
+    DockerRegistry:
+      type: object
+      required: [host, url]
+      properties:
+        host:
+          type: string
+          example: docker.io
+        url:
+          type: string
+          format: uri
+          example: https://registry-1.docker.io
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string

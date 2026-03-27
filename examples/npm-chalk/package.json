@@ -1,0 +1,10 @@
+{
+  "name": "shieldoo-gate-npm-example",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal npm example for Shieldoo Gate proxy testing",
+  "dependencies": {
+    "chalk": "5.4.1"
+  }
+}
