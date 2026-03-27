@@ -233,6 +233,42 @@ The `X-Shieldoo-Scanned: true` response header is set on all scanned manifest re
 
 Artifact IDs use safe names: `docker:{safe_name}:{ref}` where `safe_name` replaces dots and slashes with underscores. For example, `ghcr.io/org/image:latest` becomes `docker:ghcr_io_org_image:latest`.
 
+### Scheduled Sync (Background Re-scan)
+
+When `sync.enabled: true` is set in the Docker upstream config, a `SyncService` runs as a background goroutine that periodically re-pulls manifests from upstream registries and re-scans cached images. This catches newly discovered vulnerabilities in previously clean images.
+
+**How it works:**
+
+1. On each sync interval, the service queries all repositories where `sync_enabled=true` and `is_internal=false`, ordered by `last_synced_at ASC` (least recently synced first).
+2. For each repository, it iterates all tags and fetches the upstream manifest.
+3. **Digest comparison:** If the upstream manifest digest differs from the stored `docker_tags.manifest_digest`, the image has changed upstream and is re-scanned.
+4. **Rescan interval:** If the digest is unchanged but `rescan_interval` has elapsed since the last scan, the image is re-scanned anyway (catches new CVE database entries).
+5. **Policy evaluation** runs on re-scanned images. If a previously clean image now triggers quarantine, it is quarantined.
+6. Concurrency is controlled by a semaphore (`max_concurrent`).
+
+**Error handling:**
+
+| Error | Behavior |
+|---|---|
+| Upstream unreachable | Log warning, skip repository, continue to next |
+| HTTP 404 | Disable sync for the repository (`sync_enabled=false`) |
+| HTTP 429 | Log warning, respect Retry-After header, skip |
+| Scan failure | Fail open (log error, do not quarantine) |
+
+**Configuration:**
+
+```yaml
+upstreams:
+  docker:
+    sync:
+      enabled: true
+      interval: "6h"          # How often to run the sync cycle
+      rescan_interval: "24h"  # Re-scan unchanged images after this duration
+      max_concurrent: 3       # Max concurrent repository syncs
+```
+
+**SECURITY:** The sync service uses per-registry credentials from config, never client Authorization headers. Scan failures fail open per Security Invariant #2.
+
 ### Client Configuration
 
 ```json

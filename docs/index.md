@@ -70,7 +70,7 @@ Shieldoo Gate Protocol Adapter
 | 8 | Main entrypoint, Docker Compose, E2E tests | Done |
 | — | S3 cache backend | Planned |
 | — | PostgreSQL HA backend | Planned |
-| — | Automatic rescan scheduler | Planned |
+| — | Docker scheduled sync/rescan | Done |
 | — | Helm chart | Planned |
 
 ## Getting Started
