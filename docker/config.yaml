@@ -1,0 +1,76 @@
+# config.example.yaml — Shieldoo Gate v1.0 reference configuration
+
+server:
+  host: "0.0.0.0"
+
+ports:
+  pypi: 5000
+  npm: 4873
+  nuget: 5001
+  docker: 5002
+  admin: 8080
+
+upstreams:
+  pypi: "https://pypi.org"
+  npm: "https://registry.npmjs.org"
+  nuget: "https://api.nuget.org"
+  docker:
+    default_registry: "https://registry-1.docker.io"
+    allowed_registries:
+      - host: "ghcr.io"
+        url: "https://ghcr.io"
+      - host: "quay.io"
+        url: "https://quay.io"
+    sync:
+      enabled: false
+      interval: "6h"
+      rescan_interval: "24h"
+      max_concurrent: 3
+    push:
+      enabled: false
+
+cache:
+  backend: "local"
+  local:
+    path: "/var/cache/shieldoo-gate"
+    max_size_gb: 50
+  ttl:
+    pypi: "168h"
+    npm: "168h"
+    nuget: "168h"
+    docker: "720h"
+
+database:
+  backend: "sqlite"
+  sqlite:
+    path: "/var/lib/shieldoo-gate/gate.db"
+
+scanners:
+  parallel: true
+  timeout: "60s"
+  guarddog:
+    enabled: true
+    bridge_socket: "/tmp/shieldoo-bridge.sock"
+  trivy:
+    enabled: true
+    binary: "trivy"
+    cache_dir: "/var/cache/trivy"
+  osv:
+    enabled: true
+    api_url: "https://api.osv.dev"
+
+policy:
+  block_if_verdict: "MALICIOUS"
+  quarantine_if_verdict: "SUSPICIOUS"
+  minimum_confidence: 0.7
+  allowlist:
+    - "pypi:litellm:==1.82.6"
+
+threat_feed:
+  enabled: true
+  url: "https://feed.shieldoo.io/malicious-packages.json"
+  refresh_interval: "1h"
+
+log:
+  level: "info"
+  format: "json"

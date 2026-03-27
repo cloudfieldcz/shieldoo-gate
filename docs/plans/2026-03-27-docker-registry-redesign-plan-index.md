@@ -8,7 +8,7 @@
 
 | # | Phase | Plan File | Status | Dependencies |
 |---|-------|-----------|--------|--------------|
-| 1 | Multi-Upstream Routing + Allowlist | [plan-1-multi-upstream.md](./2026-03-27-docker-registry-redesign-plan-1-multi-upstream.md) | ⬚ Not started | — |
+| 1 | Multi-Upstream Routing + Allowlist | [plan-1-multi-upstream.md](./2026-03-27-docker-registry-redesign-plan-1-multi-upstream.md) | ✅ Complete | — |
 | 2 | Push Support | [plan-2-push.md](./2026-03-27-docker-registry-redesign-plan-2-push.md) | ⬚ Not started | Phase 1 |
 | 3 | Scheduled Sync | [plan-3-sync.md](./2026-03-27-docker-registry-redesign-plan-3-sync.md) | ⬚ Not started | Phase 1 |
 | 4a | Tag Management API | [plan-4a-tag-api.md](./2026-03-27-docker-registry-redesign-plan-4a-tag-api.md) | ⬚ Not started | Phase 1, 2 |
