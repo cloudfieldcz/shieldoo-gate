@@ -13,6 +13,7 @@ services:
       - "15010:5000"   # PyPI
       - "14873:4873"   # npm
       - "15001:5001"   # NuGet
+      - "15002:5002"   # Docker
       - "18080:8080"   # Admin
     volumes:
       - e2e-bridge-socket:/tmp

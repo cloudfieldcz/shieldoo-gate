@@ -16,6 +16,7 @@
 | 6 | REST API + Prometheus Metrics | [plan-6-api.md](./2026-03-25-v1-core-plan-6-api.md) | ✅ Complete | Phases 1–5 |
 | 7 | Admin UI (React) | [plan-7-ui.md](./2026-03-25-v1-core-plan-7-ui.md) | ✅ Complete | Phase 6 |
 | 8 | Main Entrypoint + Docker Compose + E2E | [plan-8-integration.md](./2026-03-25-v1-core-plan-8-integration.md) | ✅ Complete | All previous |
+| 5a | Docker Adapter Scan Pipeline (security fix) | [docker-scan-pipeline.md](./2026-03-26-docker-scan-pipeline.md) | ✅ Complete | Phases 3, 5 |
 
 **Status legend:** ⬚ Not started · 🔨 In progress · ✅ Complete · ⏸ Blocked
 

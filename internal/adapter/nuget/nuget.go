@@ -132,6 +132,7 @@ func (a *NuGetAdapter) handlePassthrough(w http.ResponseWriter, r *http.Request)
 	path := r.URL.Path
 	allowed := strings.HasPrefix(path, "/v3/") ||
 		strings.HasPrefix(path, "/v3-flatcontainer/") ||
+		strings.HasPrefix(path, "/v3-index/") ||
 		strings.HasPrefix(path, "/v3-vulnerabilities/")
 	if !allowed {
 		http.Error(w, "not found", http.StatusNotFound)

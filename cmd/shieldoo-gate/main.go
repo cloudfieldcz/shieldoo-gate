@@ -160,7 +160,7 @@ func main() {
 	pypiAdapter := pypi.NewPyPIAdapter(db, cacheStore, scanEngine, policyEngine, pypiUpstream)
 	npmAdapter := npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine, npmUpstream)
 	nugetAdapter := nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, nugetUpstream)
-	dockerAdapter := docker.NewDockerAdapter(db, cacheStore, policyEngine, dockerUpstream)
+	dockerAdapter := docker.NewDockerAdapter(db, cacheStore, scanEngine, policyEngine, dockerUpstream)
 
 	// Init admin API server
 	apiServer := api.NewServer(db, cacheStore, scanEngine, policyEngine)

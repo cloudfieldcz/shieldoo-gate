@@ -190,8 +190,10 @@ func (a *DockerAdapter) handleV2Wildcard(w http.ResponseWriter, r *http.Request)
 func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, name, ref string) {
 	ctx := r.Context()
 
-	// Artifact ID format: docker:{name}:{ref}
-	artifactID := fmt.Sprintf("docker:%s:%s", name, ref)
+	// Artifact ID format: docker:{safeName}:{ref}
+	// Docker names contain slashes (library/nginx) which are unsafe for cache paths.
+	safeName := strings.NewReplacer("/", "_").Replace(name)
+	artifactID := fmt.Sprintf("docker:%s:%s", safeName, ref)
 
 	// 1. Check if already in cache with a known status. Fail closed on DB errors.
 	cachedPath, cacheErr := a.cache.Get(ctx, artifactID)
@@ -226,6 +228,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, n
 			return
 		}
 		w.Header().Set("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
+		w.Header().Set("X-Shieldoo-Scanned", "true")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(manifestBytes)
 		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
@@ -412,6 +415,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, n
 	} else {
 		w.Header().Set("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
 	}
+	w.Header().Set("X-Shieldoo-Scanned", "true")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, bytes.NewReader(manifestBytes))
 }

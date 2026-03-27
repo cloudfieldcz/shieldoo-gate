@@ -24,11 +24,13 @@ TESTS_SKIPPED=0
 export E2E_PYPI_PORT=15010
 export E2E_NPM_PORT=14873
 export E2E_NUGET_PORT=15001
+export E2E_DOCKER_PORT=15002
 export E2E_ADMIN_PORT=18080
 
 export E2E_PYPI_URL="http://localhost:${E2E_PYPI_PORT}"
 export E2E_NPM_URL="http://localhost:${E2E_NPM_PORT}"
 export E2E_NUGET_URL="http://localhost:${E2E_NUGET_PORT}"
+export E2E_DOCKER_URL="http://localhost:${E2E_DOCKER_PORT}"
 export E2E_ADMIN_URL="http://localhost:${E2E_ADMIN_PORT}"
 
 # ---------------------------------------------------------------------------

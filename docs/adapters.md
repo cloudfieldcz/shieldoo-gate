@@ -177,11 +177,15 @@ dotnet nuget add source http://shieldoo-gate:5001/v3/index.json --name shieldoo-
 
 ### How It Works
 
-The Docker adapter operates differently from the other adapters. It currently acts as a **transparent proxy** — forwarding pull traffic to the upstream registry without inline scanning.
+The Docker adapter implements a **scan-on-pull pipeline** for manifest requests. When a client pulls an image:
 
-Docker image scanning is handled **out-of-band** by Trivy, which can scan images by reference. The adapter proxies manifests and blobs directly, and scanning happens asynchronously when configured.
+1. **Manifest request** triggers the full scan pipeline: the adapter fetches the manifest from upstream, then pulls the complete image to a temporary OCI tarball using `go-containerregistry` (crane).
+2. **Trivy scans** the tarball (CVEs, misconfigurations, secrets in layers).
+3. **Policy evaluation** determines whether to serve, block, or quarantine the image.
+4. **Clean images** have their manifest cached and served to the client. Subsequent pulls for the same image:tag are served from cache.
+5. **Blob requests** (`/v2/{name}/blobs/{digest}`) are passed through directly to upstream — scanning happens at the manifest/image level, not per-layer.
 
-This approach is taken because Docker images consist of multiple layers (blobs) that must be assembled before meaningful scanning can occur, unlike single-file artifacts (`.whl`, `.tgz`, `.nupkg`).
+The `X-Shieldoo-Scanned: true` response header is set on all scanned manifest responses so clients and CI systems can verify inspection occurred.
 
 ### Client Configuration
 

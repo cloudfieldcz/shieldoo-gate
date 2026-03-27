@@ -105,6 +105,21 @@ func TestNuGetAdapter_NupkgDownload_CleanPackage_Serves200(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestNuGetAdapter_Passthrough_RepositorySignatures_Returns200(t *testing.T) {
+	a, _ := setupTestNuGet(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"allRepositorySigned":false}`))
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v3-index/repository-signatures/5.0.0/index.json", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "allRepositorySigned")
+}
+
 func TestNuGetAdapter_NupkgDownload_InvalidPackageID_Returns400(t *testing.T) {
 	a, _ := setupTestNuGet(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
