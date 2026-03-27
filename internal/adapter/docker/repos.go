@@ -39,6 +39,16 @@ func EnsureRepository(db *sqlx.DB, registry, name string, isInternal bool) (*Doc
 	return &repo, nil
 }
 
+// GetRepositoryByID returns a single repository by its ID.
+func GetRepositoryByID(db *sqlx.DB, id int64) (*DockerRepository, error) {
+	var repo DockerRepository
+	err := db.Get(&repo, "SELECT * FROM docker_repositories WHERE id = ?", id)
+	if err != nil {
+		return nil, fmt.Errorf("docker: getting repository %d: %w", id, err)
+	}
+	return &repo, nil
+}
+
 // ListRepositories returns all repos, optionally filtered by registry.
 func ListRepositories(db *sqlx.DB, registry string) ([]DockerRepository, error) {
 	var repos []DockerRepository

@@ -114,6 +114,17 @@ func (s *SyncService) syncAll(ctx context.Context) {
 	}
 }
 
+// SyncRepositoryByID loads a repository by ID and syncs it.
+// Intended for manual sync triggers from the API.
+func (s *SyncService) SyncRepositoryByID(ctx context.Context, repoID int64) {
+	repo, err := GetRepositoryByID(s.db, repoID)
+	if err != nil {
+		log.Error().Err(err).Int64("repo_id", repoID).Msg("docker sync: failed to get repository for manual sync")
+		return
+	}
+	s.syncRepository(ctx, *repo)
+}
+
 // syncRepository syncs a single repository by checking each tag against upstream.
 func (s *SyncService) syncRepository(ctx context.Context, repo DockerRepository) {
 	tags, err := ListTags(s.db, repo.ID)

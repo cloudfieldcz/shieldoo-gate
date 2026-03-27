@@ -18,7 +18,7 @@
 - Create: `internal/api/docker_handlers.go`
 - Create: `internal/api/docker_handlers_test.go`
 
-- [ ] **Step 1: Write the failing test**
+- [x]**Step 1: Write the failing test**
 
 ```go
 // internal/api/docker_handlers_test.go
@@ -32,7 +32,7 @@ func TestDockerAPI_ListRepositories_FilterByRegistry(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Implement handler**
+- [x]**Step 2: Implement handler**
 
 ```go
 // internal/api/docker_handlers.go
@@ -46,12 +46,12 @@ func (s *Server) handleListDockerRepositories(w http.ResponseWriter, r *http.Req
 }
 ```
 
-- [ ] **Step 3: Register route in api server**
+- [x]**Step 3: Register route in api server**
 
 Add to the existing `Routes()` method in `internal/api/server.go`.
 
-- [ ] **Step 4: Run tests, verify pass**
-- [ ] **Step 5: Commit**
+- [x]**Step 4: Run tests, verify pass**
+- [x]**Step 5: Commit**
 
 ```bash
 git add internal/api/docker_handlers.go internal/api/docker_handlers_test.go internal/api/server.go
@@ -66,7 +66,7 @@ git commit -m "feat(api): GET /api/v1/docker/repositories endpoint"
 - Modify: `internal/api/docker_handlers.go`
 - Modify: `internal/api/docker_handlers_test.go`
 
-- [ ] **Step 1: Write the failing test**
+- [x]**Step 1: Write the failing test**
 
 ```go
 func TestDockerAPI_ListTags_ReturnsTagsForRepo(t *testing.T) {
@@ -74,7 +74,7 @@ func TestDockerAPI_ListTags_ReturnsTagsForRepo(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Implement handler**
+- [x]**Step 2: Implement handler**
 
 ```go
 // GET /api/v1/docker/repositories/{id}/tags
@@ -85,8 +85,8 @@ func (s *Server) handleListDockerTags(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-- [ ] **Step 3: Run tests, verify pass**
-- [ ] **Step 4: Commit**
+- [x]**Step 3: Run tests, verify pass**
+- [x]**Step 4: Commit**
 
 ```bash
 git add internal/api/docker_handlers.go internal/api/docker_handlers_test.go
@@ -101,7 +101,7 @@ git commit -m "feat(api): GET /api/v1/docker/repositories/{id}/tags endpoint"
 - Modify: `internal/api/docker_handlers.go`
 - Modify: `internal/api/docker_handlers_test.go`
 
-- [ ] **Step 1: Write the failing test**
+- [x]**Step 1: Write the failing test**
 
 ```go
 func TestDockerAPI_CreateTag_Returns201(t *testing.T) {
@@ -116,7 +116,7 @@ func TestDockerAPI_MoveTag_TriggersRescan(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Implement handler**
+- [x]**Step 2: Implement handler**
 
 ```go
 // POST /api/v1/docker/repositories/{id}/tags
@@ -129,8 +129,8 @@ func (s *Server) handleCreateDockerTag(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-- [ ] **Step 3: Run tests, verify pass**
-- [ ] **Step 4: Commit**
+- [x]**Step 3: Run tests, verify pass**
+- [x]**Step 4: Commit**
 
 ```bash
 git add internal/api/docker_handlers.go internal/api/docker_handlers_test.go
@@ -145,15 +145,15 @@ git commit -m "feat(api): POST /api/v1/docker/repositories/{id}/tags with re-sca
 - Modify: `internal/api/docker_handlers.go`
 - Modify: `internal/api/docker_handlers_test.go`
 
-- [ ] **Step 1: Write test + implement**
+- [x]**Step 1: Write test + implement**
 
 ```go
 // DELETE /api/v1/docker/repositories/{id}/tags/{tag}
 // → 204 No Content (artifact NOT deleted, only tag mapping)
 ```
 
-- [ ] **Step 2: Run tests, verify pass**
-- [ ] **Step 3: Commit**
+- [x]**Step 2: Run tests, verify pass**
+- [x]**Step 3: Commit**
 
 ```bash
 git add internal/api/docker_handlers.go internal/api/docker_handlers_test.go
@@ -168,7 +168,7 @@ git commit -m "feat(api): DELETE /api/v1/docker/repositories/{id}/tags/{tag}"
 - Modify: `internal/api/docker_handlers.go`
 - Modify: `internal/api/docker_handlers_test.go`
 
-- [ ] **Step 1: Write test + implement**
+- [x]**Step 1: Write test + implement**
 
 ```go
 // POST /api/v1/docker/sync/{id}
@@ -177,8 +177,8 @@ git commit -m "feat(api): DELETE /api/v1/docker/repositories/{id}/tags/{tag}"
 
 The handler triggers `SyncService.SyncRepository` in a goroutine.
 
-- [ ] **Step 2: Run tests, verify pass**
-- [ ] **Step 3: Commit**
+- [x]**Step 2: Run tests, verify pass**
+- [x]**Step 3: Commit**
 
 ```bash
 git add internal/api/docker_handlers.go internal/api/docker_handlers_test.go
@@ -192,14 +192,14 @@ git commit -m "feat(api): POST /api/v1/docker/sync/{id} manual trigger"
 **Files:**
 - Modify: `internal/api/docker_handlers.go`
 
-- [ ] **Step 1: Write test + implement**
+- [x]**Step 1: Write test + implement**
 
 ```go
 // GET /api/v1/docker/registries → returns allowed_registries from config
 ```
 
-- [ ] **Step 2: Run tests, verify pass**
-- [ ] **Step 3: Commit**
+- [x]**Step 2: Run tests, verify pass**
+- [x]**Step 3: Commit**
 
 ```bash
 git add internal/api/docker_handlers.go internal/api/docker_handlers_test.go
@@ -210,19 +210,19 @@ git commit -m "feat(api): GET /api/v1/docker/registries endpoint"
 
 ### Task 7: Documentation + Final Verification
 
-- [ ] **Step 1: Update API docs / OpenAPI spec**
+- [x]**Step 1: Update API docs / OpenAPI spec**
 
 Update `docs/api/openapi.yaml` with new endpoints.
 
-- [ ] **Step 2: Run full test suite**
+- [x]**Step 2: Run full test suite**
 
 Run: `cd /Users/valda/src/projects/shieldoo-gate && go test ./... -count=1 -race`
 
-- [ ] **Step 3: Build + lint**
+- [x]**Step 3: Build + lint**
 
 Run: `cd /Users/valda/src/projects/shieldoo-gate && make build && make lint`
 
-- [ ] **Step 4: Commit**
+- [x]**Step 4: Commit**
 
 ```bash
 git add docs/

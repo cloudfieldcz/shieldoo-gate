@@ -26,6 +26,8 @@ tags:
     description: Request and scan statistics
   - name: feed
     description: Threat feed management
+  - name: docker
+    description: Docker repository and tag management
   - name: metrics
     description: Prometheus metrics
 
@@ -320,6 +322,126 @@ paths:
               schema:
                 $ref: "#/components/schemas/AcceptedResponse"
 
+  /api/v1/docker/repositories:
+    get:
+      summary: List Docker repositories
+      operationId: listDockerRepositories
+      tags: [docker]
+      parameters:
+        - name: registry
+          in: query
+          required: false
+          description: Filter by registry host (e.g. ghcr.io)
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of Docker repositories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DockerRepository"
+
+  /api/v1/docker/repositories/{id}/tags:
+    parameters:
+      - $ref: "#/components/parameters/dockerRepoId"
+    get:
+      summary: List tags for a Docker repository
+      operationId: listDockerTags
+      tags: [docker]
+      responses:
+        "200":
+          description: List of tags
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DockerTag"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      summary: Create or move a tag on a Docker repository
+      operationId: createDockerTag
+      tags: [docker]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDockerTagRequest"
+      responses:
+        "201":
+          description: Tag created or moved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateDockerTagResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/docker/repositories/{id}/tags/{tag}:
+    parameters:
+      - $ref: "#/components/parameters/dockerRepoId"
+      - name: tag
+        in: path
+        required: true
+        description: Tag name
+        schema:
+          type: string
+          example: "v1.0"
+    delete:
+      summary: Delete a tag from a Docker repository
+      operationId: deleteDockerTag
+      tags: [docker]
+      responses:
+        "204":
+          description: Tag deleted (artifact is NOT removed)
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/docker/sync/{id}:
+    parameters:
+      - $ref: "#/components/parameters/dockerRepoId"
+    post:
+      summary: Trigger a manual sync for a Docker repository
+      operationId: triggerDockerSync
+      tags: [docker]
+      responses:
+        "202":
+          description: Sync queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AcceptedResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          description: Sync service not enabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/docker/registries:
+    get:
+      summary: List allowed Docker registries from config
+      operationId: listDockerRegistries
+      tags: [docker]
+      responses:
+        "200":
+          description: List of allowed registries (credentials are never exposed)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DockerRegistry"
+
   /metrics:
     get:
       summary: Prometheus metrics endpoint
@@ -343,6 +465,14 @@ components:
       schema:
         type: string
         example: "pypi:requests:2.31.0"
+    dockerRepoId:
+      name: id
+      in: path
+      required: true
+      description: Docker repository ID
+      schema:
+        type: integer
+        format: int64
     page:
       name: page
       in: query
@@ -738,6 +868,95 @@ components:
         id:
           type: integer
           format: int64
+
+    DockerRepository:
+      type: object
+      required: [id, registry, name, is_internal, created_at, sync_enabled]
+      properties:
+        id:
+          type: integer
+          format: int64
+        registry:
+          type: string
+          example: docker.io
+        name:
+          type: string
+          example: library/nginx
+        is_internal:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        last_synced_at:
+          type: string
+          format: date-time
+          nullable: true
+        sync_enabled:
+          type: boolean
+
+    DockerTag:
+      type: object
+      required: [id, repo_id, tag, manifest_digest, created_at, updated_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        repo_id:
+          type: integer
+          format: int64
+        tag:
+          type: string
+          example: "v1.0"
+        manifest_digest:
+          type: string
+          example: "sha256:abc123..."
+        artifact_id:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateDockerTagRequest:
+      type: object
+      required: [tag, manifest_digest]
+      properties:
+        tag:
+          type: string
+          example: "v1.0"
+        manifest_digest:
+          type: string
+          example: "sha256:abc123..."
+
+    CreateDockerTagResponse:
+      type: object
+      required: [tag, manifest_digest, tag_moved]
+      properties:
+        tag:
+          type: string
+        manifest_digest:
+          type: string
+        tag_moved:
+          type: boolean
+          description: True if an existing tag was moved to a new digest
+        rescan_triggered:
+          type: boolean
+          description: True if a re-scan was triggered due to tag movement
+
+    DockerRegistry:
+      type: object
+      required: [host, url]
+      properties:
+        host:
+          type: string
+          example: docker.io
+        url:
+          type: string
+          format: uri
+          example: https://registry-1.docker.io
 
     ErrorResponse:
       type: object

@@ -12,7 +12,9 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/docker"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/cache"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/policy"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
 )
@@ -24,6 +26,8 @@ type Server struct {
 	scanEngine   *scanner.Engine
 	policyEngine *policy.Engine
 	uiDir        string
+	dockerConfig config.DockerUpstreamConfig
+	syncSvc      *docker.SyncService
 }
 
 // NewServer creates a new Server with the given dependencies.
@@ -35,6 +39,16 @@ func NewServer(db *sqlx.DB, cacheStore cache.CacheStore, scanEngine *scanner.Eng
 		policyEngine: policyEngine,
 		uiDir:        "/var/www/shieldoo-gate/ui",
 	}
+}
+
+// SetDockerConfig sets the Docker upstream configuration for the registries endpoint.
+func (s *Server) SetDockerConfig(cfg config.DockerUpstreamConfig) {
+	s.dockerConfig = cfg
+}
+
+// SetSyncService sets the Docker sync service for the manual sync trigger endpoint.
+func (s *Server) SetSyncService(svc *docker.SyncService) {
+	s.syncSvc = svc
 }
 
 // Routes returns a chi.Router with all API routes registered.
@@ -72,6 +86,14 @@ func (s *Server) Routes() chi.Router {
 		// Threat feed
 		r.Get("/feed", s.handleListFeed)
 		r.Post("/feed/refresh", s.handleRefreshFeed)
+
+		// Docker management
+		r.Get("/docker/repositories", s.handleListDockerRepositories)
+		r.Get("/docker/repositories/{id}/tags", s.handleListDockerTags)
+		r.Post("/docker/repositories/{id}/tags", s.handleCreateDockerTag)
+		r.Delete("/docker/repositories/{id}/tags/{tag}", s.handleDeleteDockerTag)
+		r.Post("/docker/sync/{id}", s.handleDockerSync)
+		r.Get("/docker/registries", s.handleListDockerRegistries)
 	})
 
 	// Prometheus metrics

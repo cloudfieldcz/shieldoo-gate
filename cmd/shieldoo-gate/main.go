@@ -162,6 +162,7 @@ func main() {
 
 	// Init admin API server
 	apiServer := api.NewServer(db, cacheStore, scanEngine, policyEngine)
+	apiServer.SetDockerConfig(cfg.Upstreams.Docker)
 
 	host := cfg.Server.Host
 	if host == "" {
@@ -191,6 +192,7 @@ func main() {
 	if cfg.Upstreams.Docker.Sync.Enabled {
 		resolver := docker.NewRegistryResolver(cfg.Upstreams.Docker)
 		syncSvc := docker.NewSyncService(db, cacheStore, scanEngine, policyEngine, resolver, cfg.Upstreams.Docker.Sync)
+		apiServer.SetSyncService(syncSvc)
 		go syncSvc.Start(ctx)
 		log.Info().Msg("docker sync service enabled")
 	}
