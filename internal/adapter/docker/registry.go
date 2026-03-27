@@ -101,6 +101,25 @@ func (rr *RegistryResolver) AuthForRegistry(registryHost string) string {
 	}
 }
 
+// IsPushAllowed returns true if the image name is a valid internal push target.
+// Internal images must have at least one slash and the first segment must NOT
+// look like a registry hostname (no dots or colons). Bare names (no slash)
+// resolve to Docker Hub's library/ namespace and are not pushable.
+func (rr *RegistryResolver) IsPushAllowed(name string) bool {
+	firstSlash := strings.Index(name, "/")
+	if firstSlash <= 0 {
+		// Bare name (no slash) → would be library/X on Docker Hub → not pushable
+		return false
+	}
+	firstSegment := name[:firstSlash]
+	if looksLikeRegistry(firstSegment) {
+		// Looks like a registry hostname → upstream namespace → not pushable
+		return false
+	}
+	// Has slash, first segment is NOT a registry → internal namespace → pushable
+	return true
+}
+
 // MakeSafeName creates a filesystem/cache-safe name from registry + image path.
 // Replaces dots and slashes with underscores. Internal images (registry="") get "_internal" prefix.
 func MakeSafeName(registry, imagePath string) string {

@@ -95,6 +95,42 @@ func TestResolveUpstream_DockerHubWithSlash_NoFalsePositive(t *testing.T) {
 	assert.Equal(t, "myuser/myimage", imagePath)
 }
 
+func TestRegistryResolver_IsPushAllowed_InternalNamespace(t *testing.T) {
+	cfg := config.DockerUpstreamConfig{
+		DefaultRegistry: "https://registry-1.docker.io",
+		AllowedRegistries: []config.DockerRegistryEntry{
+			{Host: "ghcr.io", URL: "https://ghcr.io"},
+		},
+		Push: config.DockerPushConfig{Enabled: true},
+	}
+	r := docker.NewRegistryResolver(cfg)
+
+	// Internal namespace (has slash, no dot in first segment) → push allowed
+	assert.True(t, r.IsPushAllowed("myteam/myapp"))
+
+	// Upstream registry namespace → push forbidden
+	assert.False(t, r.IsPushAllowed("ghcr.io/user/app"))
+
+	// Bare name (no slash) → would go to docker hub library/ → push forbidden
+	assert.False(t, r.IsPushAllowed("nginx"))
+
+	// Note: "library/nginx" has a slash and "library" has no dot, so it
+	// is treated as an internal namespace (same as "myteam/myapp").
+	// Docker Hub's library/ convention is a pull-side concept only.
+	assert.True(t, r.IsPushAllowed("library/nginx"))
+}
+
+func TestRegistryResolver_IsPushAllowed_MultiLevelInternal(t *testing.T) {
+	cfg := config.DockerUpstreamConfig{
+		DefaultRegistry: "https://registry-1.docker.io",
+		Push:            config.DockerPushConfig{Enabled: true},
+	}
+	r := docker.NewRegistryResolver(cfg)
+
+	// Multi-level internal namespace
+	assert.True(t, r.IsPushAllowed("myteam/subteam/myapp"))
+}
+
 func TestMakeSafeName_ReplacesSlashesAndDots(t *testing.T) {
 	assert.Equal(t, "ghcr_io_cloudfieldcz_cf-powers", docker.MakeSafeName("ghcr.io", "cloudfieldcz/cf-powers"))
 	assert.Equal(t, "docker_io_library_nginx", docker.MakeSafeName("docker.io", "library/nginx"))
