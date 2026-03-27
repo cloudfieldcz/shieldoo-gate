@@ -20,6 +20,7 @@ import (
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/cache"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/policy"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
@@ -34,13 +35,14 @@ var _ adapter.Adapter = (*DockerAdapter)(nil)
 // Manifests are scanned via Trivy before being served. Blobs are passed
 // through directly since scanning happens at the manifest/image level.
 type DockerAdapter struct {
-	db          *sqlx.DB
-	cache       cache.CacheStore
-	scanEngine  *scanner.Engine
-	policyEng   *policy.Engine
-	upstreamURL string
-	router      http.Handler
-	httpClient  *http.Client
+	db         *sqlx.DB
+	cache      cache.CacheStore
+	scanEngine *scanner.Engine
+	policyEng  *policy.Engine
+	resolver   *RegistryResolver
+	cfg        config.DockerUpstreamConfig
+	router     http.Handler
+	httpClient *http.Client
 }
 
 // NewDockerAdapter creates and wires a DockerAdapter.
@@ -49,15 +51,16 @@ func NewDockerAdapter(
 	cacheStore cache.CacheStore,
 	scanEngine *scanner.Engine,
 	policyEngine *policy.Engine,
-	upstreamURL string,
+	cfg config.DockerUpstreamConfig,
 ) *DockerAdapter {
 	a := &DockerAdapter{
-		db:          db,
-		cache:       cacheStore,
-		scanEngine:  scanEngine,
-		policyEng:   policyEngine,
-		upstreamURL: strings.TrimRight(upstreamURL, "/"),
-		httpClient:  &http.Client{Timeout: 10 * time.Minute},
+		db:         db,
+		cache:      cacheStore,
+		scanEngine: scanEngine,
+		policyEng:  policyEngine,
+		resolver:   NewRegistryResolver(cfg),
+		cfg:        cfg,
+		httpClient: &http.Client{Timeout: 10 * time.Minute},
 	}
 	a.router = a.buildRouter()
 	return a
@@ -68,7 +71,11 @@ func (a *DockerAdapter) Ecosystem() scanner.Ecosystem { return scanner.Ecosystem
 
 // HealthCheck implements adapter.Adapter.
 func (a *DockerAdapter) HealthCheck(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.upstreamURL+"/v2/", nil)
+	defaultURL := a.cfg.DefaultRegistry
+	if defaultURL == "" {
+		defaultURL = "https://registry-1.docker.io"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, defaultURL+"/v2/", nil)
 	if err != nil {
 		return fmt.Errorf("docker: health check: %w", err)
 	}
@@ -105,41 +112,10 @@ func (a *DockerAdapter) buildRouter() http.Handler {
 }
 
 // handleV2Check responds with the Docker-Distribution-API-Version header as
-// required by the OCI Distribution Spec.
+// required by the OCI Distribution Spec. Responds locally without proxying.
 func (a *DockerAdapter) handleV2Check(w http.ResponseWriter, r *http.Request) {
-	// Try to proxy to upstream to preserve auth challenges, but if upstream
-	// is unreachable, return a synthetic 200 with the required header.
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, a.upstreamURL+"/v2/", nil)
-	if err != nil {
-		w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-	// Forward Authorization header if present.
-	if auth := r.Header.Get("Authorization"); auth != "" {
-		req.Header.Set("Authorization", auth)
-	}
-
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		// Fail gracefully — return the required header.
-		w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-	defer resp.Body.Close()
-
-	for key, vals := range resp.Header {
-		for _, v := range vals {
-			w.Header().Add(key, v)
-		}
-	}
-	// Ensure the version header is always present.
-	if w.Header().Get("Docker-Distribution-API-Version") == "" {
-		w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
-	}
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
+	w.WriteHeader(http.StatusOK)
 }
 
 // handleV2Wildcard routes /v2/* requests to manifests or blobs handlers.
@@ -167,7 +143,22 @@ func (a *DockerAdapter) handleV2Wildcard(w http.ResponseWriter, r *http.Request)
 			})
 			return
 		}
-		a.handleManifest(w, r, name, ref)
+		registry, imagePath, upstreamURL, err := a.resolver.Resolve(name)
+		if err != nil {
+			adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+				Error:  "registry not allowed",
+				Reason: err.Error(),
+			})
+			_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+				EventType:  model.EventBlocked,
+				ArtifactID: fmt.Sprintf("docker:%s:%s", name, ref),
+				ClientIP:   r.RemoteAddr,
+				UserAgent:  r.UserAgent(),
+				Reason:     err.Error(),
+			})
+			return
+		}
+		a.handleManifest(w, r, registry, imagePath, upstreamURL, ref)
 
 	case blobsIdx > 0:
 		name := wildcardPath[:blobsIdx]
@@ -179,7 +170,15 @@ func (a *DockerAdapter) handleV2Wildcard(w http.ResponseWriter, r *http.Request)
 			})
 			return
 		}
-		a.proxyUpstream(w, r, "/v2/"+name+"/blobs/"+digest)
+		registry, imagePath, upstreamURL, err := a.resolver.Resolve(name)
+		if err != nil {
+			adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+				Error:  "registry not allowed",
+				Reason: err.Error(),
+			})
+			return
+		}
+		a.proxyUpstream(w, r, upstreamURL, registry, "/v2/"+imagePath+"/blobs/"+digest)
 
 	default:
 		http.NotFound(w, r)
@@ -187,12 +186,14 @@ func (a *DockerAdapter) handleV2Wildcard(w http.ResponseWriter, r *http.Request)
 }
 
 // handleManifest runs the full scan-on-pull pipeline for manifest requests.
-func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, name, ref string) {
+func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, registry, imagePath, upstreamURL, ref string) {
 	ctx := r.Context()
 
+	// Auto-create repository record (fire-and-forget).
+	_, _ = EnsureRepository(a.db, registry, imagePath, false)
+
 	// Artifact ID format: docker:{safeName}:{ref}
-	// Docker names contain slashes (library/nginx) which are unsafe for cache paths.
-	safeName := strings.NewReplacer("/", "_").Replace(name)
+	safeName := MakeSafeName(registry, imagePath)
 	artifactID := fmt.Sprintf("docker:%s:%s", safeName, ref)
 
 	// 1. Check if already in cache with a known status. Fail closed on DB errors.
@@ -273,7 +274,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, n
 	}
 
 	// 4. Download manifest from upstream (capped at 10 MB).
-	manifestBytes, manifestContentType, err := a.fetchManifest(ctx, r, name, ref)
+	manifestBytes, manifestContentType, err := a.fetchManifest(ctx, r, upstreamURL, registry, imagePath, ref)
 	if err != nil {
 		log.Error().Err(err).Str("artifact", artifactID).Msg("docker: failed to fetch manifest from upstream")
 		http.Error(w, "failed to fetch manifest from upstream", http.StatusBadGateway)
@@ -282,12 +283,12 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, n
 
 	// 5. Download full image to temp OCI tarball for scanning.
 	// Build the image ref: strip any http:// or https:// scheme from upstreamURL for crane.
-	upstreamHost := strings.TrimPrefix(strings.TrimPrefix(a.upstreamURL, "https://"), "http://")
-	imageRef := upstreamHost + "/" + name + ":" + ref
+	upstreamHost := strings.TrimPrefix(strings.TrimPrefix(upstreamURL, "https://"), "http://")
+	imageRef := upstreamHost + "/" + imagePath + ":" + ref
 	// For plain tag refs (not digests), crane uses the ref as-is.
 	// If ref looks like a digest (sha256:...), use @ notation.
 	if strings.HasPrefix(ref, "sha256:") {
-		imageRef = upstreamHost + "/" + name + "@" + ref
+		imageRef = upstreamHost + "/" + imagePath + "@" + ref
 	}
 
 	tarPath, tarSize, tarSHA, err := pullImageToTar(ctx, imageRef)
@@ -303,15 +304,16 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, n
 	manifestSHA := hex.EncodeToString(manifestHash[:])
 
 	// 6. Build scanner.Artifact (point at tarball for scanning).
+	// IMPORTANT: Name is set to safeName (not imagePath) so model.Artifact.ID() matches artifactID.
 	scanArtifact := scanner.Artifact{
 		ID:          artifactID,
 		Ecosystem:   scanner.EcosystemDocker,
-		Name:        name,
+		Name:        safeName,
 		Version:     ref,
 		LocalPath:   tarPath,
 		SHA256:      tarSHA,
 		SizeBytes:   tarSize,
-		UpstreamURL: a.upstreamURL + "/v2/" + name + "/manifests/" + ref,
+		UpstreamURL: upstreamURL + "/v2/" + imagePath + "/manifests/" + ref,
 	}
 
 	// 7. Scan via scan engine.
@@ -392,7 +394,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, n
 		cacheArtifact := scanner.Artifact{
 			ID:          artifactID,
 			Ecosystem:   scanner.EcosystemDocker,
-			Name:        name,
+			Name:        safeName,
 			Version:     ref,
 			LocalPath:   manifestTmp,
 			SHA256:      manifestSHA,
@@ -422,18 +424,22 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, n
 
 // fetchManifest downloads the manifest from the upstream registry.
 // Returns the manifest body (capped at 10 MB), the content-type, and any error.
-func (a *DockerAdapter) fetchManifest(ctx context.Context, r *http.Request, name, ref string) ([]byte, string, error) {
-	target := a.upstreamURL + "/v2/" + name + "/manifests/" + ref
+// SECURITY: Uses per-registry credentials from config, NOT client Authorization header.
+func (a *DockerAdapter) fetchManifest(ctx context.Context, r *http.Request, upstreamURL, registryHost, name, ref string) ([]byte, string, error) {
+	target := upstreamURL + "/v2/" + name + "/manifests/" + ref
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, "", fmt.Errorf("docker: fetch manifest: building request: %w", err)
 	}
 
-	// Forward relevant headers.
-	for _, hdr := range []string{"Accept", "Authorization"} {
-		if v := r.Header.Get(hdr); v != "" {
-			req.Header.Set(hdr, v)
-		}
+	// Forward Accept header (needed for manifest negotiation).
+	if v := r.Header.Get("Accept"); v != "" {
+		req.Header.Set("Accept", v)
+	}
+
+	// SECURITY: Use per-registry credentials from config, NOT client's Authorization header.
+	if auth := a.resolver.AuthForRegistry(registryHost); auth != "" {
+		req.Header.Set("Authorization", auth)
 	}
 
 	resp, err := a.httpClient.Do(req)
@@ -451,6 +457,15 @@ func (a *DockerAdapter) fetchManifest(ctx context.Context, r *http.Request, name
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxManifestSize))
 	if err != nil {
 		return nil, "", fmt.Errorf("docker: fetch manifest: reading body: %w", err)
+	}
+
+	// SECURITY: Verify manifest digest matches upstream's claim.
+	if upstreamDigest := resp.Header.Get("Docker-Content-Digest"); upstreamDigest != "" {
+		h := sha256.Sum256(body)
+		computed := "sha256:" + hex.EncodeToString(h[:])
+		if computed != upstreamDigest {
+			return nil, "", fmt.Errorf("docker: manifest digest mismatch: computed %s, upstream claims %s", computed, upstreamDigest)
+		}
 	}
 
 	return body, resp.Header.Get("Content-Type"), nil
@@ -545,19 +560,22 @@ func (a *DockerAdapter) persistArtifact(
 
 // proxyUpstream forwards the request to the upstream registry and relays the response.
 // Used for blob pass-through only.
-func (a *DockerAdapter) proxyUpstream(w http.ResponseWriter, r *http.Request, path string) {
-	target := a.upstreamURL + path
+// SECURITY: Uses per-registry credentials from config, NOT client Authorization header.
+func (a *DockerAdapter) proxyUpstream(w http.ResponseWriter, r *http.Request, upstreamURL, registryHost, path string) {
+	target := upstreamURL + path
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
 	if err != nil {
 		http.Error(w, "upstream request error", http.StatusInternalServerError)
 		return
 	}
 
-	// Forward relevant headers: Accept, Authorization, Docker-specific.
-	for _, hdr := range []string{"Accept", "Authorization", "Docker-Content-Digest"} {
-		if v := r.Header.Get(hdr); v != "" {
-			req.Header.Set(hdr, v)
-		}
+	// Forward Accept header only. NEVER forward Authorization from client.
+	if v := r.Header.Get("Accept"); v != "" {
+		req.Header.Set("Accept", v)
+	}
+	// Use per-registry credentials from config.
+	if auth := a.resolver.AuthForRegistry(registryHost); auth != "" {
+		req.Header.Set("Authorization", auth)
 	}
 
 	resp, err := a.httpClient.Do(req)

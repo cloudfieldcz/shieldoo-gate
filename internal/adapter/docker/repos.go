@@ -1,0 +1,49 @@
+package docker
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/jmoiron/sqlx"
+)
+
+// DockerRepository represents a row in docker_repositories.
+type DockerRepository struct {
+	ID           int64      `db:"id" json:"id"`
+	Registry     string     `db:"registry" json:"registry"`
+	Name         string     `db:"name" json:"name"`
+	IsInternal   bool       `db:"is_internal" json:"is_internal"`
+	CreatedAt    time.Time  `db:"created_at" json:"created_at"`
+	LastSyncedAt *time.Time `db:"last_synced_at" json:"last_synced_at,omitempty"`
+	SyncEnabled  bool       `db:"sync_enabled" json:"sync_enabled"`
+}
+
+// EnsureRepository returns the existing repo or creates a new one.
+// SECURITY: Uses atomic INSERT OR IGNORE + SELECT to avoid TOCTOU race conditions
+// under concurrent first-access for the same image.
+func EnsureRepository(db *sqlx.DB, registry, name string, isInternal bool) (*DockerRepository, error) {
+	now := time.Now().UTC()
+	// Atomic: INSERT OR IGNORE avoids unique constraint violation under concurrent access.
+	_, _ = db.Exec(
+		`INSERT OR IGNORE INTO docker_repositories (registry, name, is_internal, created_at, sync_enabled)
+		 VALUES (?, ?, ?, ?, ?)`,
+		registry, name, isInternal, now, !isInternal,
+	)
+
+	// Always SELECT — either we just inserted or the row already existed.
+	var repo DockerRepository
+	err := db.Get(&repo, "SELECT * FROM docker_repositories WHERE registry = ? AND name = ?", registry, name)
+	if err != nil {
+		return nil, fmt.Errorf("docker: querying repository: %w", err)
+	}
+	return &repo, nil
+}
+
+// ListRepositories returns all repos, optionally filtered by registry.
+func ListRepositories(db *sqlx.DB, registry string) ([]DockerRepository, error) {
+	var repos []DockerRepository
+	if registry != "" {
+		return repos, db.Select(&repos, "SELECT * FROM docker_repositories WHERE registry = ? ORDER BY name", registry)
+	}
+	return repos, db.Select(&repos, "SELECT * FROM docker_repositories ORDER BY registry, name")
+}
