@@ -203,3 +203,85 @@ func TestDockerAdapter_Blob_ProxiesUpstream(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, blobContent, w.Body.Bytes())
 }
+
+func TestDockerAdapter_DisallowedRegistry_Returns403(t *testing.T) {
+	a, _, _, _ := setupTestDocker(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("upstream should not be called for disallowed registries")
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v2/evil.io/malware/pkg/manifests/latest", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), "not allowed")
+}
+
+func setupTestDockerMultiUpstream(t *testing.T, defaultHandler, ghcrHandler http.HandlerFunc) *docker.DockerAdapter {
+	t.Helper()
+	defaultUpstream := httptest.NewServer(defaultHandler)
+	t.Cleanup(defaultUpstream.Close)
+	ghcrUpstream := httptest.NewServer(ghcrHandler)
+	t.Cleanup(ghcrUpstream.Close)
+
+	db, err := config.InitDB(":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	cacheStore, err := local.NewLocalCacheStore(t.TempDir(), 10)
+	require.NoError(t, err)
+
+	scanEngine := scanner.NewEngine(nil, 30*time.Second)
+	policyEngine := policy.NewEngine(policy.EngineConfig{
+		BlockIfVerdict:      scanner.VerdictMalicious,
+		QuarantineIfVerdict: scanner.VerdictSuspicious,
+		MinimumConfidence:   0.7,
+	}, nil)
+
+	cfg := config.DockerUpstreamConfig{
+		DefaultRegistry: defaultUpstream.URL,
+		AllowedRegistries: []config.DockerRegistryEntry{
+			{Host: "ghcr.io", URL: ghcrUpstream.URL},
+		},
+	}
+	return docker.NewDockerAdapter(db, cacheStore, scanEngine, policyEngine, cfg)
+}
+
+func TestDockerAdapter_AllowedRegistry_BlobRoutesToCorrectUpstream(t *testing.T) {
+	ghcrBlobContent := []byte("ghcr blob data")
+
+	a := setupTestDockerMultiUpstream(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			t.Fatal("default upstream should not be called for ghcr.io images")
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(ghcrBlobContent)
+		},
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/v2/ghcr.io/myuser/myapp/blobs/sha256:abc123", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, ghcrBlobContent, w.Body.Bytes())
+}
+
+func TestDockerAdapter_BareImageName_ExpandsToLibrary(t *testing.T) {
+	var receivedPath string
+	a, _, _, _ := setupTestDocker(t, func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("blob"))
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v2/nginx/blobs/sha256:abc123", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "/v2/library/nginx/blobs/sha256:abc123", receivedPath)
+}
