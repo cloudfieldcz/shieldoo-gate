@@ -142,6 +142,58 @@ func TestDockerPush_BlobHead_NonExisting_Returns404(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, headW.Code)
 }
 
+func TestDockerPush_ManifestPut_ScansBeforeResponse(t *testing.T) {
+	// Push a manifest → adapter must scan before returning 201.
+	// With no scanners configured, scan returns clean → 201.
+	a := setupTestDockerWithPush(t)
+
+	manifestBody := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.docker.distribution.manifest.v2+json"}`)
+	req := httptest.NewRequest(http.MethodPut, "/v2/myteam/myapp/manifests/v1.0", bytes.NewReader(manifestBody))
+	req.Header.Set("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.NotEmpty(t, w.Header().Get("Docker-Content-Digest"))
+}
+
+func TestDockerPush_ManifestPut_UpstreamNamespace_Returns403(t *testing.T) {
+	a := setupTestDockerWithPush(t)
+
+	manifestBody := []byte(`{"schemaVersion":2}`)
+	req := httptest.NewRequest(http.MethodPut, "/v2/ghcr.io/user/app/manifests/latest", bytes.NewReader(manifestBody))
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestDockerPush_ManifestPut_CreatesTag(t *testing.T) {
+	a := setupTestDockerWithPush(t)
+
+	manifestBody := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.docker.distribution.manifest.v2+json"}`)
+
+	// Push v1.0
+	req := httptest.NewRequest(http.MethodPut, "/v2/myteam/myapp/manifests/v1.0", bytes.NewReader(manifestBody))
+	req.Header.Set("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code)
+	digest := w.Header().Get("Docker-Content-Digest")
+	assert.Contains(t, digest, "sha256:")
+
+	// Push same manifest with different tag
+	req2 := httptest.NewRequest(http.MethodPut, "/v2/myteam/myapp/manifests/latest", bytes.NewReader(manifestBody))
+	req2.Header.Set("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
+	w2 := httptest.NewRecorder()
+	a.ServeHTTP(w2, req2)
+
+	require.Equal(t, http.StatusCreated, w2.Code)
+	// Same manifest → same digest
+	assert.Equal(t, digest, w2.Header().Get("Docker-Content-Digest"))
+}
+
 func TestDockerPush_Disabled_Returns403(t *testing.T) {
 	db, err := config.InitDB(":memory:")
 	require.NoError(t, err)
