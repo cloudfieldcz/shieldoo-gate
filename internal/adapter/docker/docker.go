@@ -35,14 +35,16 @@ var _ adapter.Adapter = (*DockerAdapter)(nil)
 // Manifests are scanned via Trivy before being served. Blobs are passed
 // through directly since scanning happens at the manifest/image level.
 type DockerAdapter struct {
-	db         *sqlx.DB
-	cache      cache.CacheStore
-	scanEngine *scanner.Engine
-	policyEng  *policy.Engine
-	resolver   *RegistryResolver
-	cfg        config.DockerUpstreamConfig
-	router     http.Handler
-	httpClient *http.Client
+	db          *sqlx.DB
+	cache       cache.CacheStore
+	scanEngine  *scanner.Engine
+	policyEng   *policy.Engine
+	resolver    *RegistryResolver
+	cfg         config.DockerUpstreamConfig
+	router      http.Handler
+	httpClient  *http.Client
+	blobStore   *BlobStore
+	pushHandler *pushHandler
 }
 
 // NewDockerAdapter creates and wires a DockerAdapter.
@@ -61,6 +63,33 @@ func NewDockerAdapter(
 		resolver:   NewRegistryResolver(cfg),
 		cfg:        cfg,
 		httpClient: &http.Client{Timeout: 10 * time.Minute},
+	}
+	a.router = a.buildRouter()
+	return a
+}
+
+// NewDockerAdapterWithPush creates a DockerAdapter with push support enabled.
+// The blobStore is used for storing pushed image blobs locally.
+func NewDockerAdapterWithPush(
+	db *sqlx.DB,
+	cacheStore cache.CacheStore,
+	scanEngine *scanner.Engine,
+	policyEngine *policy.Engine,
+	cfg config.DockerUpstreamConfig,
+	blobStore *BlobStore,
+) *DockerAdapter {
+	a := &DockerAdapter{
+		db:         db,
+		cache:      cacheStore,
+		scanEngine: scanEngine,
+		policyEng:  policyEngine,
+		resolver:   NewRegistryResolver(cfg),
+		cfg:        cfg,
+		httpClient: &http.Client{Timeout: 10 * time.Minute},
+		blobStore:  blobStore,
+	}
+	if cfg.Push.Enabled && blobStore != nil {
+		a.pushHandler = newPushHandler(blobStore)
 	}
 	a.router = a.buildRouter()
 	return a
@@ -107,6 +136,12 @@ func (a *DockerAdapter) buildRouter() http.Handler {
 	// names like "library/nginx" or "org/team/image"). We use a catch-all
 	// route and parse the path manually.
 	r.Get("/v2/*", a.handleV2Wildcard)
+
+	// Push routes (POST/PUT/PATCH for uploads, HEAD for blob existence checks).
+	r.Post("/v2/*", a.handleV2WildcardWrite)
+	r.Put("/v2/*", a.handleV2WildcardWrite)
+	r.Patch("/v2/*", a.handleV2WildcardWrite)
+	r.Head("/v2/*", a.handleV2WildcardHead)
 
 	return r
 }
@@ -183,6 +218,219 @@ func (a *DockerAdapter) handleV2Wildcard(w http.ResponseWriter, r *http.Request)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// handleV2WildcardWrite routes POST/PUT/PATCH /v2/* to push handlers.
+// Parses paths for blob uploads and manifest puts.
+func (a *DockerAdapter) handleV2WildcardWrite(w http.ResponseWriter, r *http.Request) {
+	if a.pushHandler == nil || !a.cfg.Push.Enabled {
+		adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+			Error:  "push disabled",
+			Reason: "push support is not enabled on this proxy",
+		})
+		return
+	}
+
+	wildcardPath := chi.URLParam(r, "*")
+
+	// Match /blobs/uploads/ (POST initiate) or /blobs/uploads/{uuid} (PUT complete)
+	uploadsIdx := strings.LastIndex(wildcardPath, "/blobs/uploads/")
+	if uploadsIdx > 0 {
+		name := wildcardPath[:uploadsIdx]
+		suffix := wildcardPath[uploadsIdx+len("/blobs/uploads/"):]
+
+		if err := validateDockerName(name); err != nil {
+			adapter.WriteJSONError(w, http.StatusBadRequest, adapter.ErrorResponse{
+				Error:  "invalid image name",
+				Reason: err.Error(),
+			})
+			return
+		}
+		if !a.resolver.IsPushAllowed(name) {
+			adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+				Error:  "push not allowed",
+				Reason: fmt.Sprintf("push to upstream namespace %q is forbidden", name),
+			})
+			return
+		}
+
+		switch {
+		case suffix == "" && r.Method == http.MethodPost:
+			// POST /v2/{name}/blobs/uploads/ → initiate upload
+			a.pushHandler.handleBlobUploadInit(w, r, name)
+			return
+		case suffix != "" && r.Method == http.MethodPut:
+			// PUT /v2/{name}/blobs/uploads/{uuid}?digest=... → complete upload
+			a.pushHandler.handleBlobUploadComplete(w, r, name, suffix)
+			return
+		}
+	}
+
+	// Match /manifests/{ref} (PUT manifest)
+	manifestsIdx := strings.LastIndex(wildcardPath, "/manifests/")
+	if manifestsIdx > 0 && r.Method == http.MethodPut {
+		name := wildcardPath[:manifestsIdx]
+		ref := wildcardPath[manifestsIdx+len("/manifests/"):]
+
+		if err := validateDockerName(name); err != nil {
+			adapter.WriteJSONError(w, http.StatusBadRequest, adapter.ErrorResponse{
+				Error:  "invalid image name",
+				Reason: err.Error(),
+			})
+			return
+		}
+		if !a.resolver.IsPushAllowed(name) {
+			adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+				Error:  "push not allowed",
+				Reason: fmt.Sprintf("push to upstream namespace %q is forbidden", name),
+			})
+			return
+		}
+		a.handleManifestPut(w, r, name, ref)
+		return
+	}
+
+	http.NotFound(w, r)
+}
+
+// handleV2WildcardHead routes HEAD /v2/* to blob existence checks.
+func (a *DockerAdapter) handleV2WildcardHead(w http.ResponseWriter, r *http.Request) {
+	wildcardPath := chi.URLParam(r, "*")
+
+	// Match /blobs/{digest} for HEAD
+	blobsIdx := strings.LastIndex(wildcardPath, "/blobs/")
+	if blobsIdx > 0 {
+		digest := wildcardPath[blobsIdx+len("/blobs/"):]
+
+		// Check if this is a push blob (internal namespace) with a push handler.
+		if a.pushHandler != nil && a.cfg.Push.Enabled {
+			name := wildcardPath[:blobsIdx]
+			if a.resolver.IsPushAllowed(name) {
+				a.pushHandler.handleBlobHead(w, r, digest)
+				return
+			}
+		}
+
+		// Fall through to upstream proxy for pull-through HEAD.
+		name := wildcardPath[:blobsIdx]
+		if err := validateDockerName(name); err != nil {
+			adapter.WriteJSONError(w, http.StatusBadRequest, adapter.ErrorResponse{
+				Error:  "invalid image name",
+				Reason: err.Error(),
+			})
+			return
+		}
+		registry, imagePath, upstreamURL, err := a.resolver.Resolve(name)
+		if err != nil {
+			adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+				Error:  "registry not allowed",
+				Reason: err.Error(),
+			})
+			return
+		}
+		a.proxyUpstream(w, r, upstreamURL, registry, "/v2/"+imagePath+"/blobs/"+digest)
+		return
+	}
+
+	http.NotFound(w, r)
+}
+
+// handleManifestPut handles PUT /v2/{name}/manifests/{ref}.
+// Scans the manifest BEFORE returning success (Security Invariant #2).
+func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request, name, ref string) {
+	// Read manifest body (capped at 10 MB).
+	const maxManifestSize = 10 << 20
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxManifestSize))
+	if err != nil {
+		log.Error().Err(err).Msg("docker push: failed to read manifest body")
+		http.Error(w, "failed to read manifest", http.StatusInternalServerError)
+		return
+	}
+
+	// Compute digest.
+	h := sha256.Sum256(body)
+	manifestDigest := "sha256:" + hex.EncodeToString(h[:])
+
+	// Ensure repository exists.
+	repo, err := EnsureRepository(a.db, "", name, true)
+	if err != nil {
+		log.Error().Err(err).Str("name", name).Msg("docker push: failed to ensure repository")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Store manifest as blob.
+	if err := a.pushHandler.blobStore.Put(manifestDigest, body); err != nil {
+		log.Error().Err(err).Str("digest", manifestDigest).Msg("docker push: failed to store manifest blob")
+		http.Error(w, "failed to store manifest", http.StatusInternalServerError)
+		return
+	}
+
+	// Build artifact ID and scanner artifact.
+	safeName := MakeSafeName("", name)
+	artifactID := fmt.Sprintf("docker:%s:%s", safeName, ref)
+
+	// Write manifest to temp file for scanning.
+	manifestTmp, err := writeManifestToTemp(body)
+	if err != nil {
+		log.Error().Err(err).Msg("docker push: failed to write manifest to temp file")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	defer os.Remove(manifestTmp)
+
+	scanArtifact := scanner.Artifact{
+		ID:        artifactID,
+		Ecosystem: scanner.EcosystemDocker,
+		Name:      safeName,
+		Version:   ref,
+		LocalPath: manifestTmp,
+		SHA256:    hex.EncodeToString(h[:]),
+		SizeBytes: int64(len(body)),
+	}
+
+	// Scan BEFORE returning success (Security Invariant #2).
+	ctx := r.Context()
+	scanResults, scanErr := a.scanEngine.ScanAll(ctx, scanArtifact)
+	if scanErr != nil {
+		log.Error().Err(scanErr).Str("artifact", artifactID).Msg("docker push: scan engine error, failing open")
+		scanResults = nil
+	}
+
+	// Policy evaluation.
+	policyResult := a.policyEng.Evaluate(ctx, scanArtifact, scanResults)
+	log.Info().
+		Str("artifact", artifactID).
+		Str("action", string(policyResult.Action)).
+		Str("reason", policyResult.Reason).
+		Msg("docker push: policy decision")
+
+	switch policyResult.Action {
+	case policy.ActionBlock:
+		adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+			Error:    "blocked",
+			Artifact: artifactID,
+			Reason:   policyResult.Reason,
+		})
+		return
+	case policy.ActionQuarantine:
+		now := time.Now().UTC()
+		_ = a.persistArtifact(artifactID, scanArtifact, hex.EncodeToString(h[:]), int64(len(body)), model.StatusQuarantined, policyResult.Reason, &now, scanResults)
+		adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+			Error:    "quarantined",
+			Artifact: artifactID,
+			Reason:   policyResult.Reason,
+		})
+		return
+	}
+
+	// Allow — persist artifact as clean and create/update tag.
+	_ = a.persistArtifact(artifactID, scanArtifact, hex.EncodeToString(h[:]), int64(len(body)), model.StatusClean, "", nil, scanResults)
+	_ = UpsertTag(a.db, repo.ID, ref, manifestDigest, artifactID)
+
+	w.Header().Set("Docker-Content-Digest", manifestDigest)
+	w.Header().Set("Location", fmt.Sprintf("/v2/%s/manifests/%s", name, ref))
+	w.WriteHeader(http.StatusCreated)
 }
 
 // handleManifest runs the full scan-on-pull pipeline for manifest requests.
