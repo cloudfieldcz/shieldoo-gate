@@ -57,3 +57,27 @@ func TestInitDB_Idempotent(t *testing.T) {
 		assert.NoError(t, err)
 	}
 }
+
+func TestInitDB_Migration003_DockerRepositories(t *testing.T) {
+	db, err := InitDB(":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Verify docker_repositories table exists
+	var count int
+	err = db.Get(&count, "SELECT COUNT(*) FROM docker_repositories")
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+
+	// Verify schema_migrations table exists
+	err = db.Get(&count, "SELECT COUNT(*) FROM schema_migrations")
+	require.NoError(t, err)
+
+	// Run migrations again (simulates restart) — should not fail
+	migrations, err := readMigrations()
+	require.NoError(t, err)
+	for i, sql := range migrations {
+		_, err := db.Exec(sql)
+		require.NoError(t, err, "migration %d failed on re-run", i+1)
+	}
+}

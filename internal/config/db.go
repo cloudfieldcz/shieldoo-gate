@@ -4,6 +4,7 @@ import (
 	"embed"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
@@ -55,17 +56,33 @@ func InitDB(dbPath string) (*sqlx.DB, error) {
 		}
 	}
 
-	// Run all migrations in order
+	// Ensure schema_migrations table exists (bootstrap).
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+		version    INTEGER PRIMARY KEY,
+		applied_at DATETIME NOT NULL
+	)`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("config: creating schema_migrations: %w", err)
+	}
+
+	// Run only unapplied migrations.
 	migrations, err := readMigrations()
 	if err != nil {
 		db.Close()
 		return nil, err
 	}
 	for i, sql := range migrations {
+		version := i + 1
+		var count int
+		_ = db.Get(&count, "SELECT COUNT(*) FROM schema_migrations WHERE version = ?", version)
+		if count > 0 {
+			continue // already applied
+		}
 		if _, err := db.Exec(sql); err != nil {
 			db.Close()
-			return nil, fmt.Errorf("config: running migration %d: %w", i+1, err)
+			return nil, fmt.Errorf("config: running migration %d: %w", version, err)
 		}
+		db.Exec("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)", version, time.Now().UTC())
 	}
 
 	return db, nil
