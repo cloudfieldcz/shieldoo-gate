@@ -7,6 +7,9 @@ import type {
   StatsSummary,
   HealthStatus,
   PaginatedResponse,
+  DockerRepository,
+  DockerTag,
+  DockerRegistry,
 } from './types'
 
 const api = axios.create({
@@ -73,4 +76,28 @@ export const overridesApi = {
 
 export const healthApi = {
   check: () => api.get<HealthStatus>('/health').then((r) => r.data),
+}
+
+export const dockerApi = {
+  listRepositories: (registry?: string) =>
+    api
+      .get<DockerRepository[]>('/docker/repositories', {
+        params: registry ? { registry } : {},
+      })
+      .then((r) => r.data),
+
+  listTags: (repoId: number) =>
+    api.get<DockerTag[]>(`/docker/repositories/${repoId}/tags`).then((r) => r.data),
+
+  createTag: (repoId: number, data: { tag: string; manifest_digest: string }) =>
+    api.post<DockerTag>(`/docker/repositories/${repoId}/tags`, data).then((r) => r.data),
+
+  deleteTag: (repoId: number, tag: string) =>
+    api.delete(`/docker/repositories/${repoId}/tags/${encodeURIComponent(tag)}`),
+
+  triggerSync: (repoId: number) =>
+    api.post(`/docker/sync/${repoId}`),
+
+  listRegistries: () =>
+    api.get<DockerRegistry[]>('/docker/registries').then((r) => r.data),
 }

@@ -82,3 +82,25 @@ export interface PaginatedResponse<T> {
 
 export type ArtifactWithStatus = Artifact & { status: ArtifactStatus }
 export type ArtifactDetail = Artifact & { status: ArtifactStatus; scan_results: ScanResult[] }
+
+export interface DockerRepository {
+  id: number
+  registry: string
+  name: string
+  is_internal: boolean
+  created_at: string
+  last_synced_at: string | null
+  sync_enabled: boolean
+}
+
+export interface DockerTag {
+  tag: string
+  manifest_digest: string
+  created_at: string
+  updated_at: string
+}
+
+export interface DockerRegistry {
+  host: string
+  url: string
+}
