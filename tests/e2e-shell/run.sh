@@ -29,6 +29,7 @@ source "${SCRIPT_DIR}/test_pypi.sh"
 source "${SCRIPT_DIR}/test_npm.sh"
 source "${SCRIPT_DIR}/test_nuget.sh"
 source "${SCRIPT_DIR}/test_docker.sh"
+source "${SCRIPT_DIR}/test_docker_registry.sh"
 source "${SCRIPT_DIR}/test_api.sh"
 
 check_prereqs() {
@@ -98,6 +99,7 @@ main() {
     test_npm
     test_nuget
     test_docker
+    test_docker_registry
     test_api
 
     # 6. Summary
