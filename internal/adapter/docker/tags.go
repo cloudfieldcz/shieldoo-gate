@@ -13,15 +13,21 @@ type DockerTag struct {
 	RepoID         int64     `db:"repo_id" json:"repo_id"`
 	Tag            string    `db:"tag" json:"tag"`
 	ManifestDigest string    `db:"manifest_digest" json:"manifest_digest"`
-	ArtifactID     string    `db:"artifact_id" json:"artifact_id"`
+	ArtifactID     *string   `db:"artifact_id" json:"artifact_id"`
 	CreatedAt      time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt      time.Time `db:"updated_at" json:"updated_at"`
 }
 
 // UpsertTag creates or updates a tag for a repository.
 // Uses INSERT OR REPLACE on the unique (repo_id, tag) constraint.
+// An empty artifactID is stored as NULL to satisfy the FK constraint.
 func UpsertTag(db *sqlx.DB, repoID int64, tag, manifestDigest, artifactID string) error {
 	now := time.Now().UTC()
+	// Store empty artifact_id as NULL to avoid FK constraint violations.
+	var artID interface{} = artifactID
+	if artifactID == "" {
+		artID = nil
+	}
 	_, err := db.Exec(
 		`INSERT INTO docker_tags (repo_id, tag, manifest_digest, artifact_id, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?)
@@ -29,7 +35,7 @@ func UpsertTag(db *sqlx.DB, repoID int64, tag, manifestDigest, artifactID string
 		     manifest_digest = excluded.manifest_digest,
 		     artifact_id = excluded.artifact_id,
 		     updated_at = excluded.updated_at`,
-		repoID, tag, manifestDigest, artifactID, now, now,
+		repoID, tag, manifestDigest, artID, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("docker: upserting tag %s: %w", tag, err)
