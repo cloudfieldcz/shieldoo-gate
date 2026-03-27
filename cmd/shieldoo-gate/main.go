@@ -154,13 +154,11 @@ func main() {
 	pypiUpstream := fallback(cfg.Upstreams.PyPI, "https://pypi.org")
 	npmUpstream := fallback(cfg.Upstreams.NPM, "https://registry.npmjs.org")
 	nugetUpstream := fallback(cfg.Upstreams.NuGet, "https://api.nuget.org")
-	dockerUpstream := fallback(cfg.Upstreams.Docker, "https://registry-1.docker.io")
-
 	// Init all 4 adapters
 	pypiAdapter := pypi.NewPyPIAdapter(db, cacheStore, scanEngine, policyEngine, pypiUpstream)
 	npmAdapter := npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine, npmUpstream)
 	nugetAdapter := nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, nugetUpstream)
-	dockerAdapter := docker.NewDockerAdapter(db, cacheStore, scanEngine, policyEngine, dockerUpstream)
+	dockerAdapter := docker.NewDockerAdapter(db, cacheStore, scanEngine, policyEngine, cfg.Upstreams.Docker)
 
 	// Init admin API server
 	apiServer := api.NewServer(db, cacheStore, scanEngine, policyEngine)

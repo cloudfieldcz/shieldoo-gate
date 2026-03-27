@@ -32,10 +32,41 @@ type PortsConfig struct {
 }
 
 type UpstreamsConfig struct {
-	PyPI   string `mapstructure:"pypi"`
-	NPM    string `mapstructure:"npm"`
-	NuGet  string `mapstructure:"nuget"`
-	Docker string `mapstructure:"docker"`
+	PyPI   string               `mapstructure:"pypi"`
+	NPM    string               `mapstructure:"npm"`
+	NuGet  string               `mapstructure:"nuget"`
+	Docker DockerUpstreamConfig `mapstructure:"docker"`
+}
+
+type DockerUpstreamConfig struct {
+	DefaultRegistry   string                `mapstructure:"default_registry"`
+	AllowedRegistries []DockerRegistryEntry `mapstructure:"allowed_registries"`
+	Sync              DockerSyncConfig      `mapstructure:"sync"`
+	Push              DockerPushConfig      `mapstructure:"push"`
+}
+
+type DockerRegistryEntry struct {
+	Host string              `mapstructure:"host"`
+	URL  string              `mapstructure:"url"`
+	Auth *DockerRegistryAuth `mapstructure:"auth"`
+}
+
+// DockerRegistryAuth holds per-registry credentials.
+// TokenEnv references an environment variable — credentials are NEVER stored in config plaintext.
+type DockerRegistryAuth struct {
+	Type     string `mapstructure:"type"`      // "bearer" or "basic"
+	TokenEnv string `mapstructure:"token_env"` // env var name containing the token/password
+}
+
+type DockerSyncConfig struct {
+	Enabled        bool   `mapstructure:"enabled"`
+	Interval       string `mapstructure:"interval"`
+	RescanInterval string `mapstructure:"rescan_interval"`
+	MaxConcurrent  int    `mapstructure:"max_concurrent"`
+}
+
+type DockerPushConfig struct {
+	Enabled bool `mapstructure:"enabled"`
 }
 
 type CacheConfig struct {

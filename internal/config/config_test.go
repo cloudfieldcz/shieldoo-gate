@@ -25,7 +25,11 @@ upstreams:
   pypi: "https://pypi.org"
   npm: "https://registry.npmjs.org"
   nuget: "https://api.nuget.org"
-  docker: "https://registry-1.docker.io"
+  docker:
+    default_registry: "https://registry-1.docker.io"
+    allowed_registries:
+      - host: "ghcr.io"
+        url: "https://ghcr.io"
 cache:
   backend: "local"
   local:
@@ -121,6 +125,69 @@ log:
 	cfg, err := Load(cfgPath)
 	require.NoError(t, err)
 	assert.Equal(t, "debug", cfg.Log.Level)
+}
+
+func TestLoad_DockerUpstreamsMultiRegistry(t *testing.T) {
+	yaml := `
+server:
+  host: "0.0.0.0"
+ports:
+  pypi: 5000
+  npm: 4873
+  nuget: 5001
+  docker: 5002
+  admin: 8080
+upstreams:
+  pypi: "https://pypi.org"
+  npm: "https://registry.npmjs.org"
+  nuget: "https://api.nuget.org"
+  docker:
+    default_registry: "https://registry-1.docker.io"
+    allowed_registries:
+      - host: "ghcr.io"
+        url: "https://ghcr.io"
+      - host: "quay.io"
+        url: "https://quay.io"
+    sync:
+      enabled: true
+      interval: "6h"
+      rescan_interval: "24h"
+      max_concurrent: 3
+    push:
+      enabled: true
+cache:
+  backend: "local"
+  local:
+    path: "/tmp/test-cache"
+    max_size_gb: 1
+database:
+  backend: "sqlite"
+  sqlite:
+    path: ":memory:"
+scanners:
+  timeout: "30s"
+policy:
+  block_if_verdict: "MALICIOUS"
+  quarantine_if_verdict: "SUSPICIOUS"
+  minimum_confidence: 0.7
+log:
+  level: "info"
+  format: "json"
+`
+	tmpFile := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(tmpFile, []byte(yaml), 0644))
+
+	cfg, err := Load(tmpFile)
+	require.NoError(t, err)
+
+	assert.Equal(t, "https://registry-1.docker.io", cfg.Upstreams.Docker.DefaultRegistry)
+	require.Len(t, cfg.Upstreams.Docker.AllowedRegistries, 2)
+	assert.Equal(t, "ghcr.io", cfg.Upstreams.Docker.AllowedRegistries[0].Host)
+	assert.Equal(t, "https://ghcr.io", cfg.Upstreams.Docker.AllowedRegistries[0].URL)
+	assert.True(t, cfg.Upstreams.Docker.Sync.Enabled)
+	assert.Equal(t, "6h", cfg.Upstreams.Docker.Sync.Interval)
+	assert.Equal(t, 3, cfg.Upstreams.Docker.Sync.MaxConcurrent)
+	assert.True(t, cfg.Upstreams.Docker.Push.Enabled)
 }
 
 func TestValidate_MissingCachePath_ReturnsError(t *testing.T) {

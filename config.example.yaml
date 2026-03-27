@@ -14,7 +14,20 @@ upstreams:
   pypi: "https://pypi.org"
   npm: "https://registry.npmjs.org"
   nuget: "https://api.nuget.org"
-  docker: "https://registry-1.docker.io"
+  docker:
+    default_registry: "https://registry-1.docker.io"
+    allowed_registries:
+      - host: "ghcr.io"
+        url: "https://ghcr.io"
+      - host: "quay.io"
+        url: "https://quay.io"
+    sync:
+      enabled: true
+      interval: "6h"
+      rescan_interval: "24h"
+      max_concurrent: 3
+    push:
+      enabled: false
 
 cache:
   backend: "local"
