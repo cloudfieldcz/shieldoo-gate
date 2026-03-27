@@ -52,8 +52,7 @@ func TestDockerAdapter_Ecosystem_ReturnsDocker(t *testing.T) {
 
 func TestDockerAdapter_V2Check_Returns200WithHeader(t *testing.T) {
 	a, _, _, _ := setupTestDocker(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Docker-Distribution-API-Version", "registry/2.0")
-		w.WriteHeader(http.StatusOK)
+		t.Fatal("upstream should not be called for /v2/ check")
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/v2/", nil)
