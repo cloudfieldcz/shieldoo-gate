@@ -36,6 +36,13 @@ services:
       BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
     restart: "no"
 
+  push-registry:
+    image: registry:2.8.3
+    container_name: shieldoo-e2e-push-registry
+    ports:
+      - "15003:5000"
+    restart: "no"
+
 volumes:
   e2e-bridge-socket:
   e2e-gate-data:

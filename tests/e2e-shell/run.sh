@@ -33,7 +33,7 @@ source "${SCRIPT_DIR}/test_api.sh"
 
 check_prereqs() {
     local missing=()
-    for cmd in docker curl jq uv node npm; do
+    for cmd in docker curl jq uv node npm crane; do
         if ! command -v "$cmd" &>/dev/null; then
             missing+=("$cmd")
         fi

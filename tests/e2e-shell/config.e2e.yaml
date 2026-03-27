@@ -19,7 +19,22 @@ upstreams:
   pypi: "https://pypi.org"
   npm: "https://registry.npmjs.org"
   nuget: "https://api.nuget.org"
-  docker: "https://registry-1.docker.io"
+  docker:
+    default_registry: "https://registry-1.docker.io"
+    allowed_registries:
+      - host: "gcr.io"
+        url: "https://gcr.io"
+      - host: "ghcr.io"
+        url: "https://ghcr.io"
+      - host: "cgr.dev"
+        url: "https://cgr.dev"
+    sync:
+      enabled: true
+      interval: "1h"
+      rescan_interval: "2h"
+      max_concurrent: 2
+    push:
+      enabled: true
 
 cache:
   backend: "local"
