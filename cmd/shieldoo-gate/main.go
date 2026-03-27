@@ -187,6 +187,14 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Start Docker sync service (if enabled). Uses ctx for graceful shutdown.
+	if cfg.Upstreams.Docker.Sync.Enabled {
+		resolver := docker.NewRegistryResolver(cfg.Upstreams.Docker)
+		syncSvc := docker.NewSyncService(db, cacheStore, scanEngine, policyEngine, resolver, cfg.Upstreams.Docker.Sync)
+		go syncSvc.Start(ctx)
+		log.Info().Msg("docker sync service enabled")
+	}
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
