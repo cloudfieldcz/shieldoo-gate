@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -50,6 +51,8 @@ type DockerAdapter struct {
 }
 
 // NewDockerAdapter creates and wires a DockerAdapter.
+// If cfg.Push.Enabled, automatically initializes push support with a
+// BlobStore at os.TempDir()/shieldoo-gate-blobs.
 func NewDockerAdapter(
 	db *sqlx.DB,
 	cacheStore cache.CacheStore,
@@ -67,6 +70,11 @@ func NewDockerAdapter(
 		cfg:        cfg,
 		httpClient: httpClient,
 		tokenExch:  newTokenExchanger(httpClient),
+	}
+	if cfg.Push.Enabled {
+		blobPath := filepath.Join(os.TempDir(), "shieldoo-gate-blobs")
+		a.blobStore = NewBlobStore(blobPath)
+		a.pushHandler = newPushHandler(a.blobStore)
 	}
 	a.router = a.buildRouter()
 	return a
