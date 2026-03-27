@@ -17,7 +17,8 @@ import (
 // uploadSession tracks an in-progress blob upload.
 type uploadSession struct {
 	uuid string
-	name string // image name
+	name string   // image name
+	data []byte   // accumulated data from PATCH chunks
 }
 
 // pushHandler manages OCI push operations.
@@ -44,7 +45,36 @@ func (ph *pushHandler) handleBlobUploadInit(w http.ResponseWriter, r *http.Reque
 	w.WriteHeader(http.StatusAccepted)
 }
 
+// handleBlobUploadChunk handles PATCH /v2/{name}/blobs/uploads/{uuid}
+// Accumulates chunked upload data into the session.
+func (ph *pushHandler) handleBlobUploadChunk(w http.ResponseWriter, r *http.Request, name, uploadUUID string) {
+	val, ok := ph.sessions.Load(uploadUUID)
+	if !ok {
+		http.Error(w, "upload session not found", http.StatusNotFound)
+		return
+	}
+	session := val.(*uploadSession)
+
+	const maxBlobSize = 2 << 30 // 2 GB
+	chunk, err := io.ReadAll(io.LimitReader(r.Body, maxBlobSize))
+	if err != nil {
+		log.Error().Err(err).Msg("docker push: failed to read chunk")
+		http.Error(w, "failed to read chunk", http.StatusInternalServerError)
+		return
+	}
+
+	startOffset := len(session.data)
+	session.data = append(session.data, chunk...)
+	ph.sessions.Store(uploadUUID, session)
+
+	w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/uploads/%s", name, uploadUUID))
+	w.Header().Set("Docker-Upload-UUID", uploadUUID)
+	w.Header().Set("Range", fmt.Sprintf("%d-%d", startOffset, len(session.data)-1))
+	w.WriteHeader(http.StatusAccepted)
+}
+
 // handleBlobUploadComplete handles PUT /v2/{name}/blobs/uploads/{uuid}?digest=sha256:...
+// Finalizes upload — combines accumulated PATCH data with any PUT body, verifies digest, stores.
 func (ph *pushHandler) handleBlobUploadComplete(w http.ResponseWriter, r *http.Request, name, uploadUUID string) {
 	digest := r.URL.Query().Get("digest")
 	if digest == "" {
@@ -55,20 +85,24 @@ func (ph *pushHandler) handleBlobUploadComplete(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	_, ok := ph.sessions.LoadAndDelete(uploadUUID)
+	val, ok := ph.sessions.LoadAndDelete(uploadUUID)
 	if !ok {
 		http.Error(w, "upload session not found", http.StatusNotFound)
 		return
 	}
+	session := val.(*uploadSession)
 
-	// Read blob body (monolithic upload).
+	// Read any remaining body from the PUT request (monolithic or final chunk).
 	const maxBlobSize = 2 << 30 // 2 GB
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxBlobSize))
+	putBody, err := io.ReadAll(io.LimitReader(r.Body, maxBlobSize))
 	if err != nil {
 		log.Error().Err(err).Msg("docker push: failed to read blob body")
 		http.Error(w, "failed to read blob", http.StatusInternalServerError)
 		return
 	}
+
+	// Combine accumulated PATCH data with PUT body.
+	body := append(session.data, putBody...)
 
 	// Verify digest.
 	h := sha256.Sum256(body)

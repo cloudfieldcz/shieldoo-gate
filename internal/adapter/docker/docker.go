@@ -273,6 +273,10 @@ func (a *DockerAdapter) handleV2WildcardWrite(w http.ResponseWriter, r *http.Req
 			// POST /v2/{name}/blobs/uploads/ → initiate upload
 			a.pushHandler.handleBlobUploadInit(w, r, name)
 			return
+		case suffix != "" && r.Method == http.MethodPatch:
+			// PATCH /v2/{name}/blobs/uploads/{uuid} → chunked upload data
+			a.pushHandler.handleBlobUploadChunk(w, r, name, suffix)
+			return
 		case suffix != "" && r.Method == http.MethodPut:
 			// PUT /v2/{name}/blobs/uploads/{uuid}?digest=... → complete upload
 			a.pushHandler.handleBlobUploadComplete(w, r, name, suffix)
