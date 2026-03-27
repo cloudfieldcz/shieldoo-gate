@@ -185,6 +185,24 @@ The Docker adapter supports pulling from **multiple upstream registries**. The f
 
 **SECURITY:** Client `Authorization` headers are **never forwarded** to upstream registries. Gate authenticates to each upstream independently using per-registry credentials from config (`auth.token_env` environment variable reference).
 
+### Push Support (Internal Images)
+
+When `push.enabled: true` is set in config, the Docker adapter supports `docker push` for **internal namespaces** (images whose first path segment does not contain a dot or colon). Push to upstream registry namespaces (e.g. `ghcr.io/...`) is always rejected.
+
+**Push flow:**
+1. Client initiates blob upload (`POST /v2/{name}/blobs/uploads/`) and receives a session UUID.
+2. Client uploads blob data with digest (`PUT /v2/{name}/blobs/uploads/{uuid}?digest=sha256:...`). The adapter verifies the digest matches the uploaded content.
+3. Client pushes the manifest (`PUT /v2/{name}/manifests/{ref}`). The adapter **scans the manifest before returning success** (Security Invariant #2).
+4. If the scan passes policy evaluation, the manifest is stored, the tag is recorded in `docker_tags`, and `201 Created` is returned.
+5. If the scan fails, the push is rejected with `403 Forbidden`.
+
+**Internal namespace detection:**
+- Images with a slash where the first segment has no dot/colon are internal (e.g. `myteam/myapp`).
+- Bare names without a slash (e.g. `nginx`) are NOT pushable (they resolve to Docker Hub).
+- Registry-prefixed names (e.g. `ghcr.io/user/app`) are NOT pushable.
+
+**Blob storage:** Pushed blobs are stored on the local filesystem at `{blob_path}/blobs/{algo}/{prefix}/{hex}` with two-level directory sharding. Path traversal in digest values is rejected.
+
 ### Routes
 
 | Method | Path | Description |
@@ -192,6 +210,10 @@ The Docker adapter supports pulling from **multiple upstream registries**. The f
 | `GET` | `/v2/` | Version check — responds locally with `Docker-Distribution-API-Version: registry/2.0` |
 | `GET` | `/v2/{name}/manifests/{reference}` | Pull manifest (by tag or digest) — triggers scan pipeline |
 | `GET` | `/v2/{name}/blobs/{digest}` | Pull layer blob — proxied to resolved upstream |
+| `POST` | `/v2/{name}/blobs/uploads/` | Initiate blob upload (push) — returns 202 with Location header |
+| `PUT` | `/v2/{name}/blobs/uploads/{uuid}` | Complete monolithic blob upload with digest verification |
+| `PUT` | `/v2/{name}/manifests/{reference}` | Push manifest — scans before accepting |
+| `HEAD` | `/v2/{name}/blobs/{digest}` | Check blob existence (internal or upstream proxy) |
 
 ### How It Works
 

@@ -9,6 +9,7 @@ Shieldoo Gate uses **SQLite** (WAL mode, foreign keys enabled) with embedded SQL
 - `internal/config/migrations/001_init.sql` — Core tables (artifacts, scan_results, artifact_status, audit_log, threat_feed)
 - `internal/config/migrations/002_policy_overrides.sql` — Policy overrides table
 - `internal/config/migrations/003_docker_registry.sql` — Docker repositories table + schema_migrations bootstrap
+- `internal/config/migrations/004_docker_tags.sql` — Docker tags table (tag-to-manifest-digest mapping for pushed images)
 
 SQLite PRAGMAs applied at startup:
 ```sql
@@ -244,6 +245,40 @@ User-created exceptions that allow artifacts through the policy engine despite s
 **Go struct:** `model.PolicyOverride` (`internal/model/override.go`)
 
 Key method: `Matches(ecosystem, name, version string) bool` — checks if the override applies to a given artifact, accounting for scope, revocation, and expiration.
+
+### `docker_repositories`
+
+Tracks known Docker image repositories, both upstream (proxied) and internal (pushed).
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER PK AUTOINCREMENT | Repository ID |
+| `registry` | TEXT NOT NULL DEFAULT '' | Registry hostname (empty for internal) |
+| `name` | TEXT NOT NULL | Image name (e.g. `library/nginx`, `myteam/myapp`) |
+| `is_internal` | INTEGER NOT NULL DEFAULT 0 | 1 for pushed (internal) images |
+| `created_at` | DATETIME NOT NULL | Creation timestamp |
+| `last_synced_at` | DATETIME | Last sync timestamp |
+| `sync_enabled` | INTEGER NOT NULL DEFAULT 1 | Whether scheduled sync is enabled |
+
+**Go struct:** `docker.DockerRepository` (`internal/adapter/docker/repos.go`)
+
+### `docker_tags`
+
+Maps tag names to manifest digests for Docker repositories. Used primarily for pushed images.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER PK AUTOINCREMENT | Tag ID |
+| `repo_id` | INTEGER NOT NULL FK | References `docker_repositories.id` |
+| `tag` | TEXT NOT NULL | Tag name (e.g. `v1.0`, `latest`) |
+| `manifest_digest` | TEXT NOT NULL | SHA256 digest of the manifest |
+| `artifact_id` | TEXT FK | References `artifacts.id` (nullable) |
+| `created_at` | DATETIME NOT NULL | Creation timestamp |
+| `updated_at` | DATETIME NOT NULL | Last update timestamp |
+
+**Go struct:** `docker.DockerTag` (`internal/adapter/docker/tags.go`)
+
+**Unique constraint:** `(repo_id, tag)` — each tag name is unique per repository. Pushing the same tag again updates the digest (like `docker push myapp:latest`).
 
 ## Artifact ID Convention
 
