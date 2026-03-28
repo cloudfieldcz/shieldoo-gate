@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/auth"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 )
 
@@ -280,10 +281,11 @@ func (s *Server) handleRescanArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userEmail := userEmailFromRequest(r)
 	_, err = tx.ExecContext(r.Context(),
-		`INSERT INTO audit_log (ts, event_type, artifact_id, reason)
-		 VALUES (?, ?, ?, 'manual rescan via API')`,
-		now, string(model.EventRescanQueued), id)
+		`INSERT INTO audit_log (ts, event_type, artifact_id, reason, user_email)
+		 VALUES (?, ?, ?, 'manual rescan via API', ?)`,
+		now, string(model.EventRescanQueued), id, userEmail)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to write audit log")
 		return
@@ -297,6 +299,7 @@ func (s *Server) handleRescanArtifact(w http.ResponseWriter, r *http.Request) {
 		EventType:  model.EventRescanQueued,
 		ArtifactID: id,
 		Reason:     "manual rescan via API",
+		UserEmail:  userEmail,
 	})
 
 	writeJSON(w, http.StatusAccepted, map[string]string{
@@ -338,10 +341,11 @@ func (s *Server) handleQuarantineArtifact(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	userEmail := userEmailFromRequest(r)
 	_, err = tx.ExecContext(r.Context(),
-		`INSERT INTO audit_log (ts, event_type, artifact_id, reason)
-		 VALUES (?, 'QUARANTINED', ?, 'manual quarantine via API')`,
-		now, id)
+		`INSERT INTO audit_log (ts, event_type, artifact_id, reason, user_email)
+		 VALUES (?, 'QUARANTINED', ?, 'manual quarantine via API', ?)`,
+		now, id, userEmail)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to write audit log")
 		return
@@ -355,6 +359,7 @@ func (s *Server) handleQuarantineArtifact(w http.ResponseWriter, r *http.Request
 		EventType:  model.EventQuarantined,
 		ArtifactID: id,
 		Reason:     "manual quarantine via API",
+		UserEmail:  userEmail,
 	})
 
 	writeJSON(w, http.StatusOK, map[string]string{
@@ -395,10 +400,11 @@ func (s *Server) handleReleaseArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userEmail := userEmailFromRequest(r)
 	_, err = tx.ExecContext(r.Context(),
-		`INSERT INTO audit_log (ts, event_type, artifact_id, reason)
-		 VALUES (?, 'RELEASED', ?, 'manual release via API')`,
-		now, id)
+		`INSERT INTO audit_log (ts, event_type, artifact_id, reason, user_email)
+		 VALUES (?, 'RELEASED', ?, 'manual release via API', ?)`,
+		now, id, userEmail)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to write audit log")
 		return
@@ -412,10 +418,20 @@ func (s *Server) handleReleaseArtifact(w http.ResponseWriter, r *http.Request) {
 		EventType:  model.EventReleased,
 		ArtifactID: id,
 		Reason:     "manual release via API",
+		UserEmail:  userEmail,
 	})
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":      "CLEAN",
 		"artifact_id": id,
 	})
+}
+
+// userEmailFromRequest extracts the authenticated user's email from the request context.
+// Returns an empty string when auth is disabled or no user is present.
+func userEmailFromRequest(r *http.Request) string {
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		return user.Email
+	}
+	return ""
 }

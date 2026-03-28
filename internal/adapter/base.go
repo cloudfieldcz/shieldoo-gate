@@ -100,8 +100,8 @@ func WriteAuditLog(db *config.GateDB, entry model.AuditEntry) error {
 		entry.Timestamp = time.Now().UTC()
 	}
 	_, err := db.Exec(
-		`INSERT INTO audit_log (ts, event_type, artifact_id, client_ip, user_agent, reason, metadata_json)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO audit_log (ts, event_type, artifact_id, client_ip, user_agent, reason, metadata_json, user_email)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		entry.Timestamp,
 		entry.EventType,
 		entry.ArtifactID,
@@ -109,6 +109,7 @@ func WriteAuditLog(db *config.GateDB, entry model.AuditEntry) error {
 		entry.UserAgent,
 		entry.Reason,
 		entry.MetadataJSON,
+		entry.UserEmail,
 	)
 	if err != nil {
 		return fmt.Errorf("adapter: writing audit log: %w", err)

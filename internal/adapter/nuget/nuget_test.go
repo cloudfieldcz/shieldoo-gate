@@ -34,7 +34,7 @@ func setupTestNuGet(t *testing.T, upstreamHandler http.HandlerFunc) (*nuget.NuGe
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
 		MinimumConfidence:   0.7,
 	}, nil)
-	return nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL), upstream
+	return nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL, config.TagMutabilityConfig{}), upstream
 }
 
 func TestNuGetAdapter_Ecosystem_ReturnsNuGet(t *testing.T) {

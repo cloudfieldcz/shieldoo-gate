@@ -94,6 +94,11 @@ policy:
   minimum_confidence: 0.7
   allowlist:
     - "pypi:litellm:==1.82.6"
+  tag_mutability:
+    enabled: true
+    action: "warn"
+    exclude_tags: ["latest", "nightly", "dev"]
+    check_on_cache_hit: false
 
 threat_feed:
   enabled: true
@@ -109,6 +114,9 @@ rescan:
 log:
   level: "info"
   format: "json"
+
+auth:
+  enabled: false
 
 alerts:
   webhook:

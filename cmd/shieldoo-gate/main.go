@@ -26,6 +26,7 @@ import (
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/rubygems"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/alert"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/api"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/auth"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/cache"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/cache/local"
 	azureblobcache "github.com/cloudfieldcz/shieldoo-gate/internal/cache/azureblob"
@@ -209,9 +210,10 @@ func main() {
 	rubygemsUpstream := fallback(cfg.Upstreams.RubyGems, "https://rubygems.org")
 	gomodUpstream := fallback(cfg.Upstreams.GoMod, "https://proxy.golang.org")
 	// Init all 7 adapters
-	pypiAdapter := pypi.NewPyPIAdapter(db, cacheStore, scanEngine, policyEngine, pypiUpstream)
-	npmAdapter := npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine, npmUpstream)
-	nugetAdapter := nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, nugetUpstream)
+	tagMutCfg := cfg.Policy.TagMutability
+	pypiAdapter := pypi.NewPyPIAdapter(db, cacheStore, scanEngine, policyEngine, pypiUpstream, tagMutCfg)
+	npmAdapter := npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine, npmUpstream, tagMutCfg)
+	nugetAdapter := nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, nugetUpstream, tagMutCfg)
 	dockerAdapter := docker.NewDockerAdapter(db, cacheStore, scanEngine, policyEngine, cfg.Upstreams.Docker)
 	mavenAdapter := maven.NewMavenAdapter(db, cacheStore, scanEngine, policyEngine, mavenUpstream)
 	rubygemsAdapter := rubygems.NewRubyGemsAdapter(db, cacheStore, scanEngine, policyEngine, rubygemsUpstream)
@@ -220,6 +222,30 @@ func main() {
 	// Init admin API server
 	apiServer := api.NewServer(db, cacheStore, scanEngine, policyEngine)
 	apiServer.SetDockerConfig(cfg.Upstreams.Docker)
+
+	// Init OIDC authentication (if enabled).
+	if cfg.Auth.Enabled {
+		authCfg := auth.AuthConfig{
+			Enabled:         true,
+			IssuerURL:       cfg.Auth.IssuerURL,
+			ClientID:        cfg.Auth.ClientID,
+			ClientSecretEnv: cfg.Auth.ClientSecretEnv,
+			RedirectURL:     cfg.Auth.RedirectURL,
+			Scopes:          cfg.Auth.Scopes,
+		}
+		oidcMw, err := auth.NewOIDCMiddleware(context.Background(), cfg.Auth.IssuerURL, cfg.Auth.ClientID)
+		if err != nil {
+			log.Fatal().Err(err).Msg("failed to initialize OIDC middleware")
+		}
+		authHandlers, err := auth.NewAuthHandlers(authCfg)
+		if err != nil {
+			log.Fatal().Err(err).Msg("failed to initialize auth handlers")
+		}
+		apiServer.SetAuth(oidcMw, authHandlers)
+		log.Info().Str("issuer", cfg.Auth.IssuerURL).Msg("OIDC authentication enabled for admin API")
+	} else {
+		log.Warn().Msg("Admin API is UNAUTHENTICATED. Set auth.enabled=true for production.")
+	}
 
 	host := cfg.Server.Host
 	if host == "" {

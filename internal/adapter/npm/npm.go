@@ -29,13 +29,14 @@ var _ adapter.Adapter = (*NPMAdapter)(nil)
 
 // NPMAdapter proxies the npm Registry API and tarball downloads.
 type NPMAdapter struct {
-	db           *config.GateDB
-	cache        cache.CacheStore
-	scanEngine   *scanner.Engine
-	policyEngine *policy.Engine
-	upstreamURL  string
-	router       http.Handler
-	httpClient   *http.Client
+	db               *config.GateDB
+	cache            cache.CacheStore
+	scanEngine       *scanner.Engine
+	policyEngine     *policy.Engine
+	upstreamURL      string
+	router           http.Handler
+	httpClient       *http.Client
+	tagMutabilityCfg config.TagMutabilityConfig
 }
 
 // NewNPMAdapter creates and wires an NPMAdapter.
@@ -45,14 +46,16 @@ func NewNPMAdapter(
 	scanEngine *scanner.Engine,
 	policyEngine *policy.Engine,
 	upstreamURL string,
+	tagMutabilityCfg config.TagMutabilityConfig,
 ) *NPMAdapter {
 	a := &NPMAdapter{
-		db:           db,
-		cache:        cacheStore,
-		scanEngine:   scanEngine,
-		policyEngine: policyEngine,
-		upstreamURL:  strings.TrimRight(upstreamURL, "/"),
-		httpClient:   &http.Client{Timeout: 5 * time.Minute},
+		db:               db,
+		cache:            cacheStore,
+		scanEngine:       scanEngine,
+		policyEngine:     policyEngine,
+		upstreamURL:      strings.TrimRight(upstreamURL, "/"),
+		httpClient:        &http.Client{Timeout: 5 * time.Minute},
+		tagMutabilityCfg: tagMutabilityCfg,
 	}
 	a.router = a.buildRouter()
 	return a
@@ -207,6 +210,11 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 				Artifact: artifactID,
 				Reason:   status.QuarantineReason,
 			})
+			return
+		}
+		// Tag mutability check on cache hit.
+		if adapter.HandleTagMutability(ctx, a.tagMutabilityCfg, a.db, a.httpClient,
+			string(scanner.EcosystemNPM), pkgName, version, artifactID, upstreamURL, r, w) {
 			return
 		}
 		adapter.UpdateLastAccessedAt(a.db, artifactID)

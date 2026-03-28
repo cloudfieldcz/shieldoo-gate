@@ -123,6 +123,14 @@ policy:
   minimum_confidence: 0.7             # Ignore scanner results below this confidence
   allowlist:                          # Static allowlist (bypasses all scan checks)
     - "pypi:litellm:==1.82.6"        # Format: "ecosystem:name[:==version]"
+  tag_mutability:                     # v1.1: upstream digest change detection
+    enabled: true                     # Enable tag mutability detection
+    action: "warn"                    # "quarantine" | "warn" | "block"
+    exclude_tags:                     # Tags known to be mutable (skip checks)
+      - "latest"
+      - "nightly"
+      - "dev"
+    check_on_cache_hit: false         # Check on every cache hit (adds ~50-200ms latency)
 
 # ─── Threat Feed ───────────────────────────────────────────────────
 threat_feed:
@@ -144,6 +152,23 @@ rescan:
 log:
   level: "info"                # debug | info | warn | error
   format: "json"               # json | text (text uses human-readable console output)
+
+# ─── Authentication (v1.1) ────────────────────────────────────────
+# OIDC authentication for the admin API. When disabled (default),
+# the admin API is fully open — suitable for development/testing.
+# In production, set enabled: true and configure your OIDC provider.
+# NOTE: Proxy endpoints (PyPI, npm, NuGet, Docker, Maven, RubyGems, Go)
+# are NEVER authenticated — they are protected by network segmentation.
+auth:
+  enabled: false                       # Enable OIDC auth for admin API
+  issuer_url: ""                       # OIDC provider URL (e.g. "https://accounts.google.com")
+  client_id: ""                        # OAuth2 client ID from your OIDC provider
+  client_secret_env: "SGW_OIDC_CLIENT_SECRET"  # Env var name holding client secret
+  redirect_url: ""                     # Redirect URL (e.g. "https://gate.example.com:8080/auth/callback")
+  scopes:                              # OIDC scopes to request
+    - "openid"
+    - "email"
+    - "profile"
 
 # ─── Alerts (v1.1) ────────────────────────────────────────────────
 # Real-time notifications for security events.
@@ -225,6 +250,11 @@ Every config key can be overridden via environment variables using the `SGW_` pr
 | `alerts.webhook.url` | `SGW_ALERTS_WEBHOOK_URL` | `SGW_ALERTS_WEBHOOK_URL=https://siem.example.com/api/events` |
 | `alerts.slack.enabled` | `SGW_ALERTS_SLACK_ENABLED` | `SGW_ALERTS_SLACK_ENABLED=true` |
 | `alerts.email.enabled` | `SGW_ALERTS_EMAIL_ENABLED` | `SGW_ALERTS_EMAIL_ENABLED=true` |
+| `auth.enabled` | `SGW_AUTH_ENABLED` | `SGW_AUTH_ENABLED=true` |
+| `auth.issuer_url` | `SGW_AUTH_ISSUER_URL` | `SGW_AUTH_ISSUER_URL=https://accounts.google.com` |
+| `auth.client_id` | `SGW_AUTH_CLIENT_ID` | `SGW_AUTH_CLIENT_ID=xxx.apps.googleusercontent.com` |
+| `auth.client_secret_env` | `SGW_AUTH_CLIENT_SECRET_ENV` | `SGW_AUTH_CLIENT_SECRET_ENV=SGW_OIDC_CLIENT_SECRET` |
+| `auth.redirect_url` | `SGW_AUTH_REDIRECT_URL` | `SGW_AUTH_REDIRECT_URL=https://gate.example.com:8080/auth/callback` |
 | `alerts.email.host` | `SGW_ALERTS_EMAIL_HOST` | `SGW_ALERTS_EMAIL_HOST=smtp.example.com` |
 
 Environment variables take precedence over the YAML config file.
@@ -261,6 +291,7 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 | `ThreatFeedConfig` | `threat_feed` | `Enabled`, `URL`, `RefreshInterval` |
 | `RescanConfig` | `rescan` | `Enabled`, `Interval`, `BatchSize`, `MaxConcurrent` |
 | `LogConfig` | `log` | `Level`, `Format` |
+| `AuthConfig` | `auth` | `Enabled`, `IssuerURL`, `ClientID`, `ClientSecretEnv`, `RedirectURL`, `Scopes` |
 | `AlertsConfig` | `alerts` | `Webhook`, `Slack`, `Email` |
 | `WebhookAlertConfig` | `alerts.webhook` | `Enabled`, `URL`, `SecretEnv`, `AllowInsecure`, `On` |
 | `SlackAlertConfig` | `alerts.slack` | `Enabled`, `WebhookEnv`, `On` |
@@ -279,6 +310,7 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 - When `database.backend` is `postgres`, `database.postgres.dsn` must be non-empty
 - Unknown `database.backend` values are rejected
 - When `rescan.enabled` is `true`: `rescan.interval` must be a valid Go duration, `rescan.batch_size` >= 0, `rescan.max_concurrent` >= 0
+- When `auth.enabled` is `true`: `auth.issuer_url` and `auth.client_id` must be non-empty
 
 ## Rescan Scheduler (v1.1)
 

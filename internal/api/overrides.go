@@ -137,10 +137,11 @@ func (s *Server) handleCreateOverride(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Audit log
+	userEmail := userEmailFromRequest(r)
 	_, err = tx.ExecContext(r.Context(),
-		`INSERT INTO audit_log (ts, event_type, artifact_id, reason)
-		 VALUES (?, ?, ?, ?)`,
-		now, model.EventOverrideCreated, artifactID, req.Reason)
+		`INSERT INTO audit_log (ts, event_type, artifact_id, reason, user_email)
+		 VALUES (?, ?, ?, ?, ?)`,
+		now, model.EventOverrideCreated, artifactID, req.Reason, userEmail)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to write audit log")
 		return
@@ -154,6 +155,7 @@ func (s *Server) handleCreateOverride(w http.ResponseWriter, r *http.Request) {
 		EventType:  model.EventOverrideCreated,
 		ArtifactID: artifactID,
 		Reason:     req.Reason,
+		UserEmail:  userEmail,
 	})
 
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -207,10 +209,11 @@ func (s *Server) handleRevokeOverride(w http.ResponseWriter, r *http.Request) {
 	}
 
 	artifactID := fmt.Sprintf("%s:%s:%s", override.Ecosystem, override.Name, override.Version)
+	userEmail := userEmailFromRequest(r)
 	_, err = tx.ExecContext(r.Context(),
-		`INSERT INTO audit_log (ts, event_type, artifact_id, reason)
-		 VALUES (?, ?, ?, ?)`,
-		now, model.EventOverrideRevoked, artifactID, fmt.Sprintf("revoked override #%d", id))
+		`INSERT INTO audit_log (ts, event_type, artifact_id, reason, user_email)
+		 VALUES (?, ?, ?, ?, ?)`,
+		now, model.EventOverrideRevoked, artifactID, fmt.Sprintf("revoked override #%d", id), userEmail)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to write audit log")
 		return
@@ -224,6 +227,7 @@ func (s *Server) handleRevokeOverride(w http.ResponseWriter, r *http.Request) {
 		EventType:  model.EventOverrideRevoked,
 		ArtifactID: artifactID,
 		Reason:     fmt.Sprintf("revoked override #%d", id),
+		UserEmail:  userEmail,
 	})
 
 	writeJSON(w, http.StatusOK, map[string]string{
@@ -301,10 +305,11 @@ func (s *Server) handleCreateArtifactOverride(w http.ResponseWriter, r *http.Req
 		now, id)
 
 	// Audit log
+	userEmail2 := userEmailFromRequest(r)
 	_, err = tx.ExecContext(r.Context(),
-		`INSERT INTO audit_log (ts, event_type, artifact_id, reason)
-		 VALUES (?, ?, ?, ?)`,
-		now, model.EventOverrideCreated, id, body.Reason)
+		`INSERT INTO audit_log (ts, event_type, artifact_id, reason, user_email)
+		 VALUES (?, ?, ?, ?, ?)`,
+		now, model.EventOverrideCreated, id, body.Reason, userEmail2)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to write audit log")
 		return
@@ -318,6 +323,7 @@ func (s *Server) handleCreateArtifactOverride(w http.ResponseWriter, r *http.Req
 		EventType:  model.EventOverrideCreated,
 		ArtifactID: id,
 		Reason:     body.Reason,
+		UserEmail:  userEmail2,
 	})
 
 	writeJSON(w, http.StatusCreated, map[string]any{

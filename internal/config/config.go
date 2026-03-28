@@ -22,6 +22,18 @@ type Config struct {
 	Rescan     RescanConfig     `mapstructure:"rescan"`
 	Log        LogConfig        `mapstructure:"log"`
 	Alerts     AlertsConfig     `mapstructure:"alerts"`
+	Auth       AuthConfig       `mapstructure:"auth"`
+}
+
+// AuthConfig holds OIDC authentication configuration for the admin API.
+// When Enabled is false (default), the admin API is fully open — backward compatible.
+type AuthConfig struct {
+	Enabled        bool     `mapstructure:"enabled"`
+	IssuerURL      string   `mapstructure:"issuer_url"`
+	ClientID       string   `mapstructure:"client_id"`
+	ClientSecretEnv string  `mapstructure:"client_secret_env"`
+	RedirectURL    string   `mapstructure:"redirect_url"`
+	Scopes         []string `mapstructure:"scopes"`
 }
 
 // RescanConfig controls the periodic artifact rescan scheduler.
@@ -186,10 +198,19 @@ type OSVConfig struct {
 }
 
 type PolicyConfig struct {
-	BlockIfVerdict      string   `mapstructure:"block_if_verdict"`
-	QuarantineIfVerdict string   `mapstructure:"quarantine_if_verdict"`
-	MinimumConfidence   float32  `mapstructure:"minimum_confidence"`
-	Allowlist           []string `mapstructure:"allowlist"`
+	BlockIfVerdict      string              `mapstructure:"block_if_verdict"`
+	QuarantineIfVerdict string              `mapstructure:"quarantine_if_verdict"`
+	MinimumConfidence   float32             `mapstructure:"minimum_confidence"`
+	Allowlist           []string            `mapstructure:"allowlist"`
+	TagMutability       TagMutabilityConfig `mapstructure:"tag_mutability"`
+}
+
+// TagMutabilityConfig controls upstream digest change detection on cache hits.
+type TagMutabilityConfig struct {
+	Enabled         bool     `mapstructure:"enabled"`
+	Action          string   `mapstructure:"action"`             // "quarantine" | "warn" | "block"
+	ExcludeTags     []string `mapstructure:"exclude_tags"`       // e.g., ["latest", "dev", "nightly"]
+	CheckOnCacheHit bool     `mapstructure:"check_on_cache_hit"` // default false; adds latency to cache hits
 }
 
 type ThreatFeedConfig struct {
@@ -306,6 +327,24 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if err := c.validateAuth(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateAuth checks OIDC authentication configuration.
+func (c *Config) validateAuth() error {
+	if !c.Auth.Enabled {
+		return nil
+	}
+	if c.Auth.IssuerURL == "" {
+		return fmt.Errorf("config: auth.issuer_url is required when auth is enabled")
+	}
+	if c.Auth.ClientID == "" {
+		return fmt.Errorf("config: auth.client_id is required when auth is enabled")
+	}
 	return nil
 }
 

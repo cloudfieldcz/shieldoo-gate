@@ -30,13 +30,14 @@ var _ adapter.Adapter = (*PyPIAdapter)(nil)
 
 // PyPIAdapter proxies PyPI Simple API (PEP 503) and package downloads.
 type PyPIAdapter struct {
-	db           *config.GateDB
-	cache        cache.CacheStore
-	scanEngine   *scanner.Engine
-	policyEngine *policy.Engine
-	upstreamURL  string
-	router       http.Handler
-	httpClient   *http.Client
+	db             *config.GateDB
+	cache          cache.CacheStore
+	scanEngine     *scanner.Engine
+	policyEngine   *policy.Engine
+	upstreamURL    string
+	router         http.Handler
+	httpClient     *http.Client
+	tagMutabilityCfg config.TagMutabilityConfig
 }
 
 // NewPyPIAdapter creates and wires a PyPIAdapter.
@@ -46,14 +47,16 @@ func NewPyPIAdapter(
 	scanEngine *scanner.Engine,
 	policyEngine *policy.Engine,
 	upstreamURL string,
+	tagMutabilityCfg config.TagMutabilityConfig,
 ) *PyPIAdapter {
 	a := &PyPIAdapter{
-		db:           db,
-		cache:        cacheStore,
-		scanEngine:   scanEngine,
-		policyEngine: policyEngine,
-		upstreamURL:  strings.TrimRight(upstreamURL, "/"),
-		httpClient:   &http.Client{Timeout: 5 * time.Minute},
+		db:               db,
+		cache:            cacheStore,
+		scanEngine:       scanEngine,
+		policyEngine:     policyEngine,
+		upstreamURL:      strings.TrimRight(upstreamURL, "/"),
+		httpClient:        &http.Client{Timeout: 5 * time.Minute},
+		tagMutabilityCfg: tagMutabilityCfg,
 	}
 	a.router = a.buildRouter()
 	return a
@@ -168,6 +171,11 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 				UserAgent:  r.UserAgent(),
 				Reason:     "quarantined (cached)",
 			})
+			return
+		}
+		// Tag mutability check on cache hit.
+		if adapter.HandleTagMutability(ctx, a.tagMutabilityCfg, a.db, a.httpClient,
+			string(scanner.EcosystemPyPI), pkgName, pkgVersion, artifactID, upstreamURL, r, w) {
 			return
 		}
 		// Serve from cache.

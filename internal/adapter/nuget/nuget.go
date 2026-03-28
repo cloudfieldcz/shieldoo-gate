@@ -29,13 +29,14 @@ var _ adapter.Adapter = (*NuGetAdapter)(nil)
 
 // NuGetAdapter proxies NuGet V3 API requests and scans .nupkg downloads.
 type NuGetAdapter struct {
-	db           *config.GateDB
-	cache        cache.CacheStore
-	scanEngine   *scanner.Engine
-	policyEngine *policy.Engine
-	upstreamURL  string
-	router       http.Handler
-	httpClient   *http.Client
+	db               *config.GateDB
+	cache            cache.CacheStore
+	scanEngine       *scanner.Engine
+	policyEngine     *policy.Engine
+	upstreamURL      string
+	router           http.Handler
+	httpClient       *http.Client
+	tagMutabilityCfg config.TagMutabilityConfig
 }
 
 // NewNuGetAdapter creates and wires a NuGetAdapter.
@@ -45,14 +46,16 @@ func NewNuGetAdapter(
 	scanEngine *scanner.Engine,
 	policyEngine *policy.Engine,
 	upstreamURL string,
+	tagMutabilityCfg config.TagMutabilityConfig,
 ) *NuGetAdapter {
 	a := &NuGetAdapter{
-		db:           db,
-		cache:        cacheStore,
-		scanEngine:   scanEngine,
-		policyEngine: policyEngine,
-		upstreamURL:  strings.TrimRight(upstreamURL, "/"),
-		httpClient:   &http.Client{Timeout: 5 * time.Minute},
+		db:               db,
+		cache:            cacheStore,
+		scanEngine:       scanEngine,
+		policyEngine:     policyEngine,
+		upstreamURL:      strings.TrimRight(upstreamURL, "/"),
+		httpClient:        &http.Client{Timeout: 5 * time.Minute},
+		tagMutabilityCfg: tagMutabilityCfg,
 	}
 	a.router = a.buildRouter()
 	return a
@@ -187,6 +190,11 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 				Artifact: artifactID,
 				Reason:   status.QuarantineReason,
 			})
+			return
+		}
+		// Tag mutability check on cache hit.
+		if adapter.HandleTagMutability(ctx, a.tagMutabilityCfg, a.db, a.httpClient,
+			string(scanner.EcosystemNuGet), pkgID, version, artifactID, upstreamURL, r, w) {
 			return
 		}
 		adapter.UpdateLastAccessedAt(a.db, artifactID)

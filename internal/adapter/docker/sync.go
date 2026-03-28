@@ -207,6 +207,11 @@ func (s *SyncService) syncTag(ctx context.Context, repo DockerRepository, tag Do
 			Reason:       "upstream digest changed",
 			MetadataJSON: metaJSON,
 		})
+		// Record both old and new digests in tag_digest_history.
+		if tag.ManifestDigest != "" {
+			_ = adapter.RecordDigestHistory(s.db, "docker", safeName, tag.Tag, tag.ManifestDigest)
+		}
+		_ = adapter.RecordDigestHistory(s.db, "docker", safeName, tag.Tag, upstreamDigest)
 	}
 
 	// Build artifact for scanning.
