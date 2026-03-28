@@ -281,8 +281,8 @@ func (s *Server) handleRescanArtifact(w http.ResponseWriter, r *http.Request) {
 
 	_, err = tx.ExecContext(r.Context(),
 		`INSERT INTO audit_log (ts, event_type, artifact_id, reason)
-		 VALUES (?, 'RESCAN_QUEUED', ?, 'manual rescan via API')`,
-		now, id)
+		 VALUES (?, ?, ?, 'manual rescan via API')`,
+		now, string(model.EventRescanQueued), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to write audit log")
 		return
