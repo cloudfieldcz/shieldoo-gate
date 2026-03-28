@@ -518,6 +518,10 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 			ClientIP:   r.RemoteAddr,
 			UserAgent:  r.UserAgent(),
 		})
+		// Trigger async sandbox scan (non-blocking).
+		adapter.TriggerAsyncScan(r.Context(), scanner.Artifact{
+			ID: artifactID, Ecosystem: scanner.EcosystemDocker, Name: safeName, Version: ref, LocalPath: cachedPath,
+		}, cachedPath, a.db, a.policyEng)
 		return
 	}
 
@@ -708,6 +712,9 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 	w.Header().Set("X-Shieldoo-Scanned", "true")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, bytes.NewReader(manifestBytes))
+
+	// Trigger async sandbox scan (non-blocking).
+	adapter.TriggerAsyncScan(r.Context(), scanArtifact, scanArtifact.LocalPath, a.db, a.policyEng)
 }
 
 // fetchManifest downloads the manifest from the upstream registry.

@@ -16,15 +16,50 @@ import (
 	"github.com/cloudfieldcz/shieldoo-gate/internal/alert"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/policy"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
 )
 
 // globalAlerter holds the package-level alerter set during initialization.
 var globalAlerter atomic.Pointer[alert.Alerter]
 
+// globalAsyncScanner holds the package-level async scanner (e.g. sandbox) set during initialization.
+var globalAsyncScanner atomic.Pointer[scanner.AsyncScanner]
+
 // SetAlerter stores the alerter for use by WriteAuditLog and DispatchAlert.
 func SetAlerter(a alert.Alerter) {
 	globalAlerter.Store(&a)
+}
+
+// SetAsyncScanner stores the async scanner (e.g. sandbox) for use by TriggerAsyncScan.
+func SetAsyncScanner(s scanner.AsyncScanner) {
+	globalAsyncScanner.Store(&s)
+}
+
+// TriggerAsyncScan fires an async sandbox scan after an artifact is served.
+// Non-blocking, safe to call when no async scanner is configured.
+func TriggerAsyncScan(ctx context.Context, artifact scanner.Artifact, localPath string, db *config.GateDB, policyEngine *policy.Engine) {
+	ptr := globalAsyncScanner.Load()
+	if ptr == nil {
+		return
+	}
+	s := *ptr
+	s.ScanAsync(ctx, artifact, localPath, func(result scanner.ScanResult) {
+		if result.Verdict == scanner.VerdictMalicious {
+			description := "sandbox behavioral analysis detected malicious behavior"
+			if len(result.Findings) > 0 {
+				description = "sandbox behavioral analysis: " + result.Findings[0].Description
+			}
+			_, _ = db.Exec(
+				"UPDATE artifact_status SET status = 'QUARANTINED', quarantine_reason = ?, quarantined_at = CURRENT_TIMESTAMP WHERE artifact_id = ?",
+				description, artifact.ID)
+			_ = WriteAuditLog(db, model.AuditEntry{
+				EventType:  model.EventQuarantined,
+				ArtifactID: artifact.ID,
+				Reason:     "sandbox behavioral analysis detected malicious behavior",
+			})
+		}
+	})
 }
 
 // DispatchAlert sends an alert without writing to audit_log.

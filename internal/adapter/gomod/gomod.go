@@ -327,6 +327,10 @@ func (a *GoModAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 			ClientIP:   r.RemoteAddr,
 			UserAgent:  r.UserAgent(),
 		})
+		// Trigger async sandbox scan (non-blocking).
+		adapter.TriggerAsyncScan(r.Context(), scanner.Artifact{
+			ID: artifactID, Ecosystem: scanner.EcosystemGo, Name: parsed.modulePath, Version: parsed.version, LocalPath: cachedPath,
+		}, cachedPath, a.db, a.policyEngine)
 		return
 	}
 
@@ -460,6 +464,9 @@ func (a *GoModAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 	})
 	w.Header().Set("Content-Type", "application/zip")
 	http.ServeFile(w, r, tmpPath)
+
+	// Trigger async sandbox scan (non-blocking).
+	adapter.TriggerAsyncScan(r.Context(), scanArtifact, tmpPath, a.db, a.policyEngine)
 }
 
 // persistArtifact writes the artifact, status, and scan results to the DB.

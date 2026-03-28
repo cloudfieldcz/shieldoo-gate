@@ -205,6 +205,10 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 			ClientIP:   r.RemoteAddr,
 			UserAgent:  r.UserAgent(),
 		})
+		// Trigger async sandbox scan (non-blocking).
+		adapter.TriggerAsyncScan(r.Context(), scanner.Artifact{
+			ID: artifactID, Ecosystem: scanner.EcosystemNuGet, Name: pkgID, Version: version, LocalPath: cachedPath,
+		}, cachedPath, a.db, a.policyEngine)
 		return
 	}
 
@@ -303,6 +307,9 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 		UserAgent:  r.UserAgent(),
 	})
 	http.ServeFile(w, r, tmpPath)
+
+	// Trigger async sandbox scan (non-blocking).
+	adapter.TriggerAsyncScan(r.Context(), scanArtifact, tmpPath, a.db, a.policyEngine)
 }
 
 // persistArtifact writes artifact, status, and scan results to the DB.

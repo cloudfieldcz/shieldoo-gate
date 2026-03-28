@@ -85,6 +85,15 @@ uv pip compile requirements.in -o requirements.txt  # to generate pinned deps
 - `github.com/google/go-containerregistry` — OCI/Docker registry client
 - `github.com/prometheus/client_golang` — metrics
 - `github.com/stretchr/testify` — test assertions
+- `github.com/coreos/go-oidc/v3` — OIDC discovery + JWT validation
+- `golang.org/x/oauth2` — OAuth2 client
+- `golang.org/x/mod/module` — Go module path encoding
+- `github.com/lib/pq` — PostgreSQL driver
+- `github.com/aws/aws-sdk-go-v2` — AWS S3 client
+- `github.com/Azure/azure-sdk-for-go/sdk/storage/azblob` — Azure Blob Storage
+- `cloud.google.com/go/storage` — Google Cloud Storage
+- `golang.org/x/time/rate` — token-bucket rate limiter
+- `golang.org/x/sync/semaphore` — weighted semaphore
 
 ### Frontend
 

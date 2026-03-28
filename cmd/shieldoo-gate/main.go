@@ -159,7 +159,9 @@ func main() {
 			log.Info().Str("runtime", cfg.Scanners.Sandbox.RuntimeBinary).Msg("sandbox scanner enabled (async)")
 		}
 	}
-	_ = sandboxScanner // used by adapters for async scanning
+	if sandboxScanner != nil {
+		adapter.SetAsyncScanner(sandboxScanner)
+	}
 
 	// Init policy engine from config
 	policyEngine := policy.NewEngine(policy.EngineConfig{

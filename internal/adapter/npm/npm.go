@@ -225,6 +225,10 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 			ClientIP:   r.RemoteAddr,
 			UserAgent:  r.UserAgent(),
 		})
+		// Trigger async sandbox scan (non-blocking).
+		adapter.TriggerAsyncScan(r.Context(), scanner.Artifact{
+			ID: artifactID, Ecosystem: scanner.EcosystemNPM, Name: pkgName, Version: version, LocalPath: cachedPath,
+		}, cachedPath, a.db, a.policyEngine)
 		return
 	}
 
@@ -323,6 +327,9 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 		UserAgent:  r.UserAgent(),
 	})
 	http.ServeFile(w, r, tmpPath)
+
+	// Trigger async sandbox scan (non-blocking).
+	adapter.TriggerAsyncScan(r.Context(), scanArtifact, tmpPath, a.db, a.policyEngine)
 }
 
 // persistArtifact writes artifact, status, and scan results to the DB.

@@ -318,6 +318,10 @@ func (a *MavenAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 			ClientIP:   r.RemoteAddr,
 			UserAgent:  r.UserAgent(),
 		})
+		// Trigger async sandbox scan (non-blocking).
+		adapter.TriggerAsyncScan(r.Context(), scanner.Artifact{
+			ID: artifactID, Ecosystem: scanner.EcosystemMaven, Name: parsed.groupID + ":" + parsed.artifactID, Version: parsed.version, LocalPath: cachedPath,
+		}, cachedPath, a.db, a.policyEngine)
 		return
 	}
 
@@ -449,6 +453,9 @@ func (a *MavenAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 		UserAgent:  r.UserAgent(),
 	})
 	http.ServeFile(w, r, tmpPath)
+
+	// Trigger async sandbox scan (non-blocking).
+	adapter.TriggerAsyncScan(r.Context(), scanArtifact, tmpPath, a.db, a.policyEngine)
 }
 
 // persistArtifact writes the artifact, status, and scan results to the DB.
