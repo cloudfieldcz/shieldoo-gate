@@ -16,6 +16,7 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
 - [Protocol Adapters](adapters.md) — PyPI, npm, NuGet, Docker proxy implementations and routing
 - [Policy Engine](policy.md) — evaluation order, overrides, allowlists, aggregation rules, examples
 - [Configuration](configuration.md) — full `config.yaml` reference, environment variables, Go structs
+  - [Alerts](configuration.md#alerts-v11) — webhook, Slack, and email notification channels
 - [Deployment](deployment.md) — Docker Compose, local development, client configuration, testing
 
 ### Reference
@@ -47,6 +48,7 @@ Shieldoo Gate Protocol Adapter
 | **Policy Engine** | Block / quarantine / warn / allow rules with allowlists |
 | **Policy Overrides** | Dynamic false-positive management and audit trail via UI/API |
 | **Threat Feed** | Periodic threat feed refresh + manual rescan via API (automatic rescan scheduler planned) |
+| **Alerting** | Real-time notifications via webhook, Slack, and email for security events (v1.1) |
 | **Admin UI + REST API** | Dashboard, artifact management, audit log |
 
 ## Technology Stack

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
 	"net/smtp"
 	"sort"
@@ -12,8 +13,11 @@ import (
 	"time"
 )
 
-// Compile-time interface check.
-var _ ChannelSender = (*EmailSender)(nil)
+// Compile-time interface checks.
+var (
+	_ ChannelSender = (*EmailSender)(nil)
+	_ io.Closer     = (*EmailSender)(nil)
+)
 
 // DefaultBatchWait is the default duration to accumulate events before
 // sending a digest email.
@@ -92,10 +96,12 @@ func (e *EmailSender) Send(_ context.Context, payload AlertPayload) error {
 }
 
 // Close stops the background goroutine and flushes any remaining
-// pending payloads.
-func (e *EmailSender) Close() {
+// pending payloads. Implements io.Closer so MultiAlerter.Close()
+// can shut down the batch loop.
+func (e *EmailSender) Close() error {
 	close(e.done)
 	<-e.stopped
+	return nil
 }
 
 // batchLoop runs in a goroutine, periodically flushing pending payloads.

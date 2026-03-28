@@ -104,6 +104,40 @@ threat_feed:
 log:
   level: "info"                # debug | info | warn | error
   format: "json"               # json | text (text uses human-readable console output)
+
+# ─── Alerts (v1.1) ────────────────────────────────────────────────
+# Real-time notifications for security events.
+# Each channel is independent — enable any combination.
+# Secrets are NEVER stored in config; use *_env fields to reference
+# environment variables that hold the actual secret value.
+alerts:
+  webhook:
+    enabled: false
+    url: "https://siem.example.com/api/events"  # Must be HTTPS (see allow_insecure)
+    secret_env: "ALERT_WEBHOOK_SECRET"           # Env var for HMAC-SHA256 signing key
+    allow_insecure: false                        # Set true to allow plain HTTP (dev only)
+    on: []                                       # Event filter; empty = ALL events
+    # Valid event types: SERVED, BLOCKED, QUARANTINED, RELEASED, SCANNED,
+    #   OVERRIDE_CREATED, OVERRIDE_REVOKED, TAG_MUTATED, RESCAN_QUEUED
+
+  slack:
+    enabled: false
+    webhook_env: "ALERT_SLACK_WEBHOOK"           # Env var for Slack incoming webhook URL
+    on: ["BLOCKED", "QUARANTINED", "TAG_MUTATED"]  # Only high-priority events
+
+  email:
+    enabled: false
+    host: "smtp.example.com"
+    port: 587                                    # 587 (STARTTLS) or 465 (implicit TLS)
+    from: "shieldoo@example.com"
+    to:                                          # One or more recipient addresses
+      - "security-team@example.com"
+    username_env: "ALERT_EMAIL_USER"             # Env var for SMTP username
+    password_env: "ALERT_EMAIL_PASS"             # Env var for SMTP password
+    use_tls: false                               # Force implicit TLS (port 465)
+    tls_skip_verify: false                       # Skip certificate validation (dev only)
+    batch_interval: "30s"                        # Accumulate events before sending digest
+    on: ["BLOCKED", "QUARANTINED"]               # Event filter
 ```
 
 ## Environment Variable Overrides
@@ -128,6 +162,11 @@ Every config key can be overridden via environment variables using the `SGW_` pr
 | `threat_feed.enabled` | `SGW_THREAT_FEED_ENABLED` | `SGW_THREAT_FEED_ENABLED=false` |
 | `log.level` | `SGW_LOG_LEVEL` | `SGW_LOG_LEVEL=debug` |
 | `log.format` | `SGW_LOG_FORMAT` | `SGW_LOG_FORMAT=text` |
+| `alerts.webhook.enabled` | `SGW_ALERTS_WEBHOOK_ENABLED` | `SGW_ALERTS_WEBHOOK_ENABLED=true` |
+| `alerts.webhook.url` | `SGW_ALERTS_WEBHOOK_URL` | `SGW_ALERTS_WEBHOOK_URL=https://siem.example.com/api/events` |
+| `alerts.slack.enabled` | `SGW_ALERTS_SLACK_ENABLED` | `SGW_ALERTS_SLACK_ENABLED=true` |
+| `alerts.email.enabled` | `SGW_ALERTS_EMAIL_ENABLED` | `SGW_ALERTS_EMAIL_ENABLED=true` |
+| `alerts.email.host` | `SGW_ALERTS_EMAIL_HOST` | `SGW_ALERTS_EMAIL_HOST=smtp.example.com` |
 
 Environment variables take precedence over the YAML config file.
 
@@ -158,6 +197,10 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 | `PolicyConfig` | `policy` | `BlockIfVerdict`, `QuarantineIfVerdict`, `MinimumConfidence`, `Allowlist` |
 | `ThreatFeedConfig` | `threat_feed` | `Enabled`, `URL`, `RefreshInterval` |
 | `LogConfig` | `log` | `Level`, `Format` |
+| `AlertsConfig` | `alerts` | `Webhook`, `Slack`, `Email` |
+| `WebhookAlertConfig` | `alerts.webhook` | `Enabled`, `URL`, `SecretEnv`, `AllowInsecure`, `On` |
+| `SlackAlertConfig` | `alerts.slack` | `Enabled`, `WebhookEnv`, `On` |
+| `EmailAlertConfig` | `alerts.email` | `Enabled`, `Host`, `Port`, `From`, `To`, `UsernameEnv`, `PasswordEnv`, `UseTLS`, `TLSSkipVerify`, `BatchInterval`, `On` |
 
 ## Validation
 

@@ -3,6 +3,7 @@ package alert
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -320,9 +321,18 @@ func (m *MultiAlerter) Dispatch(ctx context.Context, entry model.AuditEntry) {
 }
 
 // Close gracefully shuts down all workers, flushing pending alerts.
+// If a worker's ChannelSender implements io.Closer (e.g. EmailSender's
+// background batch goroutine), Close is called after the worker drains.
 func (m *MultiAlerter) Close() error {
 	for _, w := range m.workers {
 		w.close()
+		if closer, ok := w.channel.(io.Closer); ok {
+			if err := closer.Close(); err != nil {
+				log.Warn().Err(err).
+					Str("channel", w.channel.Name()).
+					Msg("error closing channel sender")
+			}
+		}
 	}
 	return nil
 }

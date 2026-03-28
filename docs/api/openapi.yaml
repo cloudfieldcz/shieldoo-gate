@@ -162,7 +162,7 @@ paths:
           description: Filter by event type
           schema:
             type: string
-            enum: [SERVED, BLOCKED, QUARANTINED, RELEASED, SCANNED, OVERRIDE_CREATED, OVERRIDE_REVOKED, RESCAN_QUEUED]
+            enum: [SERVED, BLOCKED, QUARANTINED, RELEASED, SCANNED, OVERRIDE_CREATED, OVERRIDE_REVOKED, TAG_MUTATED, RESCAN_QUEUED]
       responses:
         "200":
           description: Paginated list of audit log entries
