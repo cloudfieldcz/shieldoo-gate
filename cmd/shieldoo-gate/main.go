@@ -18,9 +18,12 @@ import (
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/docker"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/gomod"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/maven"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/npm"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/nuget"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/pypi"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/rubygems"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/alert"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/api"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/cache"
@@ -202,11 +205,17 @@ func main() {
 	pypiUpstream := fallback(cfg.Upstreams.PyPI, "https://pypi.org")
 	npmUpstream := fallback(cfg.Upstreams.NPM, "https://registry.npmjs.org")
 	nugetUpstream := fallback(cfg.Upstreams.NuGet, "https://api.nuget.org")
-	// Init all 4 adapters
+	mavenUpstream := fallback(cfg.Upstreams.Maven, "https://repo1.maven.org/maven2")
+	rubygemsUpstream := fallback(cfg.Upstreams.RubyGems, "https://rubygems.org")
+	gomodUpstream := fallback(cfg.Upstreams.GoMod, "https://proxy.golang.org")
+	// Init all 7 adapters
 	pypiAdapter := pypi.NewPyPIAdapter(db, cacheStore, scanEngine, policyEngine, pypiUpstream)
 	npmAdapter := npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine, npmUpstream)
 	nugetAdapter := nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, nugetUpstream)
 	dockerAdapter := docker.NewDockerAdapter(db, cacheStore, scanEngine, policyEngine, cfg.Upstreams.Docker)
+	mavenAdapter := maven.NewMavenAdapter(db, cacheStore, scanEngine, policyEngine, mavenUpstream)
+	rubygemsAdapter := rubygems.NewRubyGemsAdapter(db, cacheStore, scanEngine, policyEngine, rubygemsUpstream)
+	gomodAdapter := gomod.NewGoModAdapter(db, cacheStore, scanEngine, policyEngine, gomodUpstream)
 
 	// Init admin API server
 	apiServer := api.NewServer(db, cacheStore, scanEngine, policyEngine)
@@ -227,6 +236,9 @@ func main() {
 		{"npm", cfg.Ports.NPM, npmAdapter},
 		{"nuget", cfg.Ports.NuGet, nugetAdapter},
 		{"docker", cfg.Ports.Docker, dockerAdapter},
+		{"maven", cfg.Ports.Maven, mavenAdapter},
+		{"rubygems", cfg.Ports.RubyGems, rubygemsAdapter},
+		{"gomod", cfg.Ports.GoMod, gomodAdapter},
 		{"admin", cfg.Ports.Admin, apiServer.Routes()},
 	}
 

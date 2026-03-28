@@ -1,6 +1,6 @@
 # Shieldoo Gate — Documentation
 
-> Open-source supply chain security proxy for Docker, PyPI, npm, NuGet, and more.
+> Open-source supply chain security proxy for Docker, PyPI, npm, NuGet, Maven, and more.
 
 ## Overview
 
@@ -13,7 +13,7 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
 - [Architecture](architecture.md) — component overview, request flow, startup sequence, concurrency model
 - [Data Model](data-model.md) — database schema, Go structs, table relationships, migrations
 - [Scanners](scanners.md) — scan engine, built-in and external scanners, aggregation, threat feed
-- [Protocol Adapters](adapters.md) — PyPI, npm, NuGet, Docker proxy implementations and routing
+- [Protocol Adapters](adapters.md) — PyPI, npm, NuGet, Docker, Maven, RubyGems, Go Modules proxy implementations and routing
 - [Policy Engine](policy.md) — evaluation order, overrides, allowlists, aggregation rules, examples
 - [Configuration](configuration.md) — full `config.yaml` reference, environment variables, Go structs
   - [Alerts](configuration.md#alerts-v11) — webhook, Slack, and email notification channels
@@ -42,7 +42,7 @@ Shieldoo Gate Protocol Adapter
 
 | Component | Description |
 |---|---|
-| **Protocol Adapters** | Native protocol implementations (Docker/OCI, PyPI PEP 503, npm, NuGet V3) |
+| **Protocol Adapters** | Native protocol implementations (Docker/OCI, PyPI PEP 503, npm, NuGet V3, Maven, RubyGems, Go Modules) |
 | **Scan Engine** | Pluggable scanner framework (GuardDog, Trivy, OSV, built-in heuristics) |
 | **Cache Store** | Local filesystem with per-ecosystem TTL (S3 backend planned) |
 | **Policy Engine** | Block / quarantine / warn / allow rules with allowlists |
@@ -67,7 +67,7 @@ Shieldoo Gate Protocol Adapter
 | 2 | Scanner engine + built-in scanners | Done |
 | 3 | External scanners (GuardDog, Trivy, OSV) | Done |
 | 4 | Cache (local) & policy engine | Done |
-| 5 | Protocol adapters (PyPI, npm, Docker, NuGet) | Done |
+| 5 | Protocol adapters (PyPI, npm, Docker, NuGet, Maven) | Done |
 | 6 | Admin REST API | Done |
 | 7 | Admin UI (React) | Done |
 | 8 | Main entrypoint, Docker Compose, E2E tests | Done |

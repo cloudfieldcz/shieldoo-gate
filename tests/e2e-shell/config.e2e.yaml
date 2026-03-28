@@ -14,6 +14,8 @@ ports:
   nuget: 5001
   docker: 5002
   maven: 8085
+  rubygems: 8086
+  gomod: 8087
   admin: 8080
 
 upstreams:
@@ -21,6 +23,8 @@ upstreams:
   npm: "https://registry.npmjs.org"
   nuget: "https://api.nuget.org"
   maven: "https://repo1.maven.org/maven2"
+  rubygems: "https://rubygems.org"
+  gomod: "https://proxy.golang.org"
   docker:
     default_registry: "https://registry-1.docker.io"
     allowed_registries:

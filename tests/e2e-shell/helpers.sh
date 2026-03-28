@@ -28,6 +28,8 @@ export E2E_DOCKER_PORT=15002
 export E2E_MAVEN_PORT=18085
 export E2E_ADMIN_PORT=18080
 export E2E_PUSH_REGISTRY_PORT=15003
+export E2E_RUBYGEMS_PORT=18086
+export E2E_GOMOD_PORT=18087
 
 export E2E_PYPI_URL="http://localhost:${E2E_PYPI_PORT}"
 export E2E_NPM_URL="http://localhost:${E2E_NPM_PORT}"
@@ -36,6 +38,8 @@ export E2E_DOCKER_URL="http://localhost:${E2E_DOCKER_PORT}"
 export E2E_MAVEN_URL="http://localhost:${E2E_MAVEN_PORT}"
 export E2E_ADMIN_URL="http://localhost:${E2E_ADMIN_PORT}"
 export E2E_PUSH_REGISTRY_URL="http://localhost:${E2E_PUSH_REGISTRY_PORT}"
+export E2E_RUBYGEMS_URL="http://localhost:${E2E_RUBYGEMS_PORT}"
+export E2E_GOMOD_URL="http://localhost:${E2E_GOMOD_PORT}"
 
 # ---------------------------------------------------------------------------
 # Logging helpers

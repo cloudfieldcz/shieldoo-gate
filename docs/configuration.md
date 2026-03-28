@@ -24,6 +24,9 @@ ports:
   npm: 4873                    # npm registry proxy
   nuget: 5001                  # NuGet V3 proxy
   docker: 5002                 # Docker/OCI distribution proxy
+  maven: 8085                  # Maven repository proxy
+  rubygems: 8086               # RubyGems proxy
+  gomod: 8087                  # Go module proxy (GOPROXY protocol)
   admin: 8080                  # Admin REST API + React UI
 
 # ─── Upstreams ─────────────────────────────────────────────────────
@@ -32,6 +35,9 @@ upstreams:
   pypi: "https://pypi.org"
   npm: "https://registry.npmjs.org"
   nuget: "https://api.nuget.org"
+  maven: "https://repo1.maven.org/maven2"  # Maven Central repository
+  rubygems: "https://rubygems.org"         # RubyGems.org
+  gomod: "https://proxy.golang.org"       # Go module proxy
   docker:
     default_registry: "https://registry-1.docker.io"  # Default upstream for Docker Hub images
     allowed_registries:              # Non-default registries that clients can pull from
@@ -231,8 +237,8 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 |---|---|---|
 | `Config` | root | Top-level container for all sections |
 | `ServerConfig` | `server` | `Host` |
-| `PortsConfig` | `ports` | `PyPI`, `NPM`, `NuGet`, `Docker`, `Admin` |
-| `UpstreamsConfig` | `upstreams` | `PyPI`, `NPM`, `NuGet`, `Docker` (struct) |
+| `PortsConfig` | `ports` | `PyPI`, `NPM`, `NuGet`, `Docker`, `Maven`, `Admin` |
+| `UpstreamsConfig` | `upstreams` | `PyPI`, `NPM`, `NuGet`, `Docker` (struct), `Maven` |
 | `DockerUpstreamConfig` | `upstreams.docker` | `DefaultRegistry`, `AllowedRegistries`, `Sync`, `Push` |
 | `DockerRegistryEntry` | `upstreams.docker.allowed_registries[]` | `Host`, `URL`, `Auth` |
 | `DockerRegistryAuth` | `...allowed_registries[].auth` | `Type`, `TokenEnv` |

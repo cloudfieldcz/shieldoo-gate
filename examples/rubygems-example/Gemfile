@@ -1,0 +1,6 @@
+# Gemfile — RubyGems example for Shieldoo Gate
+# Point the source at the Shieldoo Gate RubyGems proxy.
+
+source "http://localhost:8086"
+
+gem "rake", "~> 13.1"

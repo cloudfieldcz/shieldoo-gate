@@ -31,6 +31,8 @@ source "${SCRIPT_DIR}/test_nuget.sh"
 source "${SCRIPT_DIR}/test_docker.sh"
 source "${SCRIPT_DIR}/test_docker_registry.sh"
 source "${SCRIPT_DIR}/test_maven.sh"
+source "${SCRIPT_DIR}/test_rubygems.sh"
+source "${SCRIPT_DIR}/test_gomod.sh"
 source "${SCRIPT_DIR}/test_api.sh"
 
 check_prereqs() {
@@ -102,6 +104,8 @@ main() {
     test_docker
     test_docker_registry
     test_maven
+    test_rubygems
+    test_gomod
     test_api
 
     # 6. Summary

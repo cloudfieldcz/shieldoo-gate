@@ -53,7 +53,10 @@ type PortsConfig struct {
 	NPM    int `mapstructure:"npm"`
 	NuGet  int `mapstructure:"nuget"`
 	Docker int `mapstructure:"docker"`
-	Admin  int `mapstructure:"admin"`
+	Maven    int `mapstructure:"maven"`
+	RubyGems int `mapstructure:"rubygems"`
+	GoMod    int `mapstructure:"gomod"`
+	Admin    int `mapstructure:"admin"`
 }
 
 type UpstreamsConfig struct {
@@ -61,6 +64,9 @@ type UpstreamsConfig struct {
 	NPM    string               `mapstructure:"npm"`
 	NuGet  string               `mapstructure:"nuget"`
 	Docker DockerUpstreamConfig `mapstructure:"docker"`
+	Maven    string               `mapstructure:"maven"`
+	RubyGems string               `mapstructure:"rubygems"`
+	GoMod    string               `mapstructure:"gomod"`
 }
 
 type DockerUpstreamConfig struct {
