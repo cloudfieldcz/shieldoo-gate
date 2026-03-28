@@ -74,3 +74,11 @@ threat_feed:
 log:
   level: "info"
   format: "json"
+
+alerts:
+  webhook:
+    enabled: false
+  slack:
+    enabled: false
+  email:
+    enabled: false

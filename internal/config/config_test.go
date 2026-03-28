@@ -206,6 +206,113 @@ func TestValidate_MissingCachePath_ReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "cache.local.path")
 }
 
+func TestValidate_WebhookEnabledWithoutURL_ReturnsError(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.Alerts.Webhook.Enabled = true
+	cfg.Alerts.Webhook.URL = ""
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "alerts.webhook.url is required")
+}
+
+func TestValidate_WebhookHTTPRejected_ReturnsError(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.Alerts.Webhook.Enabled = true
+	cfg.Alerts.Webhook.URL = "http://example.com/hook"
+	cfg.Alerts.Webhook.AllowInsecure = false
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "https://")
+}
+
+func TestValidate_WebhookHTTPAllowedWhenInsecure(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.Alerts.Webhook.Enabled = true
+	cfg.Alerts.Webhook.URL = "http://example.com/hook"
+	cfg.Alerts.Webhook.AllowInsecure = true
+	err := cfg.Validate()
+	assert.NoError(t, err)
+}
+
+func TestValidate_WebhookHTTPS_NoError(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.Alerts.Webhook.Enabled = true
+	cfg.Alerts.Webhook.URL = "https://hooks.example.com/shieldoo"
+	err := cfg.Validate()
+	assert.NoError(t, err)
+}
+
+func TestValidate_SlackEnabledWithoutWebhookEnv_ReturnsError(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.Alerts.Slack.Enabled = true
+	cfg.Alerts.Slack.WebhookEnv = ""
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "alerts.slack.webhook_env is required")
+}
+
+func TestValidate_SlackEnabledWithWebhookEnv_NoError(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.Alerts.Slack.Enabled = true
+	cfg.Alerts.Slack.WebhookEnv = "SGW_SLACK_WEBHOOK_URL"
+	t.Setenv("SGW_SLACK_WEBHOOK_URL", "https://hooks.slack.com/test")
+	err := cfg.Validate()
+	assert.NoError(t, err)
+}
+
+func TestValidate_EmailEnabledMissingHost_ReturnsError(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.Alerts.Email.Enabled = true
+	cfg.Alerts.Email.Host = ""
+	cfg.Alerts.Email.From = "a@b.com"
+	cfg.Alerts.Email.To = []string{"c@d.com"}
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "alerts.email requires")
+}
+
+func TestValidate_EmailEnabledMissingTo_ReturnsError(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.Alerts.Email.Enabled = true
+	cfg.Alerts.Email.Host = "smtp.example.com"
+	cfg.Alerts.Email.From = "a@b.com"
+	cfg.Alerts.Email.To = nil
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "alerts.email requires")
+}
+
+func TestValidate_EmailEnabledComplete_NoError(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.Alerts.Email.Enabled = true
+	cfg.Alerts.Email.Host = "smtp.example.com"
+	cfg.Alerts.Email.From = "a@b.com"
+	cfg.Alerts.Email.To = []string{"c@d.com"}
+	err := cfg.Validate()
+	assert.NoError(t, err)
+}
+
+func TestValidate_DisabledAlertsSkipValidation(t *testing.T) {
+	cfg := validBaseConfig()
+	// All disabled by default — should pass even with empty URLs
+	err := cfg.Validate()
+	assert.NoError(t, err)
+}
+
+// validBaseConfig returns a Config that passes Validate() with all alerts disabled.
+func validBaseConfig() *Config {
+	return &Config{
+		Cache: CacheConfig{
+			Backend: "local",
+			Local:   LocalCacheConfig{Path: "/tmp/cache"},
+		},
+		Database: DatabaseConfig{
+			Backend: "sqlite",
+			SQLite:  SQLiteConfig{Path: "/tmp/gate.db"},
+		},
+	}
+}
+
 func TestValidate_MissingSQLitePath_ReturnsError(t *testing.T) {
 	cfg := &Config{
 		Cache: CacheConfig{

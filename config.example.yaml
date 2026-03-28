@@ -74,3 +74,27 @@ threat_feed:
 log:
   level: "info"
   format: "json"
+
+alerts:
+  webhook:
+    enabled: false
+    url: "https://hooks.example.com/shieldoo"
+    secret_env: "SGW_WEBHOOK_SECRET"
+    allow_insecure: false
+    on: ["BLOCKED", "QUARANTINED", "TAG_MUTATED"]
+  slack:
+    enabled: false
+    webhook_env: "SGW_SLACK_WEBHOOK_URL"
+    on: ["BLOCKED", "QUARANTINED"]
+  email:
+    enabled: false
+    host: "smtp.example.com"
+    port: 587
+    from: "shieldoo@example.com"
+    to: ["security@example.com"]
+    username_env: "SGW_SMTP_USER"
+    password_env: "SGW_SMTP_PASS"
+    use_tls: true
+    tls_skip_verify: false
+    batch_interval: "30s"
+    on: ["QUARANTINED", "TAG_MUTATED"]
