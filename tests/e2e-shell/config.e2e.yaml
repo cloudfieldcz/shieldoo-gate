@@ -13,12 +13,14 @@ ports:
   npm: 4873
   nuget: 5001
   docker: 5002
+  maven: 8085
   admin: 8080
 
 upstreams:
   pypi: "https://pypi.org"
   npm: "https://registry.npmjs.org"
   nuget: "https://api.nuget.org"
+  maven: "https://repo1.maven.org/maven2"
   docker:
     default_registry: "https://registry-1.docker.io"
     allowed_registries:
@@ -45,6 +47,7 @@ cache:
     pypi: "168h"
     npm: "168h"
     nuget: "168h"
+    maven: "168h"
     docker: "720h"
 
 database:
