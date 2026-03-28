@@ -56,7 +56,9 @@ test_rubygems() {
     local gate_logs
     gate_logs=$(docker_logs shieldoo-gate 2>/dev/null)
 
-    if echo "$gate_logs" | grep -qiE "rubygems.*scan result|rubygems.*policy decision"; then
+    if [[ "$gate_logs" == *"docker_logs not available"* ]]; then
+        log_skip "RubyGems: gate logs inspection not available in container mode"
+    elif grep -qiE "rubygems.*scan result|rubygems.*policy decision" <<< "$gate_logs"; then
         log_pass "RubyGems: gate logs contain scan pipeline entries"
     else
         log_fail "RubyGems: gate logs do not contain rubygems scan/policy entries"

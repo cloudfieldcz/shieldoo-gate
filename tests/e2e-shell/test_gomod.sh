@@ -31,7 +31,7 @@ test_gomod() {
     # ------------------------------------------------------------------
     local mod_resp
     mod_resp=$(curl -sf "${E2E_GOMOD_URL}/${module}/@v/${version}.mod")
-    if echo "$mod_resp" | grep -q "^module "; then
+    if grep -q "^module " <<< "$mod_resp"; then
         log_pass "GoMod: .mod returns valid go.mod content"
     else
         log_fail "GoMod: .mod did not return go.mod content"
@@ -79,7 +79,9 @@ test_gomod() {
     local gate_logs
     gate_logs=$(docker_logs shieldoo-gate 2>/dev/null)
 
-    if echo "$gate_logs" | grep -qiE "gomod.*scan result|gomod.*policy decision"; then
+    if [[ "$gate_logs" == *"docker_logs not available"* ]]; then
+        log_skip "GoMod: gate logs inspection not available in container mode"
+    elif grep -qiE "gomod.*scan result|gomod.*policy decision" <<< "$gate_logs"; then
         log_pass "GoMod: gate logs contain scan pipeline entries"
     else
         log_fail "GoMod: gate logs do not contain gomod scan pipeline entries"

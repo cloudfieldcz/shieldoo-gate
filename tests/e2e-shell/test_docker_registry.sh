@@ -24,7 +24,7 @@ _check_docker_pull_result() {
     fi
 
     # Quarantined = scan pipeline worked correctly — this is a PASS.
-    if echo "$output" | grep -qi "quarantined"; then
+    if grep -qi "quarantined" <<< "$output"; then
         log_pass "${desc} — image correctly quarantined by scan pipeline"
         return 0
     fi
@@ -36,13 +36,13 @@ _check_docker_pull_result() {
     fi
 
     # 502 = scan pipeline issue (e.g. crane.Pull failure), not a routing failure.
-    if echo "$output" | grep -q "502"; then
+    if [[ "$output" == *"502"* ]]; then
         log_skip "${desc} — 502 from scan pipeline (not a routing issue)"
         return 1
     fi
 
     # Docker Hub rate limit
-    if echo "$output" | grep -qi "TOOMANYREQUESTS\|rate limit"; then
+    if grep -qi "TOOMANYREQUESTS\|rate limit" <<< "$output"; then
         log_skip "${desc} — Docker Hub rate limit reached"
         return 1
     fi
@@ -145,7 +145,7 @@ test_docker_registry() {
             -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
             "${E2E_DOCKER_URL}/v2/library/hello-world/manifests/latest" 2>/dev/null \
             | grep -i "X-Shieldoo-Scanned")
-        if echo "$scanned_header" | grep -qi "true"; then
+        if grep -qi "true" <<< "$scanned_header"; then
             log_pass "Docker Registry: X-Shieldoo-Scanned: true on cached manifest"
         else
             log_skip "Docker Registry: X-Shieldoo-Scanned header not found"
@@ -253,7 +253,9 @@ test_docker_registry() {
     # Gate logs contain docker scan pipeline entries
     local gate_logs
     gate_logs=$(docker_logs shieldoo-gate 2>/dev/null)
-    if echo "$gate_logs" | grep -qi "docker.*scan"; then
+    if [[ "$gate_logs" == *"docker_logs not available"* ]]; then
+        log_skip "Docker Registry: gate logs inspection not available in container mode"
+    elif grep -qi "docker.*scan" <<< "$gate_logs"; then
         log_pass "Docker Registry: gate logs contain Docker scan entries"
     else
         log_skip "Docker Registry: no Docker scan entries in logs (scans may not have completed)"

@@ -18,7 +18,7 @@ test_npm() {
     local metadata
     metadata=$(curl -sf "${E2E_NPM_URL}/is-odd")
 
-    if echo "$metadata" | grep -q "registry.npmjs.org"; then
+    if [[ "$metadata" == *"registry.npmjs.org"* ]]; then
         log_fail "npm: package metadata still contains upstream 'registry.npmjs.org' tarball URLs (not rewritten)"
     else
         log_pass "npm: package metadata does not expose upstream 'registry.npmjs.org' tarball URLs"

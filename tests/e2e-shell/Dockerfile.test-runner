@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates=20240203 \
         curl=8.5.0-2ubuntu10.* \
         file=1:5.45-3build1 \
-        jq=1.7.1-3build1 \
+        jq=1.7.1-* \
         unzip=6.0-28ubuntu4.* \
         git=1:2.43.0-1ubuntu7.* \
     && rm -rf /var/lib/apt/lists/*
@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ---------------------------------------------------------------------------
 ARG UV_VERSION=0.6.0
 RUN curl -LsSf "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-installer.sh" | \
-    sh -s -- --version "${UV_VERSION}"
+    sh -s
 ENV PATH="/root/.local/bin:${PATH}"
 
 # Install Python via uv (pinned version)
@@ -82,7 +82,7 @@ RUN apt-get update && \
 # Go (pinned with checksum)
 # ---------------------------------------------------------------------------
 ARG GO_VERSION=1.25.0
-ARG GO_SHA256=2b3833e1fdd29152be076441edca4172f8e34ba0e04dfab3d8b0c4a14e7b9901
+ARG GO_SHA256=2852af0cb20a13139b3448992e69b868e50ed0f8a1e5940ee1de9e19a123b613
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz && \
     echo "${GO_SHA256}  /tmp/go.tar.gz" | sha256sum -c - && \
     tar -C /usr/local -xzf /tmp/go.tar.gz && \

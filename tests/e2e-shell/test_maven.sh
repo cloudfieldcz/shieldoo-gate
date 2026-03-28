@@ -68,7 +68,9 @@ test_maven() {
     local gate_logs
     gate_logs=$(docker_logs shieldoo-gate 2>/dev/null)
 
-    if echo "$gate_logs" | grep -qiE "scan result|policy decision"; then
+    if [[ "$gate_logs" == *"docker_logs not available"* ]]; then
+        log_skip "Maven: gate logs inspection not available in container mode"
+    elif grep -qiE "scan result|policy decision" <<< "$gate_logs"; then
         log_pass "Maven: gate logs contain scan pipeline entries"
     else
         log_fail "Maven: gate logs do not contain 'scan result' or 'policy decision' entries"

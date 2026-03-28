@@ -26,7 +26,7 @@ test_docker() {
     # ------------------------------------------------------------------
     local v2_header
     v2_header=$(curl -s -D - -o /dev/null "${E2E_DOCKER_URL}/v2/" | grep -i "Docker-Distribution-API-Version")
-    if echo "$v2_header" | grep -q "registry/2.0"; then
+    if [[ "$v2_header" == *"registry/2.0"* ]]; then
         log_pass "Docker: /v2/ includes Docker-Distribution-API-Version header"
     else
         log_fail "Docker: /v2/ missing Docker-Distribution-API-Version header"
