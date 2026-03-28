@@ -430,6 +430,13 @@ func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request
 			Artifact: artifactID,
 			Reason:   policyResult.Reason,
 		})
+		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+			EventType:  model.EventBlocked,
+			ArtifactID: artifactID,
+			Reason:     policyResult.Reason,
+			ClientIP:   r.RemoteAddr,
+			UserAgent:  r.UserAgent(),
+		})
 		return
 	case policy.ActionQuarantine:
 		now := time.Now().UTC()
@@ -438,6 +445,13 @@ func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request
 			Error:    "quarantined",
 			Artifact: artifactID,
 			Reason:   policyResult.Reason,
+		})
+		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+			EventType:  model.EventQuarantined,
+			ArtifactID: artifactID,
+			Reason:     policyResult.Reason,
+			ClientIP:   r.RemoteAddr,
+			UserAgent:  r.UserAgent(),
 		})
 		return
 	}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 )
 
@@ -292,6 +293,11 @@ func (s *Server) handleRescanArtifact(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to commit transaction")
 		return
 	}
+	adapter.DispatchAlert(model.AuditEntry{
+		EventType:  model.EventRescanQueued,
+		ArtifactID: id,
+		Reason:     "manual rescan via API",
+	})
 
 	writeJSON(w, http.StatusAccepted, map[string]string{
 		"status":      "PENDING_SCAN",
@@ -345,6 +351,11 @@ func (s *Server) handleQuarantineArtifact(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, "failed to commit transaction")
 		return
 	}
+	adapter.DispatchAlert(model.AuditEntry{
+		EventType:  model.EventQuarantined,
+		ArtifactID: id,
+		Reason:     "manual quarantine via API",
+	})
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":      "QUARANTINED",
@@ -397,6 +408,11 @@ func (s *Server) handleReleaseArtifact(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to commit transaction")
 		return
 	}
+	adapter.DispatchAlert(model.AuditEntry{
+		EventType:  model.EventReleased,
+		ArtifactID: id,
+		Reason:     "manual release via API",
+	})
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":      "CLEAN",

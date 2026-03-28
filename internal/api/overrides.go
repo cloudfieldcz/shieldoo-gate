@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 )
 
@@ -149,6 +150,11 @@ func (s *Server) handleCreateOverride(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to commit transaction")
 		return
 	}
+	adapter.DispatchAlert(model.AuditEntry{
+		EventType:  model.EventOverrideCreated,
+		ArtifactID: artifactID,
+		Reason:     req.Reason,
+	})
 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id":        overrideID,
@@ -214,6 +220,11 @@ func (s *Server) handleRevokeOverride(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to commit transaction")
 		return
 	}
+	adapter.DispatchAlert(model.AuditEntry{
+		EventType:  model.EventOverrideRevoked,
+		ArtifactID: artifactID,
+		Reason:     fmt.Sprintf("revoked override #%d", id),
+	})
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status": "revoked",
@@ -303,6 +314,11 @@ func (s *Server) handleCreateArtifactOverride(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "failed to commit transaction")
 		return
 	}
+	adapter.DispatchAlert(model.AuditEntry{
+		EventType:  model.EventOverrideCreated,
+		ArtifactID: id,
+		Reason:     body.Reason,
+	})
 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id":          overrideID,

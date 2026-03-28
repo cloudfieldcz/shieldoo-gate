@@ -16,13 +16,16 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/docker"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/npm"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/nuget"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/pypi"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/alert"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/api"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/cache/local"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/policy"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner/builtin"
@@ -122,6 +125,34 @@ func main() {
 		MinimumConfidence:   cfg.Policy.MinimumConfidence,
 		Allowlist:           cfg.Policy.Allowlist,
 	}, db)
+
+	// Init alerter from config.
+	var alerterInstance alert.Alerter
+	if cfg.Alerts.Webhook.Enabled || cfg.Alerts.Slack.Enabled || cfg.Alerts.Email.Enabled {
+		var workers []alert.ChannelConfig
+		if cfg.Alerts.Webhook.Enabled {
+			secret := []byte(os.Getenv(cfg.Alerts.Webhook.SecretEnv))
+			sender := alert.NewWebhookSender(cfg.Alerts.Webhook.URL, secret)
+			var eventFilter []model.EventType
+			for _, ev := range cfg.Alerts.Webhook.On {
+				eventFilter = append(eventFilter, model.EventType(ev))
+			}
+			workers = append(workers, alert.ChannelConfig{
+				Channel:     sender,
+				EventFilter: eventFilter,
+			})
+		}
+		// Slack and Email senders will be added in later tasks.
+		alerterInstance = alert.NewMultiAlerter(workers)
+	} else {
+		alerterInstance = alert.NewMultiAlerter(nil) // no-op alerter
+	}
+	adapter.SetAlerter(alerterInstance)
+	defer func() {
+		if err := alerterInstance.Close(); err != nil {
+			log.Error().Err(err).Msg("alerter shutdown error")
+		}
+	}()
 
 	// Init threat feed client with periodic refresh (if enabled)
 	if cfg.ThreatFeed.Enabled && cfg.ThreatFeed.URL != "" {

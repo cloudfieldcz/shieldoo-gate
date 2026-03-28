@@ -197,6 +197,19 @@ func (s *SyncService) syncTag(ctx context.Context, repo DockerRepository, tag Do
 		Str("reason", reason).
 		Msg("docker sync: re-scanning tag")
 
+	// Audit log: tag digest mutation detected.
+	if digestChanged {
+		safeName := MakeSafeName(repo.Registry, repo.Name)
+		tagArtifactID := fmt.Sprintf("docker:%s:%s", safeName, tag.Tag)
+		metaJSON := fmt.Sprintf(`{"old_digest":%q,"new_digest":%q}`, tag.ManifestDigest, upstreamDigest)
+		_ = adapter.WriteAuditLog(s.db, model.AuditEntry{
+			EventType:    model.EventTagMutated,
+			ArtifactID:   tagArtifactID,
+			Reason:       "upstream digest changed",
+			MetadataJSON: metaJSON,
+		})
+	}
+
 	// Build artifact for scanning.
 	safeName := MakeSafeName(repo.Registry, repo.Name)
 	artifactID := fmt.Sprintf("docker:%s:%s", safeName, tag.Tag)
@@ -244,6 +257,11 @@ func (s *SyncService) syncTag(ctx context.Context, repo DockerRepository, tag Do
 		now := time.Now().UTC()
 		_ = s.persistArtifact(artifactID, scanArtifact, manifestSHA, int64(len(manifestBytes)),
 			model.StatusQuarantined, policyResult.Reason, &now, scanResults)
+		_ = adapter.WriteAuditLog(s.db, model.AuditEntry{
+			EventType:  model.EventQuarantined,
+			ArtifactID: artifactID,
+			Reason:     policyResult.Reason,
+		})
 	default:
 		// ActionAllow or ActionBlock (block from sync just logs, doesn't quarantine)
 		_ = s.persistArtifact(artifactID, scanArtifact, manifestSHA, int64(len(manifestBytes)),

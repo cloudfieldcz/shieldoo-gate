@@ -1,19 +1,38 @@
 package adapter
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jmoiron/sqlx"
 
+	"github.com/cloudfieldcz/shieldoo-gate/internal/alert"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
 )
+
+// globalAlerter holds the package-level alerter set during initialization.
+var globalAlerter atomic.Pointer[alert.Alerter]
+
+// SetAlerter stores the alerter for use by WriteAuditLog and DispatchAlert.
+func SetAlerter(a alert.Alerter) {
+	globalAlerter.Store(&a)
+}
+
+// DispatchAlert sends an alert without writing to audit_log.
+// Use when audit_log was already written (e.g., in API handler transactions).
+func DispatchAlert(entry model.AuditEntry) {
+	if a := globalAlerter.Load(); a != nil {
+		(*a).Dispatch(context.Background(), entry)
+	}
+}
 
 // ArtifactLocker provides per-artifact-ID locking so that only one
 // download/scan pipeline runs for a given artifact at a time.
@@ -92,6 +111,9 @@ func WriteAuditLog(db *sqlx.DB, entry model.AuditEntry) error {
 	)
 	if err != nil {
 		return fmt.Errorf("adapter: writing audit log: %w", err)
+	}
+	if a := globalAlerter.Load(); a != nil {
+		(*a).Dispatch(context.Background(), entry)
 	}
 	return nil
 }
