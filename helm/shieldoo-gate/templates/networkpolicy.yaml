@@ -1,0 +1,52 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "shieldoo-gate.fullname" . }}
+  labels:
+    {{- include "shieldoo-gate.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "shieldoo-gate.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - port: {{ .Values.ports.admin }}
+          protocol: TCP
+        - port: {{ .Values.ports.pypi }}
+          protocol: TCP
+        - port: {{ .Values.ports.npm }}
+          protocol: TCP
+        - port: {{ .Values.ports.nuget }}
+          protocol: TCP
+        - port: {{ .Values.ports.docker }}
+          protocol: TCP
+        - port: {{ .Values.ports.maven }}
+          protocol: TCP
+        - port: {{ .Values.ports.rubygems }}
+          protocol: TCP
+        - port: {{ .Values.ports.gomod }}
+          protocol: TCP
+      {{- if .Values.networkPolicy.adminNamespace }}
+      from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.adminNamespace }}
+      {{- end }}
+  egress:
+    # Allow DNS
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Allow HTTPS to upstreams
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 80
+          protocol: TCP
+{{- end }}

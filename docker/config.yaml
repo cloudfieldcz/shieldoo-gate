@@ -87,6 +87,12 @@ scanners:
   osv:
     enabled: true
     api_url: "https://api.osv.dev"
+  sandbox:
+    enabled: false
+    runtime_binary: "runsc"
+    timeout: "30s"
+    network_policy: "none"
+    max_concurrent: 2
 
 policy:
   block_if_verdict: "MALICIOUS"

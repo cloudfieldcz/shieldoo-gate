@@ -74,6 +74,22 @@ func (e *Engine) ScanAll(ctx context.Context, artifact Artifact) ([]ScanResult, 
 	return results, nil
 }
 
+// AsyncScanner is implemented by scanners that run outside the synchronous
+// scan path (e.g., the gVisor sandbox scanner). They are invoked after the
+// artifact has been served to the client.
+type AsyncScanner interface {
+	ScanAsync(ctx context.Context, artifact Artifact, localPath string, callback func(ScanResult))
+	Name() string
+	Close() error
+}
+
+// ScanAsync dispatches an asynchronous scan using the given AsyncScanner.
+// The callback is invoked when the scan completes; it should evaluate policy
+// and quarantine the artifact if needed. This method returns immediately.
+func (e *Engine) ScanAsync(ctx context.Context, artifact Artifact, localPath string, asyncScanner AsyncScanner, callback func(ScanResult)) {
+	asyncScanner.ScanAsync(ctx, artifact, localPath, callback)
+}
+
 // HealthCheck runs HealthCheck on all registered scanners and returns a map of
 // scanner name to error (nil means healthy).
 func (e *Engine) HealthCheck(ctx context.Context) map[string]error {

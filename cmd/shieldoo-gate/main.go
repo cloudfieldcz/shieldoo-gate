@@ -40,6 +40,7 @@ import (
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner/builtin"
 	guarddog "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/guarddog"
 	osvscanner "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/osv"
+	sandboxscanner "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/sandbox"
 	trivyscanner "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/trivy"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/threatfeed"
 )
@@ -138,6 +139,27 @@ func main() {
 	scanTimeout := parseDuration(cfg.Scanners.Timeout, 30*time.Second)
 	scanEngine := scanner.NewEngine(scanners, scanTimeout)
 	log.Info().Int("scanner_count", len(scanners)).Msg("scanner engine initialized")
+
+	// Optional: Sandbox scanner (async, runs outside the synchronous scan path)
+	var sandboxScanner *sandboxscanner.SandboxScanner
+	if cfg.Scanners.Sandbox.Enabled {
+		sbCfg := sandboxscanner.SandboxConfig{
+			Enabled:       cfg.Scanners.Sandbox.Enabled,
+			RuntimeBinary: cfg.Scanners.Sandbox.RuntimeBinary,
+			Timeout:       cfg.Scanners.Sandbox.Timeout,
+			NetworkPolicy: cfg.Scanners.Sandbox.NetworkPolicy,
+			MaxConcurrent: cfg.Scanners.Sandbox.MaxConcurrent,
+		}
+		sb, sbErr := sandboxscanner.NewSandboxScanner(sbCfg)
+		if sbErr != nil {
+			log.Warn().Err(sbErr).Msg("sandbox scanner unavailable, continuing without it")
+		} else {
+			sandboxScanner = sb
+			sandboxScanner.CleanupOrphans()
+			log.Info().Str("runtime", cfg.Scanners.Sandbox.RuntimeBinary).Msg("sandbox scanner enabled (async)")
+		}
+	}
+	_ = sandboxScanner // used by adapters for async scanning
 
 	// Init policy engine from config
 	policyEngine := policy.NewEngine(policy.EngineConfig{

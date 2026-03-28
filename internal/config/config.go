@@ -179,6 +179,17 @@ type ScannersConfig struct {
 	GuardDog GuardDogConfig `mapstructure:"guarddog"`
 	Trivy    TrivyConfig    `mapstructure:"trivy"`
 	OSV      OSVConfig      `mapstructure:"osv"`
+	Sandbox  SandboxConfig  `mapstructure:"sandbox"`
+}
+
+// SandboxConfig holds configuration for the dynamic sandbox (gVisor) scanner.
+// The sandbox scanner runs asynchronously — it does not block the download path.
+type SandboxConfig struct {
+	Enabled       bool   `mapstructure:"enabled"`
+	RuntimeBinary string `mapstructure:"runtime_binary"` // default "runsc"
+	Timeout       string `mapstructure:"timeout"`         // default "30s"
+	NetworkPolicy string `mapstructure:"network_policy"`  // "none" or "monitor"
+	MaxConcurrent int    `mapstructure:"max_concurrent"`  // default 2
 }
 
 type GuardDogConfig struct {

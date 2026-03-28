@@ -30,7 +30,8 @@ test_npm() {
     local workdir
     workdir=$(mktemp -d)
     cp "${SCRIPT_DIR}/fixtures/npm/package.json" "$workdir/"
-    cp "${SCRIPT_DIR}/fixtures/npm/.npmrc" "$workdir/"
+    # Generate .npmrc dynamically with the correct URL (container-aware)
+    echo "registry=${E2E_NPM_URL}/" > "$workdir/.npmrc"
 
     pushd "$workdir" > /dev/null
 

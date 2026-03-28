@@ -14,7 +14,16 @@ services:
       - "14873:4873"   # npm
       - "15001:5001"   # NuGet
       - "15002:5002"   # Docker
+      - "18085:8085"   # Maven
+      - "18086:8086"   # RubyGems
+      - "18087:8087"   # Go Modules
       - "18080:8080"   # Admin
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/api/v1/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
     volumes:
       - e2e-bridge-socket:/tmp
       - e2e-gate-data:/var/lib/shieldoo-gate
@@ -23,6 +32,9 @@ services:
       - ./config.e2e.yaml:/etc/shieldoo-gate/config.yaml:ro
     environment:
       SGW_SCANNERS_GUARDDOG_BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
+    networks:
+      - proxy-net
+      - internal-net
     restart: "no"
 
   scanner-bridge:
@@ -34,6 +46,8 @@ services:
       - e2e-bridge-socket:/tmp
     environment:
       BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
+    networks:
+      - internal-net
     restart: "no"
 
   push-registry:
@@ -41,7 +55,58 @@ services:
     container_name: shieldoo-e2e-push-registry
     ports:
       - "15003:5000"
+    networks:
+      - internal-net
     restart: "no"
+
+  # -------------------------------------------------------------------------
+  # Docker-in-Docker for Docker E2E tests (privileged, test-only)
+  # SECURITY: Never use DinD in production. This is E2E test infrastructure.
+  # -------------------------------------------------------------------------
+  docker-dind:
+    image: docker:24.0-dind
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    networks:
+      - internal-net
+    restart: "no"
+
+  # -------------------------------------------------------------------------
+  # Test Runner — contains all package managers, runs all E2E test scripts
+  # -------------------------------------------------------------------------
+  test-runner:
+    build:
+      context: ../..
+      dockerfile: tests/e2e-shell/Dockerfile.test-runner
+    depends_on:
+      shieldoo-gate:
+        condition: service_healthy
+    environment:
+      # Container-internal URLs (service names, internal ports)
+      SGW_PYPI_URL: "http://shieldoo-gate:5000"
+      SGW_NPM_URL: "http://shieldoo-gate:4873"
+      SGW_NUGET_URL: "http://shieldoo-gate:5001"
+      SGW_DOCKER_URL: "http://shieldoo-gate:5002"
+      SGW_MAVEN_URL: "http://shieldoo-gate:8085"
+      SGW_RUBYGEMS_URL: "http://shieldoo-gate:8086"
+      SGW_GOMOD_URL: "http://shieldoo-gate:8087"
+      SGW_ADMIN_URL: "http://shieldoo-gate:8080"
+      SGW_DOCKER_PORT: "5002"
+      SGW_PUSH_REGISTRY_URL: "http://push-registry:5000"
+      # Docker-in-Docker access (no socket mount)
+      DOCKER_HOST: "tcp://docker-dind:2375"
+    networks:
+      - proxy-net
+      - internal-net
+    restart: "no"
+    command: ["./run_all.sh"]
+
+networks:
+  proxy-net:
+    driver: bridge
+  internal-net:
+    driver: bridge
 
 volumes:
   e2e-bridge-socket:

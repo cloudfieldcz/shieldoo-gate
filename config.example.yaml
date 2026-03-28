@@ -88,6 +88,14 @@ scanners:
   osv:
     enabled: true
     api_url: "https://api.osv.dev"
+  # Dynamic sandbox scanner (gVisor). Runs asynchronously after artifact is served.
+  # Requires Linux with gVisor (runsc) installed. Disabled by default.
+  sandbox:
+    enabled: false
+    runtime_binary: "runsc"          # path to gVisor runtime binary
+    timeout: "30s"                   # per-sandbox execution timeout
+    network_policy: "none"           # "none" (no network) or "monitor" (DNS/HTTP logging)
+    max_concurrent: 2                # max concurrent sandbox executions
 
 policy:
   block_if_verdict: "MALICIOUS"

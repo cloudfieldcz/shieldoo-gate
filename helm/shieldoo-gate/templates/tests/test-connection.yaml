@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "shieldoo-gate.fullname" . }}-test-connection"
+  labels:
+    {{- include "shieldoo-gate.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: wget
+      image: busybox:1.36.1
+      command: ['wget']
+      args: ['{{ include "shieldoo-gate.fullname" . }}:{{ .Values.ports.admin }}/api/v1/health', '-O', '-', '-q']
+  restartPolicy: Never

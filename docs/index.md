@@ -18,7 +18,7 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
 - [Configuration](configuration.md) — full `config.yaml` reference, environment variables, Go structs
   - [Authentication](configuration.md#authentication-v11) — OIDC admin API authentication (v1.1)
   - [Alerts](configuration.md#alerts-v11) — webhook, Slack, and email notification channels
-- [Deployment](deployment.md) — Docker Compose, local development, client configuration, testing
+- [Deployment](deployment.md) — Docker Compose, Kubernetes (Helm), local development, client configuration, testing
 
 ### Reference
 
@@ -44,7 +44,7 @@ Shieldoo Gate Protocol Adapter
 | Component | Description |
 |---|---|
 | **Protocol Adapters** | Native protocol implementations (Docker/OCI, PyPI PEP 503, npm, NuGet V3, Maven, RubyGems, Go Modules) |
-| **Scan Engine** | Pluggable scanner framework (GuardDog, Trivy, OSV, built-in heuristics) |
+| **Scan Engine** | Pluggable scanner framework (GuardDog, Trivy, OSV, built-in heuristics, dynamic sandbox) |
 | **Cache Store** | Local filesystem with per-ecosystem TTL (S3 backend planned) |
 | **Policy Engine** | Block / quarantine / warn / allow rules with allowlists |
 | **Policy Overrides** | Dynamic false-positive management and audit trail via UI/API |
@@ -76,7 +76,7 @@ Shieldoo Gate Protocol Adapter
 | — | S3 cache backend | Planned |
 | — | PostgreSQL HA backend | Phase 1 done (driver + migrations) |
 | — | Docker scheduled sync/rescan | Done |
-| — | Helm chart | Planned |
+| — | Helm chart | Done |
 
 ## Getting Started
 
@@ -120,14 +120,17 @@ make build
 # Unit tests
 make test
 
-# E2E tests (isolated Docker stack, real package installs, API validation)
+# E2E tests — host-based (requires uv, npm, dotnet, crane, etc.)
 ./tests/e2e-shell/run.sh
+
+# E2E tests — containerized (recommended, only requires Docker)
+make test-e2e-containerized
 
 # Lint
 make lint
 ```
 
-The scanner bridge must be started separately:
+The scanner bridge must be started separately (host-based development only):
 
 ```bash
 cd scanner-bridge
@@ -139,7 +142,13 @@ python main.py
 ### Running E2E Tests
 
 ```bash
-# Start the full stack first (see above), then:
+# Containerized (recommended — no host tools needed beyond Docker)
+make test-e2e-containerized
+
+# Host-based (requires all package managers installed locally)
+./tests/e2e-shell/run.sh
+
+# Go E2E tests
 make test-e2e
 ```
 

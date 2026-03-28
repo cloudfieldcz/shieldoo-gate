@@ -1,0 +1,242 @@
+# Shieldoo Gate Helm Chart — values.yaml
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/cloudfieldcz/shieldoo-gate
+  tag: ""  # defaults to Chart.appVersion
+  digest: ""  # immutable, takes precedence over tag
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+scannerBridge:
+  image:
+    repository: ghcr.io/cloudfieldcz/shieldoo-scanner-bridge
+    tag: ""
+    pullPolicy: IfNotPresent
+  resources:
+    limits:
+      memory: 512Mi
+      cpu: 500m
+    requests:
+      memory: 128Mi
+      cpu: 50m
+
+database:
+  backend: "sqlite"  # or "postgres"
+  sqlite:
+    path: "/data/shieldoo.db"
+  postgres:
+    # DSN MUST be provided via existingSecret or secrets.postgresDsn
+    dsn: ""
+    maxOpenConns: 25
+    maxIdleConns: 5
+    connMaxLifetime: "5m"
+
+cache:
+  backend: "local"  # or "s3", "azure_blob", "gcs"
+  local:
+    path: "/cache"
+    maxSizeGb: 50
+  s3:
+    bucket: ""
+    region: ""
+    endpoint: ""
+    prefix: ""
+    forcePathStyle: false
+  azure_blob:
+    accountName: ""
+    containerName: ""
+    prefix: ""
+  gcs:
+    bucket: ""
+    credentialsFile: ""
+    prefix: ""
+  ttl:
+    pypi: "168h"
+    npm: "168h"
+    nuget: "168h"
+    docker: "720h"
+
+upstreams:
+  pypi: "https://pypi.org"
+  npm: "https://registry.npmjs.org"
+  nuget: "https://api.nuget.org"
+  maven: "https://repo1.maven.org/maven2"
+  rubygems: "https://rubygems.org"
+  gomod: "https://proxy.golang.org"
+  docker:
+    defaultRegistry: "https://registry-1.docker.io"
+    allowedRegistries: []
+    sync:
+      enabled: false
+      interval: "6h"
+      rescanInterval: "24h"
+      maxConcurrent: 3
+    push:
+      enabled: false
+
+scanners:
+  parallel: true
+  timeout: "60s"
+  guarddog:
+    enabled: true
+    bridgeSocket: "/var/run/shieldoo/shieldoo-bridge.sock"
+  trivy:
+    enabled: true
+    binary: "trivy"
+    cacheDir: "/var/cache/trivy"
+  osv:
+    enabled: true
+    apiUrl: "https://api.osv.dev"
+
+policy:
+  blockIfVerdict: "MALICIOUS"
+  quarantineIfVerdict: "SUSPICIOUS"
+  minimumConfidence: 0.7
+  allowlist: []
+  tagMutability:
+    enabled: true
+    action: "warn"
+    excludeTags: ["latest", "nightly", "dev"]
+    checkOnCacheHit: false
+
+threatFeed:
+  enabled: true
+  url: "https://feed.shieldoo.io/malicious-packages.json"
+  refreshInterval: "1h"
+
+rescan:
+  enabled: true
+  interval: "6h"
+  batchSize: 100
+  maxConcurrent: 5
+
+log:
+  level: "info"
+  format: "json"
+
+alerts:
+  webhook:
+    enabled: false
+    url: ""
+    allowInsecure: false
+    on: ["BLOCKED", "QUARANTINED", "TAG_MUTATED"]
+  slack:
+    enabled: false
+    on: ["BLOCKED", "QUARANTINED"]
+  email:
+    enabled: false
+    host: ""
+    port: 587
+    from: ""
+    to: []
+    useTls: true
+    tlsSkipVerify: false
+    batchInterval: "30s"
+    on: ["QUARANTINED", "TAG_MUTATED"]
+
+auth:
+  enabled: false
+  issuerUrl: ""
+  clientId: ""
+  redirectUrl: ""
+  scopes: ["openid", "email", "profile"]
+
+ports:
+  pypi: 5000
+  npm: 4873
+  nuget: 5001
+  docker: 5002
+  maven: 8085
+  rubygems: 8086
+  gomod: 8087
+  admin: 8080
+
+service:
+  type: ClusterIP
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  #  - host: shieldoo-gate.example.com
+  #    paths:
+  #      - path: /
+  #        pathType: Prefix
+  #        port: admin
+  tls: []
+  #  - secretName: shieldoo-gate-tls
+  #    hosts:
+  #      - shieldoo-gate.example.com
+
+persistence:
+  data:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+    accessMode: ReadWriteOnce
+  cache:
+    enabled: true
+    size: 50Gi
+    storageClass: ""
+    accessMode: ReadWriteOnce
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+
+resources:
+  limits:
+    memory: 1Gi
+    cpu: "1"
+  requests:
+    memory: 256Mi
+    cpu: 100m
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Name of an existing Kubernetes Secret containing credentials.
+# Keys: database-dsn, webhook-secret, slack-webhook-url,
+#        smtp-username, smtp-password, oidc-client-secret,
+#        s3-access-key, s3-secret-key, azure-connection-string
+existingSecret: ""
+
+# Inline secret values (only used if existingSecret is empty).
+# For production, use existingSecret or an external secrets operator.
+secrets:
+  postgresDsn: ""
+  webhookSecret: ""
+  slackWebhookUrl: ""
+  smtpUsername: ""
+  smtpPassword: ""
+  oidcClientSecret: ""
+  s3AccessKey: ""
+  s3SecretKey: ""
+  azureConnectionString: ""
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+networkPolicy:
+  enabled: false
+  adminNamespace: ""
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

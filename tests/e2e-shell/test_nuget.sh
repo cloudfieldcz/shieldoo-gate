@@ -26,7 +26,17 @@ test_nuget() {
     local workdir
     workdir=$(mktemp -d)
     cp "${SCRIPT_DIR}/fixtures/nuget/E2ETest.csproj" "$workdir/"
-    cp "${SCRIPT_DIR}/fixtures/nuget/nuget.config" "$workdir/"
+
+    # Generate nuget.config dynamically with the correct URL (container-aware)
+    cat > "$workdir/nuget.config" <<NUGETEOF
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="shieldoo-e2e" value="${E2E_NUGET_URL}/v3/index.json" allowInsecureConnections="true" />
+  </packageSources>
+</configuration>
+NUGETEOF
 
     # Create minimal Program.cs so the project is valid
     mkdir -p "$workdir"

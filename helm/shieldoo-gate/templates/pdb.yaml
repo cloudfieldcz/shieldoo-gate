@@ -1,0 +1,13 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "shieldoo-gate.fullname" . }}
+  labels:
+    {{- include "shieldoo-gate.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "shieldoo-gate.selectorLabels" . | nindent 6 }}
+{{- end }}

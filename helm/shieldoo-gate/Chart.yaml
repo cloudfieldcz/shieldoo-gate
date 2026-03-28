@@ -1,0 +1,6 @@
+apiVersion: v2
+name: shieldoo-gate
+description: Supply chain security proxy for Docker, PyPI, npm, NuGet, Maven, RubyGems, Go modules
+type: application
+version: 0.1.0
+appVersion: "1.1.0"

@@ -131,7 +131,7 @@ test_docker_registry() {
 
     # Pull hello-world (~13kB) — the smallest possible image
     log_info "Docker Registry: pulling hello-world (this triggers Trivy DB download on first run)..."
-    manifest_output=$(_timed_crane manifest "localhost:${E2E_DOCKER_PORT}/library/hello-world:latest" --insecure 2>&1)
+    manifest_output=$(_timed_crane manifest "${E2E_DOCKER_REGISTRY_HOST}/library/hello-world:latest" --insecure 2>&1)
     manifest_exit=$?
     _check_docker_pull_result \
         "Docker Registry: hello-world pull + scan from Docker Hub" \
@@ -162,7 +162,7 @@ test_docker_registry() {
 
     # Pull gcr.io/distroless/static (~2MB) — proves multi-upstream routing
     log_info "Docker Registry: pulling gcr.io/distroless/static (multi-upstream routing test)..."
-    manifest_output=$(_timed_crane manifest "localhost:${E2E_DOCKER_PORT}/gcr.io/distroless/static:latest" --insecure 2>&1)
+    manifest_output=$(_timed_crane manifest "${E2E_DOCKER_REGISTRY_HOST}/gcr.io/distroless/static:latest" --insecure 2>&1)
     manifest_exit=$?
     _check_docker_pull_result \
         "Docker Registry: gcr.io/distroless/static via multi-upstream routing" \
@@ -174,12 +174,12 @@ test_docker_registry() {
 
     log_info "Docker Registry: testing push to internal namespace..."
     local push_output
-    if push_output=$(_timed_crane copy "hello-world:latest" "localhost:${E2E_DOCKER_PORT}/myteam/testapp:v1.0" --insecure 2>&1); then
+    if push_output=$(_timed_crane copy "hello-world:latest" "${E2E_DOCKER_REGISTRY_HOST}/myteam/testapp:v1.0" --insecure 2>&1); then
         log_pass "Docker Registry: push to internal namespace succeeded"
 
         # Pull back the pushed image
         log_info "Docker Registry: pulling back pushed image..."
-        if manifest_output=$(_timed_crane manifest "localhost:${E2E_DOCKER_PORT}/myteam/testapp:v1.0" --insecure 2>&1); then
+        if manifest_output=$(_timed_crane manifest "${E2E_DOCKER_REGISTRY_HOST}/myteam/testapp:v1.0" --insecure 2>&1); then
             log_pass "Docker Registry: pull-back of pushed image succeeded"
         else
             _check_docker_pull_result \
@@ -195,7 +195,7 @@ test_docker_registry() {
     # Push to upstream namespace must be rejected (instant — no scan)
     log_info "Docker Registry: testing push rejection for upstream namespaces..."
     local push_upstream_output
-    if push_upstream_output=$(_timed_crane copy "hello-world:latest" "localhost:${E2E_DOCKER_PORT}/gcr.io/evil/image:v1.0" --insecure 2>&1); then
+    if push_upstream_output=$(_timed_crane copy "hello-world:latest" "${E2E_DOCKER_REGISTRY_HOST}/gcr.io/evil/image:v1.0" --insecure 2>&1); then
         log_fail "Docker Registry: push to gcr.io namespace should have been rejected"
     else
         log_pass "Docker Registry: push to upstream namespace (gcr.io) correctly rejected"
