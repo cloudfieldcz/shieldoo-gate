@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jmoiron/sqlx"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/semaphore"
 
@@ -26,7 +25,7 @@ import (
 
 // SyncService periodically re-pulls and re-scans upstream Docker images.
 type SyncService struct {
-	db             *sqlx.DB
+	db             *config.GateDB
 	cache          cache.CacheStore
 	scanEngine     *scanner.Engine
 	policyEng      *policy.Engine
@@ -40,7 +39,7 @@ type SyncService struct {
 
 // NewSyncService creates a new sync service.
 func NewSyncService(
-	db *sqlx.DB,
+	db *config.GateDB,
 	cacheStore cache.CacheStore,
 	scanEngine *scanner.Engine,
 	policyEngine *policy.Engine,
@@ -423,14 +422,14 @@ func (s *SyncService) persistArtifact(
 }
 
 // ListSyncableRepos returns repos that are sync-enabled and not internal.
-func ListSyncableRepos(db *sqlx.DB) ([]DockerRepository, error) {
+func ListSyncableRepos(db *config.GateDB) ([]DockerRepository, error) {
 	var repos []DockerRepository
 	return repos, db.Select(&repos,
 		"SELECT * FROM docker_repositories WHERE sync_enabled = 1 AND is_internal = 0 ORDER BY last_synced_at ASC")
 }
 
 // DisableSync sets sync_enabled=false for a repository.
-func DisableSync(db *sqlx.DB, repoID int64) {
+func DisableSync(db *config.GateDB, repoID int64) {
 	_, err := db.Exec("UPDATE docker_repositories SET sync_enabled = 0 WHERE id = ?", repoID)
 	if err != nil {
 		log.Error().Err(err).Int64("repo_id", repoID).Msg("docker sync: failed to disable sync")
@@ -438,7 +437,7 @@ func DisableSync(db *sqlx.DB, repoID int64) {
 }
 
 // updateLastSyncedAt updates the last_synced_at timestamp for a repository.
-func updateLastSyncedAt(db *sqlx.DB, repoID int64) {
+func updateLastSyncedAt(db *config.GateDB, repoID int64) {
 	now := time.Now().UTC()
 	_, err := db.Exec("UPDATE docker_repositories SET last_synced_at = ? WHERE id = ?", now, repoID)
 	if err != nil {

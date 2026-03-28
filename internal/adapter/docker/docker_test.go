@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -20,12 +19,12 @@ import (
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
 )
 
-func setupTestDocker(t *testing.T, upstreamHandler http.HandlerFunc) (*docker.DockerAdapter, *httptest.Server, *sqlx.DB, *local.LocalCacheStore) {
+func setupTestDocker(t *testing.T, upstreamHandler http.HandlerFunc) (*docker.DockerAdapter, *httptest.Server, *config.GateDB, *local.LocalCacheStore) {
 	t.Helper()
 	upstream := httptest.NewServer(upstreamHandler)
 	t.Cleanup(upstream.Close)
 
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 
@@ -64,7 +63,7 @@ func TestDockerAdapter_V2Check_Returns200WithHeader(t *testing.T) {
 }
 
 func TestDockerAdapter_V2Check_NoUpstream_StillReturnsHeader(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -124,14 +123,14 @@ func TestDockerAdapter_Manifest_CachedClean_ServesFromCache(t *testing.T) {
 
 	now := time.Now().UTC()
 	_, err := db.Exec(
-		`INSERT OR REPLACE INTO artifacts (id, ecosystem, name, version, upstream_url, sha256, size_bytes, cached_at, last_accessed_at, storage_path)
+		`INSERT INTO artifacts (id, ecosystem, name, version, upstream_url, sha256, size_bytes, cached_at, last_accessed_at, storage_path)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		artifactID, "docker", "library/alpine", "3.20", "https://registry-1.docker.io/v2/library/alpine/manifests/3.20",
 		"abc123", len(manifestContent), now, now, tmpFile,
 	)
 	require.NoError(t, err)
 	_, err = db.Exec(
-		`INSERT OR REPLACE INTO artifact_status (artifact_id, status, quarantine_reason, rescan_due_at)
+		`INSERT INTO artifact_status (artifact_id, status, quarantine_reason, rescan_due_at)
 		 VALUES (?, ?, '', ?)`,
 		artifactID, string(model.StatusClean), now.Add(168*time.Hour),
 	)
@@ -166,13 +165,13 @@ func TestDockerAdapter_Manifest_QuarantinedImage_Returns403(t *testing.T) {
 
 	now := time.Now().UTC()
 	_, err := db.Exec(
-		`INSERT OR REPLACE INTO artifacts (id, ecosystem, name, version, upstream_url, sha256, size_bytes, cached_at, last_accessed_at, storage_path)
+		`INSERT INTO artifacts (id, ecosystem, name, version, upstream_url, sha256, size_bytes, cached_at, last_accessed_at, storage_path)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		artifactID, "docker", "library/malicious", "latest", "", "abc", 10, now, now, tmpFile,
 	)
 	require.NoError(t, err)
 	_, err = db.Exec(
-		`INSERT OR REPLACE INTO artifact_status (artifact_id, status, quarantine_reason, quarantined_at, rescan_due_at)
+		`INSERT INTO artifact_status (artifact_id, status, quarantine_reason, quarantined_at, rescan_due_at)
 		 VALUES (?, ?, ?, ?, ?)`,
 		artifactID, string(model.StatusQuarantined), "malicious image detected", now, now.Add(168*time.Hour),
 	)
@@ -223,7 +222,7 @@ func setupTestDockerMultiUpstream(t *testing.T, defaultHandler, ghcrHandler http
 	ghcrUpstream := httptest.NewServer(ghcrHandler)
 	t.Cleanup(ghcrUpstream.Close)
 
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 

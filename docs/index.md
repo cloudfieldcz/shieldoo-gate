@@ -47,7 +47,8 @@ Shieldoo Gate Protocol Adapter
 | **Cache Store** | Local filesystem with per-ecosystem TTL (S3 backend planned) |
 | **Policy Engine** | Block / quarantine / warn / allow rules with allowlists |
 | **Policy Overrides** | Dynamic false-positive management and audit trail via UI/API |
-| **Threat Feed** | Periodic threat feed refresh + manual rescan via API (automatic rescan scheduler planned) |
+| **Threat Feed** | Periodic threat feed refresh + manual rescan via API |
+| **Rescan Scheduler** | Background re-scanning of cached artifacts to detect newly discovered threats |
 | **Alerting** | Real-time notifications via webhook, Slack, and email for security events (v1.1) |
 | **Admin UI + REST API** | Dashboard, artifact management, audit log |
 
@@ -56,7 +57,7 @@ Shieldoo Gate Protocol Adapter
 - **Go 1.25+** — core proxy, API, built-in scanners
 - **TypeScript + React 18** — admin UI
 - **Python 3.12+** — GuardDog scanner bridge (gRPC sidecar)
-- **SQLite** (single-node; PostgreSQL HA mode planned)
+- **SQLite** (default single-node) / **PostgreSQL** (HA mode, v1.1)
 
 ## Implementation Status (v1.0)
 
@@ -71,7 +72,7 @@ Shieldoo Gate Protocol Adapter
 | 7 | Admin UI (React) | Done |
 | 8 | Main entrypoint, Docker Compose, E2E tests | Done |
 | — | S3 cache backend | Planned |
-| — | PostgreSQL HA backend | Planned |
+| — | PostgreSQL HA backend | Phase 1 done (driver + migrations) |
 | — | Docker scheduled sync/rescan | Done |
 | — | Helm chart | Planned |
 

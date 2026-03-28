@@ -30,10 +30,27 @@ upstreams:
       enabled: false
 
 cache:
-  backend: "local"
+  backend: "local"                 # "local" (default), "s3", "azure_blob", or "gcs"
   local:
     path: "/var/cache/shieldoo-gate"
     max_size_gb: 50
+  s3:
+    bucket: ""                     # S3 bucket name (required when backend is "s3")
+    region: "us-east-1"            # AWS region (required unless endpoint is set)
+    endpoint: ""                   # Custom endpoint for MinIO / S3-compatible services
+    prefix: ""                     # Optional key prefix for all objects
+    force_path_style: false        # Set true for MinIO / S3-compatible services
+    access_key_env: ""             # Env var name for AWS access key (optional; defaults to AWS credential chain)
+    secret_key_env: ""             # Env var name for AWS secret key (optional; defaults to AWS credential chain)
+  azure_blob:
+    account_name: ""               # Azure storage account name (required unless connection_string_env is set)
+    container_name: ""             # Blob container name (required when backend is "azure_blob")
+    connection_string_env: ""      # Env var name holding Azure Storage connection string (optional)
+    prefix: ""                     # Optional key prefix for all blobs
+  gcs:
+    bucket: ""                     # GCS bucket name (required when backend is "gcs")
+    credentials_file: ""           # Path to service account JSON (optional; defaults to GOOGLE_APPLICATION_CREDENTIALS)
+    prefix: ""                     # Optional key prefix for all objects
   ttl:
     pypi: "168h"
     npm: "168h"
@@ -44,6 +61,13 @@ database:
   backend: "sqlite"
   sqlite:
     path: "/var/lib/shieldoo-gate/gate.db"
+  postgres:
+    # DSN should be provided via environment variable SGW_DATABASE_POSTGRES_DSN
+    # to avoid committing credentials to version control.
+    dsn: ""
+    max_open_conns: 25
+    max_idle_conns: 5
+    conn_max_lifetime: "5m"
 
 scanners:
   parallel: true
@@ -70,6 +94,12 @@ threat_feed:
   enabled: true
   url: "https://feed.shieldoo.io/malicious-packages.json"
   refresh_interval: "1h"
+
+rescan:
+  enabled: true
+  interval: "6h"                   # How often the scheduler runs
+  batch_size: 100                  # Max artifacts per cycle
+  max_concurrent: 5                # Max parallel scans
 
 log:
   level: "info"

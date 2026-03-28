@@ -9,7 +9,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/jmoiron/sqlx"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/docker"
@@ -21,7 +20,7 @@ import (
 
 // Server is the REST API server.
 type Server struct {
-	db           *sqlx.DB
+	db           *config.GateDB
 	cacheStore   cache.CacheStore
 	scanEngine   *scanner.Engine
 	policyEngine *policy.Engine
@@ -31,7 +30,7 @@ type Server struct {
 }
 
 // NewServer creates a new Server with the given dependencies.
-func NewServer(db *sqlx.DB, cacheStore cache.CacheStore, scanEngine *scanner.Engine, policyEngine *policy.Engine) *Server {
+func NewServer(db *config.GateDB, cacheStore cache.CacheStore, scanEngine *scanner.Engine, policyEngine *policy.Engine) *Server {
 	return &Server{
 		db:           db,
 		cacheStore:   cacheStore,

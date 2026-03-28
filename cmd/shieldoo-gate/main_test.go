@@ -48,7 +48,7 @@ log:
 	require.NoError(t, err)
 	require.NoError(t, cfg.Validate())
 
-	db, err := config.InitDB(cfg.Database.SQLite.Path)
+	db, err := config.InitDB(cfg.Database)
 	require.NoError(t, err)
 	defer db.Close()
 }

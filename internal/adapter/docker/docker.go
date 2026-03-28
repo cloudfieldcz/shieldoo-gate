@@ -17,7 +17,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/crane"
-	"github.com/jmoiron/sqlx"
 	"github.com/rs/zerolog/log"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
@@ -37,7 +36,7 @@ var _ adapter.Adapter = (*DockerAdapter)(nil)
 // Manifests are scanned via Trivy before being served. Blobs are passed
 // through directly since scanning happens at the manifest/image level.
 type DockerAdapter struct {
-	db          *sqlx.DB
+	db          *config.GateDB
 	cache       cache.CacheStore
 	scanEngine  *scanner.Engine
 	policyEng   *policy.Engine
@@ -54,7 +53,7 @@ type DockerAdapter struct {
 // If cfg.Push.Enabled, automatically initializes push support with a
 // BlobStore at os.TempDir()/shieldoo-gate-blobs.
 func NewDockerAdapter(
-	db *sqlx.DB,
+	db *config.GateDB,
 	cacheStore cache.CacheStore,
 	scanEngine *scanner.Engine,
 	policyEngine *policy.Engine,
@@ -83,7 +82,7 @@ func NewDockerAdapter(
 // NewDockerAdapterWithPush creates a DockerAdapter with push support enabled.
 // The blobStore is used for storing pushed image blobs locally.
 func NewDockerAdapterWithPush(
-	db *sqlx.DB,
+	db *config.GateDB,
 	cacheStore cache.CacheStore,
 	scanEngine *scanner.Engine,
 	policyEngine *policy.Engine,
@@ -502,6 +501,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 			return
 		}
 		// Serve cached manifest.
+		adapter.UpdateLastAccessedAt(a.db, artifactID)
 		manifestBytes, err := os.ReadFile(cachedPath)
 		if err != nil {
 			log.Error().Err(err).Str("artifact", artifactID).Msg("docker: failed to read cached manifest")

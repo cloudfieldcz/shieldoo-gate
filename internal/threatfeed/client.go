@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jmoiron/sqlx"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 )
 
 // FeedEntry represents a single malicious artifact entry from the community threat feed.
@@ -30,13 +30,13 @@ type FeedResponse struct {
 
 // Client polls a remote threat feed URL and stores entries in the local database.
 type Client struct {
-	db         *sqlx.DB
+	db         *config.GateDB
 	feedURL    string
 	httpClient *http.Client
 }
 
 // NewClient creates a new Client using the given database handle and feed URL.
-func NewClient(db *sqlx.DB, feedURL string) *Client {
+func NewClient(db *config.GateDB, feedURL string) *Client {
 	return &Client{
 		db:      db,
 		feedURL: feedURL,
@@ -76,9 +76,13 @@ func (c *Client) Refresh(ctx context.Context) error {
 		}
 
 		_, err = c.db.ExecContext(ctx,
-			`INSERT OR REPLACE INTO threat_feed
+			`INSERT INTO threat_feed
 			 (sha256, ecosystem, package_name, version, reported_at, source_url, iocs_json)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			 VALUES (?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT (sha256) DO UPDATE SET
+			     ecosystem = EXCLUDED.ecosystem, package_name = EXCLUDED.package_name,
+			     version = EXCLUDED.version, reported_at = EXCLUDED.reported_at,
+			     source_url = EXCLUDED.source_url, iocs_json = EXCLUDED.iocs_json`,
 			entry.SHA256,
 			entry.Ecosystem,
 			entry.PackageName,

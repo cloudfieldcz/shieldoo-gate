@@ -14,10 +14,10 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jmoiron/sqlx"
 	"github.com/rs/zerolog/log"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/cache"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/policy"
@@ -29,7 +29,7 @@ var _ adapter.Adapter = (*NuGetAdapter)(nil)
 
 // NuGetAdapter proxies NuGet V3 API requests and scans .nupkg downloads.
 type NuGetAdapter struct {
-	db           *sqlx.DB
+	db           *config.GateDB
 	cache        cache.CacheStore
 	scanEngine   *scanner.Engine
 	policyEngine *policy.Engine
@@ -40,7 +40,7 @@ type NuGetAdapter struct {
 
 // NewNuGetAdapter creates and wires a NuGetAdapter.
 func NewNuGetAdapter(
-	db *sqlx.DB,
+	db *config.GateDB,
 	cacheStore cache.CacheStore,
 	scanEngine *scanner.Engine,
 	policyEngine *policy.Engine,
@@ -189,6 +189,7 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 			})
 			return
 		}
+		adapter.UpdateLastAccessedAt(a.db, artifactID)
 		http.ServeFile(w, r, cachedPath)
 		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
 			EventType:  model.EventServed,

@@ -11,9 +11,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jmoiron/sqlx"
+	"github.com/rs/zerolog/log"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/alert"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
 )
@@ -94,7 +95,7 @@ func WriteJSONError(w http.ResponseWriter, status int, resp ErrorResponse) {
 
 // WriteAuditLog inserts an AuditEntry into the audit_log table.
 // Timestamp is set to now if zero.
-func WriteAuditLog(db *sqlx.DB, entry model.AuditEntry) error {
+func WriteAuditLog(db *config.GateDB, entry model.AuditEntry) error {
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now().UTC()
 	}
@@ -118,9 +119,22 @@ func WriteAuditLog(db *sqlx.DB, entry model.AuditEntry) error {
 	return nil
 }
 
+// UpdateLastAccessedAt bumps the last_accessed_at timestamp for a cached artifact.
+// This keeps the rescan scheduler priority ordering accurate.
+func UpdateLastAccessedAt(db *config.GateDB, artifactID string) {
+	_, err := db.Exec(
+		`UPDATE artifacts SET last_accessed_at = ? WHERE id = ?`,
+		time.Now().UTC(), artifactID,
+	)
+	if err != nil {
+		// Non-critical — log and continue.
+		log.Warn().Err(err).Str("artifact", artifactID).Msg("adapter: failed to update last_accessed_at")
+	}
+}
+
 // GetArtifactStatus retrieves the current status of an artifact by ID.
 // Returns (nil, nil) when no row is found.
-func GetArtifactStatus(db *sqlx.DB, artifactID string) (*model.ArtifactStatus, error) {
+func GetArtifactStatus(db *config.GateDB, artifactID string) (*model.ArtifactStatus, error) {
 	var status model.ArtifactStatus
 	err := db.Get(&status,
 		`SELECT artifact_id, status, quarantine_reason, quarantined_at, released_at, rescan_due_at, last_scan_id
@@ -135,7 +149,7 @@ func GetArtifactStatus(db *sqlx.DB, artifactID string) (*model.ArtifactStatus, e
 }
 
 // InsertScanResults persists a slice of scanner.ScanResult rows for the given artifactID.
-func InsertScanResults(db *sqlx.DB, artifactID string, results []scanner.ScanResult) error {
+func InsertScanResults(db *config.GateDB, artifactID string, results []scanner.ScanResult) error {
 	for _, r := range results {
 		findingsJSON, err := json.Marshal(r.Findings)
 		if err != nil {
@@ -162,7 +176,7 @@ func InsertScanResults(db *sqlx.DB, artifactID string, results []scanner.ScanRes
 }
 
 // InsertArtifact transactionally inserts the artifact row and its initial status row.
-func InsertArtifact(db *sqlx.DB, artifact model.Artifact, status model.ArtifactStatus) error {
+func InsertArtifact(db *config.GateDB, artifact model.Artifact, status model.ArtifactStatus) error {
 	tx, err := db.Beginx()
 	if err != nil {
 		return fmt.Errorf("adapter: beginning transaction: %w", err)
@@ -171,8 +185,12 @@ func InsertArtifact(db *sqlx.DB, artifact model.Artifact, status model.ArtifactS
 
 	artifactID := artifact.ID()
 	_, err = tx.Exec(
-		`INSERT OR REPLACE INTO artifacts (id, ecosystem, name, version, upstream_url, sha256, size_bytes, cached_at, last_accessed_at, storage_path)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO artifacts (id, ecosystem, name, version, upstream_url, sha256, size_bytes, cached_at, last_accessed_at, storage_path)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (id) DO UPDATE SET
+		     ecosystem = EXCLUDED.ecosystem, name = EXCLUDED.name, version = EXCLUDED.version,
+		     upstream_url = EXCLUDED.upstream_url, sha256 = EXCLUDED.sha256, size_bytes = EXCLUDED.size_bytes,
+		     cached_at = EXCLUDED.cached_at, last_accessed_at = EXCLUDED.last_accessed_at, storage_path = EXCLUDED.storage_path`,
 		artifactID,
 		artifact.Ecosystem,
 		artifact.Name,
@@ -189,8 +207,12 @@ func InsertArtifact(db *sqlx.DB, artifact model.Artifact, status model.ArtifactS
 	}
 
 	_, err = tx.Exec(
-		`INSERT OR REPLACE INTO artifact_status (artifact_id, status, quarantine_reason, quarantined_at, released_at, rescan_due_at, last_scan_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO artifact_status (artifact_id, status, quarantine_reason, quarantined_at, released_at, rescan_due_at, last_scan_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (artifact_id) DO UPDATE SET
+		     status = EXCLUDED.status, quarantine_reason = EXCLUDED.quarantine_reason,
+		     quarantined_at = EXCLUDED.quarantined_at, released_at = EXCLUDED.released_at,
+		     rescan_due_at = EXCLUDED.rescan_due_at, last_scan_id = EXCLUDED.last_scan_id`,
 		artifactID,
 		status.Status,
 		status.QuarantineReason,

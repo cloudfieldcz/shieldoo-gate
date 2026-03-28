@@ -23,11 +23,16 @@ import (
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/pypi"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/alert"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/api"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/cache"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/cache/local"
+	azureblobcache "github.com/cloudfieldcz/shieldoo-gate/internal/cache/azureblob"
+	gcscache "github.com/cloudfieldcz/shieldoo-gate/internal/cache/gcs"
+	s3cache "github.com/cloudfieldcz/shieldoo-gate/internal/cache/s3"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/policy"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/scheduler"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner/builtin"
 	guarddog "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/guarddog"
 	osvscanner "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/osv"
@@ -60,14 +65,26 @@ func main() {
 	}
 
 	// Init database
-	db, err := config.InitDB(cfg.Database.SQLite.Path)
+	db, err := config.InitDB(cfg.Database)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to initialize database")
 	}
 	defer db.Close()
 
-	// Init local cache store
-	cacheStore, err := local.NewLocalCacheStore(cfg.Cache.Local.Path, cfg.Cache.Local.MaxSizeGB)
+	// Init cache store
+	var cacheStore cache.CacheStore
+	switch cfg.Cache.Backend {
+	case "s3":
+		cacheStore, err = s3cache.NewS3CacheStore(cfg.Cache.S3)
+	case "azure_blob":
+		cacheStore, err = azureblobcache.NewAzureBlobStore(cfg.Cache.AzureBlob)
+	case "gcs":
+		cacheStore, err = gcscache.NewGCSCacheStore(cfg.Cache.GCS)
+	case "local", "":
+		cacheStore, err = local.NewLocalCacheStore(cfg.Cache.Local.Path, cfg.Cache.Local.MaxSizeGB)
+	default:
+		err = fmt.Errorf("unknown cache backend: %s", cfg.Cache.Backend)
+	}
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to initialize cache store")
 	}
@@ -226,6 +243,14 @@ func main() {
 		apiServer.SetSyncService(syncSvc)
 		go syncSvc.Start(ctx)
 		log.Info().Msg("docker sync service enabled")
+	}
+
+	// Start rescan scheduler (if enabled).
+	if cfg.Rescan.Enabled {
+		rescanScheduler := scheduler.NewRescanScheduler(db, cacheStore, scanEngine, policyEngine, cfg.Rescan)
+		rescanScheduler.Start()
+		defer rescanScheduler.Stop()
+		log.Info().Msg("rescan scheduler enabled")
 	}
 
 	sigCh := make(chan os.Signal, 1)

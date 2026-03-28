@@ -87,7 +87,7 @@ func TestWriteJSONError_WritesStatusAndBody(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestWriteAuditLog_InsertsRow(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -106,7 +106,7 @@ func TestWriteAuditLog_InsertsRow(t *testing.T) {
 }
 
 func TestWriteAuditLog_SetsTimestampIfZero(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -126,7 +126,7 @@ func TestWriteAuditLog_SetsTimestampIfZero(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestInsertArtifact_ThenGetStatus(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -156,7 +156,7 @@ func TestInsertArtifact_ThenGetStatus(t *testing.T) {
 }
 
 func TestGetArtifactStatus_NotFound_ReturnsNilNil(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -170,7 +170,7 @@ func TestGetArtifactStatus_NotFound_ReturnsNilNil(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestInsertScanResults_InsertsRows(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 

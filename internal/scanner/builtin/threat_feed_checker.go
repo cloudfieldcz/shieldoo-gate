@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 
+	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
-	"github.com/jmoiron/sqlx"
 )
 
 // Compile-time interface compliance check.
@@ -15,11 +15,11 @@ var _ scanner.Scanner = (*ThreatFeedChecker)(nil)
 // threat_feed DB table. A match returns VerdictMalicious immediately without
 // any file I/O.
 type ThreatFeedChecker struct {
-	db *sqlx.DB
+	db *config.GateDB
 }
 
 // NewThreatFeedChecker creates a new ThreatFeedChecker backed by db.
-func NewThreatFeedChecker(db *sqlx.DB) *ThreatFeedChecker {
+func NewThreatFeedChecker(db *config.GateDB) *ThreatFeedChecker {
 	return &ThreatFeedChecker{db: db}
 }
 

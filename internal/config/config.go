@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
@@ -18,8 +19,17 @@ type Config struct {
 	Scanners   ScannersConfig   `mapstructure:"scanners"`
 	Policy     PolicyConfig     `mapstructure:"policy"`
 	ThreatFeed ThreatFeedConfig `mapstructure:"threat_feed"`
+	Rescan     RescanConfig     `mapstructure:"rescan"`
 	Log        LogConfig        `mapstructure:"log"`
 	Alerts     AlertsConfig     `mapstructure:"alerts"`
+}
+
+// RescanConfig controls the periodic artifact rescan scheduler.
+type RescanConfig struct {
+	Enabled       bool   `mapstructure:"enabled"`
+	Interval      string `mapstructure:"interval"`       // scheduler tick interval, default "6h"
+	BatchSize     int    `mapstructure:"batch_size"`      // max artifacts per tick, default 100
+	MaxConcurrent int    `mapstructure:"max_concurrent"`  // concurrent scans, default 5
 }
 
 // knownEventTypes is the set of recognised event type strings for alert "on" filters.
@@ -85,9 +95,35 @@ type DockerPushConfig struct {
 }
 
 type CacheConfig struct {
-	Backend string          `mapstructure:"backend"`
-	Local   LocalCacheConfig `mapstructure:"local"`
-	TTL     TTLConfig       `mapstructure:"ttl"`
+	Backend   string           `mapstructure:"backend"` // "local" (default), "s3", "azure_blob", or "gcs"
+	Local     LocalCacheConfig `mapstructure:"local"`
+	S3        S3CacheConfig    `mapstructure:"s3"`
+	AzureBlob AzureBlobConfig  `mapstructure:"azure_blob"`
+	GCS       GCSCacheConfig   `mapstructure:"gcs"`
+	TTL       TTLConfig        `mapstructure:"ttl"`
+}
+
+type AzureBlobConfig struct {
+	AccountName      string `mapstructure:"account_name"`
+	ContainerName    string `mapstructure:"container_name"`
+	ConnectionStrEnv string `mapstructure:"connection_string_env"` // env var name for connection string
+	Prefix           string `mapstructure:"prefix"`
+}
+
+type GCSCacheConfig struct {
+	Bucket          string `mapstructure:"bucket"`
+	CredentialsFile string `mapstructure:"credentials_file"` // optional path to service account JSON
+	Prefix          string `mapstructure:"prefix"`
+}
+
+type S3CacheConfig struct {
+	Bucket         string `mapstructure:"bucket"`
+	Region         string `mapstructure:"region"`
+	Endpoint       string `mapstructure:"endpoint"`         // for MinIO / S3-compatible
+	Prefix         string `mapstructure:"prefix"`           // optional key prefix
+	ForcePathStyle bool   `mapstructure:"force_path_style"` // for MinIO
+	AccessKeyEnv   string `mapstructure:"access_key_env"`   // env var name for access key
+	SecretKeyEnv   string `mapstructure:"secret_key_env"`   // env var name for secret key
 }
 
 type LocalCacheConfig struct {
@@ -103,12 +139,20 @@ type TTLConfig struct {
 }
 
 type DatabaseConfig struct {
-	Backend string       `mapstructure:"backend"`
-	SQLite  SQLiteConfig `mapstructure:"sqlite"`
+	Backend  string         `mapstructure:"backend"`
+	SQLite   SQLiteConfig   `mapstructure:"sqlite"`
+	Postgres PostgresConfig `mapstructure:"postgres"`
 }
 
 type SQLiteConfig struct {
 	Path string `mapstructure:"path"`
+}
+
+type PostgresConfig struct {
+	DSN             string `mapstructure:"dsn"`
+	MaxOpenConns    int    `mapstructure:"max_open_conns"`
+	MaxIdleConns    int    `mapstructure:"max_idle_conns"`
+	ConnMaxLifetime string `mapstructure:"conn_max_lifetime"`
 }
 
 type ScannersConfig struct {
@@ -209,17 +253,72 @@ func Load(path string) (*Config, error) {
 
 // Validate checks required configuration fields are populated.
 func (c *Config) Validate() error {
-	if c.Cache.Backend == "local" && c.Cache.Local.Path == "" {
-		return fmt.Errorf("config: cache.local.path is required when backend is 'local'")
+	switch c.Cache.Backend {
+	case "local", "":
+		if c.Cache.Local.Path == "" {
+			return fmt.Errorf("config: cache.local.path is required when backend is 'local'")
+		}
+	case "s3":
+		if c.Cache.S3.Bucket == "" {
+			return fmt.Errorf("config: cache.s3.bucket is required when backend is 's3'")
+		}
+		if c.Cache.S3.Region == "" && c.Cache.S3.Endpoint == "" {
+			return fmt.Errorf("config: cache.s3.region is required when backend is 's3' and no endpoint is set")
+		}
+	case "azure_blob":
+		if c.Cache.AzureBlob.ContainerName == "" {
+			return fmt.Errorf("config: cache.azure_blob.container_name is required when backend is 'azure_blob'")
+		}
+		if c.Cache.AzureBlob.AccountName == "" && c.Cache.AzureBlob.ConnectionStrEnv == "" {
+			return fmt.Errorf("config: cache.azure_blob.account_name or connection_string_env is required when backend is 'azure_blob'")
+		}
+	case "gcs":
+		if c.Cache.GCS.Bucket == "" {
+			return fmt.Errorf("config: cache.gcs.bucket is required when backend is 'gcs'")
+		}
+	default:
+		return fmt.Errorf("config: unknown cache backend: %s", c.Cache.Backend)
 	}
-	if c.Database.Backend == "sqlite" && c.Database.SQLite.Path == "" {
-		return fmt.Errorf("config: database.sqlite.path is required when backend is 'sqlite'")
+	switch c.Database.Backend {
+	case "sqlite", "":
+		if c.Database.SQLite.Path == "" {
+			return fmt.Errorf("config: database.sqlite.path is required when backend is 'sqlite'")
+		}
+	case "postgres":
+		if c.Database.Postgres.DSN == "" {
+			return fmt.Errorf("config: database.postgres.dsn is required when backend is 'postgres'")
+		}
+	default:
+		return fmt.Errorf("config: unknown database backend: %s", c.Database.Backend)
 	}
 
 	if err := c.validateAlerts(); err != nil {
 		return err
 	}
 
+	if err := c.validateRescan(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateRescan checks rescan scheduler configuration.
+func (c *Config) validateRescan() error {
+	if !c.Rescan.Enabled {
+		return nil
+	}
+	if c.Rescan.Interval != "" {
+		if _, err := time.ParseDuration(c.Rescan.Interval); err != nil {
+			return fmt.Errorf("config: rescan.interval %q is not a valid duration: %w", c.Rescan.Interval, err)
+		}
+	}
+	if c.Rescan.BatchSize < 0 {
+		return fmt.Errorf("config: rescan.batch_size must be >= 0, got %d", c.Rescan.BatchSize)
+	}
+	if c.Rescan.MaxConcurrent < 0 {
+		return fmt.Errorf("config: rescan.max_concurrent must be >= 0, got %d", c.Rescan.MaxConcurrent)
+	}
 	return nil
 }
 

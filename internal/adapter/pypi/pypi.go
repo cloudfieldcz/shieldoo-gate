@@ -15,10 +15,10 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jmoiron/sqlx"
 	"github.com/rs/zerolog/log"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/cache"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/policy"
@@ -30,7 +30,7 @@ var _ adapter.Adapter = (*PyPIAdapter)(nil)
 
 // PyPIAdapter proxies PyPI Simple API (PEP 503) and package downloads.
 type PyPIAdapter struct {
-	db           *sqlx.DB
+	db           *config.GateDB
 	cache        cache.CacheStore
 	scanEngine   *scanner.Engine
 	policyEngine *policy.Engine
@@ -41,7 +41,7 @@ type PyPIAdapter struct {
 
 // NewPyPIAdapter creates and wires a PyPIAdapter.
 func NewPyPIAdapter(
-	db *sqlx.DB,
+	db *config.GateDB,
 	cacheStore cache.CacheStore,
 	scanEngine *scanner.Engine,
 	policyEngine *policy.Engine,
@@ -171,6 +171,7 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		// Serve from cache.
+		adapter.UpdateLastAccessedAt(a.db, artifactID)
 		http.ServeFile(w, r, cachedPath)
 		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
 			EventType:  model.EventServed,

@@ -30,10 +30,27 @@ upstreams:
       enabled: false
 
 cache:
-  backend: "local"
+  backend: "local"                 # "local" (default), "s3", "azure_blob", or "gcs"
   local:
     path: "/var/cache/shieldoo-gate"
     max_size_gb: 50
+  s3:
+    bucket: ""
+    region: ""
+    endpoint: ""
+    prefix: ""
+    force_path_style: false
+    access_key_env: ""
+    secret_key_env: ""
+  azure_blob:
+    account_name: ""
+    container_name: ""
+    connection_string_env: ""
+    prefix: ""
+  gcs:
+    bucket: ""
+    credentials_file: ""
+    prefix: ""
   ttl:
     pypi: "168h"
     npm: "168h"
@@ -44,6 +61,12 @@ database:
   backend: "sqlite"
   sqlite:
     path: "/var/lib/shieldoo-gate/gate.db"
+  postgres:
+    # DSN should be provided via environment variable SGW_DATABASE_POSTGRES_DSN
+    dsn: ""
+    max_open_conns: 25
+    max_idle_conns: 5
+    conn_max_lifetime: "5m"
 
 scanners:
   parallel: true
@@ -70,6 +93,12 @@ threat_feed:
   enabled: true
   url: "https://feed.shieldoo.io/malicious-packages.json"
   refresh_interval: "1h"
+
+rescan:
+  enabled: true
+  interval: "6h"
+  batch_size: 100
+  max_concurrent: 5
 
 log:
   level: "info"

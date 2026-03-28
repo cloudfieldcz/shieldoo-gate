@@ -21,7 +21,7 @@ func setupTestPyPI(t *testing.T, upstreamHandler http.HandlerFunc) (*pypi.PyPIAd
 	upstream := httptest.NewServer(upstreamHandler)
 	t.Cleanup(upstream.Close)
 
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 

@@ -11,7 +11,7 @@ import (
 )
 
 func TestThreatFeedChecker_KnownMalicious_ReturnsMalicious(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -30,7 +30,7 @@ func TestThreatFeedChecker_KnownMalicious_ReturnsMalicious(t *testing.T) {
 }
 
 func TestThreatFeedChecker_UnknownHash_ReturnsClean(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -44,7 +44,7 @@ func TestThreatFeedChecker_UnknownHash_ReturnsClean(t *testing.T) {
 }
 
 func TestThreatFeedChecker_EmptyFeed_ReturnsClean(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 

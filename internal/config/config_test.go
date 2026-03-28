@@ -328,3 +328,64 @@ func TestValidate_MissingSQLitePath_ReturnsError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "database.sqlite.path")
 }
+
+func TestValidate_PostgresBackend_MissingDSN_ReturnsError(t *testing.T) {
+	cfg := &Config{
+		Cache: CacheConfig{
+			Backend: "local",
+			Local:   LocalCacheConfig{Path: "/tmp/cache"},
+		},
+		Database: DatabaseConfig{
+			Backend:  "postgres",
+			Postgres: PostgresConfig{DSN: ""},
+		},
+	}
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "database.postgres.dsn")
+}
+
+func TestValidate_PostgresBackend_WithDSN_NoError(t *testing.T) {
+	cfg := &Config{
+		Cache: CacheConfig{
+			Backend: "local",
+			Local:   LocalCacheConfig{Path: "/tmp/cache"},
+		},
+		Database: DatabaseConfig{
+			Backend:  "postgres",
+			Postgres: PostgresConfig{DSN: "postgres://user:pass@localhost/dbname"},
+		},
+	}
+	err := cfg.Validate()
+	assert.NoError(t, err)
+}
+
+func TestValidate_UnknownBackend_ReturnsError(t *testing.T) {
+	cfg := &Config{
+		Cache: CacheConfig{
+			Backend: "local",
+			Local:   LocalCacheConfig{Path: "/tmp/cache"},
+		},
+		Database: DatabaseConfig{
+			Backend: "mysql",
+		},
+	}
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown database backend")
+}
+
+func TestValidate_EmptyBackend_DefaultsToSQLite(t *testing.T) {
+	cfg := &Config{
+		Cache: CacheConfig{
+			Backend: "local",
+			Local:   LocalCacheConfig{Path: "/tmp/cache"},
+		},
+		Database: DatabaseConfig{
+			Backend: "",
+			SQLite:  SQLiteConfig{Path: "/tmp/gate.db"},
+		},
+	}
+	err := cfg.Validate()
+	assert.NoError(t, err)
+}
