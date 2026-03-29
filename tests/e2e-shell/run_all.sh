@@ -34,9 +34,11 @@ echo ""
 # The docker_logs helper requires COMPOSE_FILE; make it a no-op in container mode.
 if [ -z "${COMPOSE_FILE:-}" ]; then
     # In container mode, read logs from the shared log file instead of docker compose.
+    # Brief sleep allows volume-shared file content to become visible across containers.
     docker_logs() {
         local log_file="/var/log/shieldoo-gate/gate.log"
         if [ -f "$log_file" ]; then
+            sleep 1
             cat "$log_file"
         else
             echo "(docker_logs not available inside container — skipping log inspection)"
