@@ -29,6 +29,7 @@ services:
       - e2e-gate-data:/var/lib/shieldoo-gate
       - e2e-gate-cache:/var/cache/shieldoo-gate
       - e2e-trivy-cache:/var/cache/trivy
+      - e2e-gate-logs:/var/log/shieldoo-gate
       - ./config.e2e.yaml:/etc/shieldoo-gate/config.yaml:ro
     environment:
       SGW_SCANNERS_GUARDDOG_BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
@@ -85,6 +86,8 @@ services:
     depends_on:
       shieldoo-gate:
         condition: service_healthy
+    volumes:
+      - e2e-gate-logs:/var/log/shieldoo-gate:ro
     environment:
       # Container-internal URLs (service names, internal ports)
       SGW_PYPI_URL: "http://shieldoo-gate:5000"
@@ -119,3 +122,4 @@ volumes:
   e2e-gate-data:
   e2e-gate-cache:
   e2e-trivy-cache:
+  e2e-gate-logs:

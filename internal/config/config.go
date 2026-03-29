@@ -241,6 +241,7 @@ type ThreatFeedConfig struct {
 type LogConfig struct {
 	Level  string `mapstructure:"level"`
 	Format string `mapstructure:"format"`
+	File   string `mapstructure:"file"` // optional: also write logs to this file path
 }
 
 type AlertsConfig struct {

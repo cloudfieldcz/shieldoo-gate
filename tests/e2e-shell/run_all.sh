@@ -33,9 +33,14 @@ echo ""
 # When running inside docker-compose, COMPOSE_FILE is not set (no docker CLI needed).
 # The docker_logs helper requires COMPOSE_FILE; make it a no-op in container mode.
 if [ -z "${COMPOSE_FILE:-}" ]; then
-    # Override docker_logs to cat container stdout instead of using docker compose
+    # In container mode, read logs from the shared log file instead of docker compose.
     docker_logs() {
-        echo "(docker_logs not available inside container — skipping log inspection)"
+        local log_file="/var/log/shieldoo-gate/gate.log"
+        if [ -f "$log_file" ]; then
+            cat "$log_file"
+        else
+            echo "(docker_logs not available inside container — skipping log inspection)"
+        fi
     }
 fi
 

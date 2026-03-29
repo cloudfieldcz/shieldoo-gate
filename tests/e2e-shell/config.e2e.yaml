@@ -87,6 +87,7 @@ threat_feed:
 log:
   level: "debug"
   format: "json"
+  file: "/var/log/shieldoo-gate/gate.log"
 
 # Proxy auth: disabled by default in E2E; enabled via SGW_PROXY_AUTH_ENABLED env override.
 proxy_auth:

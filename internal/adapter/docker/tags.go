@@ -68,6 +68,18 @@ func DeleteTag(db *config.GateDB, repoID int64, tag string) error {
 	return nil
 }
 
+// GetTag returns a single tag by repo ID and tag name, or nil if not found.
+func GetTag(db *config.GateDB, repoID int64, tag string) (*DockerTag, error) {
+	var t DockerTag
+	err := db.Get(&t,
+		"SELECT * FROM docker_tags WHERE repo_id = ? AND tag = ?",
+		repoID, tag)
+	if err != nil {
+		return nil, fmt.Errorf("docker: getting tag %s for repo %d: %w", tag, repoID, err)
+	}
+	return &t, nil
+}
+
 // GetTagByDigest returns tags matching a specific manifest digest for a repository.
 func GetTagByDigest(db *config.GateDB, repoID int64, manifestDigest string) ([]DockerTag, error) {
 	var tags []DockerTag

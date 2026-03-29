@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -65,8 +66,20 @@ func main() {
 		level = zerolog.InfoLevel
 	}
 	zerolog.SetGlobalLevel(level)
+
+	var logWriter io.Writer = os.Stderr
+	if cfg.Log.File != "" {
+		f, err := os.OpenFile(cfg.Log.File, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			log.Fatal().Err(err).Str("path", cfg.Log.File).Msg("failed to open log file")
+		}
+		defer f.Close()
+		logWriter = io.MultiWriter(os.Stderr, f)
+	}
 	if cfg.Log.Format == "text" {
-		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+		log.Logger = log.Output(zerolog.ConsoleWriter{Out: logWriter})
+	} else {
+		log.Logger = log.Output(logWriter)
 	}
 
 	// Init database
