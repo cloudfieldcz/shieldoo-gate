@@ -47,12 +47,13 @@ When an artifact is blocked or quarantined, the adapter returns HTTP 403 with:
 
 ```json
 {
-  "error": "artifact_quarantined",
+  "error": "blocked",
   "artifact": "pypi:litellm:1.82.7",
-  "reason": "verdict MALICIOUS meets block threshold",
-  "details_url": "http://localhost:8080/api/v1/artifacts/pypi%3Alitellm%3A1.82.7"
+  "reason": "verdict MALICIOUS meets block threshold"
 }
 ```
+
+The `error` field is `"blocked"` when the policy action is BLOCK, or `"quarantined"` when the action is QUARANTINE.
 
 ## PyPI Adapter
 
@@ -212,6 +213,7 @@ When `push.enabled: true` is set in config, the Docker adapter supports `docker 
 | `GET` | `/v2/{name}/blobs/{digest}` | Pull layer blob — proxied to resolved upstream |
 | `POST` | `/v2/{name}/blobs/uploads/` | Initiate blob upload (push) — returns 202 with Location header |
 | `PUT` | `/v2/{name}/blobs/uploads/{uuid}` | Complete monolithic blob upload with digest verification |
+| `PATCH` | `/v2/{name}/blobs/uploads/{uuid}` | Chunked blob upload data (OCI Distribution Spec) |
 | `PUT` | `/v2/{name}/manifests/{reference}` | Push manifest — scans before accepting |
 | `HEAD` | `/v2/{name}/blobs/{digest}` | Check blob existence (internal or upstream proxy) |
 

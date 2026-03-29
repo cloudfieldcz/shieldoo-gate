@@ -11,7 +11,7 @@ Configuration is loaded by `internal/config/config.go` using [Viper](https://git
 ## Full Configuration Reference
 
 ```yaml
-# config.yaml — Shieldoo Gate v1.0
+# config.yaml — Shieldoo Gate v1.1
 
 # ─── Server ────────────────────────────────────────────────────────
 server:
@@ -116,6 +116,13 @@ scanners:
     enabled: true              # Enable OSV.dev vulnerability lookup
     api_url: "https://api.osv.dev"  # OSV API endpoint
 
+  sandbox:
+    enabled: false                   # Disabled by default; requires Linux + gVisor (runsc)
+    runtime_binary: "runsc"          # Path to gVisor runtime binary
+    timeout: "30s"                   # Per-sandbox execution timeout
+    network_policy: "none"           # "none" (no network) or "monitor" (DNS/HTTP logging)
+    max_concurrent: 2                # Max concurrent sandbox executions
+
 # ─── Policy ────────────────────────────────────────────────────────
 policy:
   block_if_verdict: "MALICIOUS"      # Block artifacts with this verdict
@@ -152,6 +159,7 @@ rescan:
 log:
   level: "info"                # debug | info | warn | error
   format: "json"               # json | text (text uses human-readable console output)
+  file: ""                     # Optional: also write logs to this file path
 
 # ─── Authentication (v1.1) ────────────────────────────────────────
 # OIDC authentication for the admin API. When disabled (default),
@@ -279,8 +287,8 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 |---|---|---|
 | `Config` | root | Top-level container for all sections |
 | `ServerConfig` | `server` | `Host` |
-| `PortsConfig` | `ports` | `PyPI`, `NPM`, `NuGet`, `Docker`, `Maven`, `Admin` |
-| `UpstreamsConfig` | `upstreams` | `PyPI`, `NPM`, `NuGet`, `Docker` (struct), `Maven` |
+| `PortsConfig` | `ports` | `PyPI`, `NPM`, `NuGet`, `Docker`, `Maven`, `RubyGems`, `GoMod`, `Admin` |
+| `UpstreamsConfig` | `upstreams` | `PyPI`, `NPM`, `NuGet`, `Docker` (struct), `Maven`, `RubyGems`, `GoMod` |
 | `DockerUpstreamConfig` | `upstreams.docker` | `DefaultRegistry`, `AllowedRegistries`, `Sync`, `Push` |
 | `DockerRegistryEntry` | `upstreams.docker.allowed_registries[]` | `Host`, `URL`, `Auth` |
 | `DockerRegistryAuth` | `...allowed_registries[].auth` | `Type`, `TokenEnv` |
@@ -295,14 +303,16 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 | `DatabaseConfig` | `database` | `Backend`, `SQLite`, `Postgres` |
 | `SQLiteConfig` | `database.sqlite` | `Path` |
 | `PostgresConfig` | `database.postgres` | `DSN`, `MaxOpenConns`, `MaxIdleConns`, `ConnMaxLifetime` |
-| `ScannersConfig` | `scanners` | `Parallel`, `Timeout`, `GuardDog`, `Trivy`, `OSV` |
+| `ScannersConfig` | `scanners` | `Parallel`, `Timeout`, `GuardDog`, `Trivy`, `OSV`, `Sandbox` |
 | `GuardDogConfig` | `scanners.guarddog` | `Enabled`, `BridgeSocket` |
 | `TrivyConfig` | `scanners.trivy` | `Enabled`, `Binary`, `CacheDir` |
 | `OSVConfig` | `scanners.osv` | `Enabled`, `APIURL` |
-| `PolicyConfig` | `policy` | `BlockIfVerdict`, `QuarantineIfVerdict`, `MinimumConfidence`, `Allowlist` |
+| `SandboxConfig` | `scanners.sandbox` | `Enabled`, `RuntimeBinary`, `Timeout`, `NetworkPolicy`, `MaxConcurrent` |
+| `PolicyConfig` | `policy` | `BlockIfVerdict`, `QuarantineIfVerdict`, `MinimumConfidence`, `Allowlist`, `TagMutability` |
+| `TagMutabilityConfig` | `policy.tag_mutability` | `Enabled`, `Action`, `ExcludeTags`, `CheckOnCacheHit` |
 | `ThreatFeedConfig` | `threat_feed` | `Enabled`, `URL`, `RefreshInterval` |
 | `RescanConfig` | `rescan` | `Enabled`, `Interval`, `BatchSize`, `MaxConcurrent` |
-| `LogConfig` | `log` | `Level`, `Format` |
+| `LogConfig` | `log` | `Level`, `Format`, `File` |
 | `AuthConfig` | `auth` | `Enabled`, `IssuerURL`, `ClientID`, `ClientSecretEnv`, `RedirectURL`, `Scopes` |
 | `ProxyAuthConfig` | `proxy_auth` | `Enabled`, `GlobalTokenEnv` |
 | `AlertsConfig` | `alerts` | `Webhook`, `Slack`, `Email` |

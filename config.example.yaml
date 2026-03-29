@@ -1,4 +1,4 @@
-# config.example.yaml — Shieldoo Gate v1.0 reference configuration
+# config.example.yaml — Shieldoo Gate v1.1 reference configuration
 
 server:
   host: "0.0.0.0"

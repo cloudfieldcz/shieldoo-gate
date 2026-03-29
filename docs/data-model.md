@@ -4,12 +4,22 @@
 
 ## Overview
 
-Shieldoo Gate uses **SQLite** (WAL mode, foreign keys enabled) with embedded SQL migrations. The schema is managed by `internal/config/db.go` using Go's `embed` package with a `schema_migrations` tracking table for run-once semantics. Migration files:
+Shieldoo Gate uses **SQLite** (default, WAL mode, foreign keys enabled) or **PostgreSQL** (HA mode) with embedded SQL migrations. The schema is managed by `internal/config/db.go` using Go's `embed` package with a `schema_migrations` tracking table for run-once semantics. Migration files are organized by backend:
 
-- `internal/config/migrations/001_init.sql` — Core tables (artifacts, scan_results, artifact_status, audit_log, threat_feed)
-- `internal/config/migrations/002_policy_overrides.sql` — Policy overrides table
-- `internal/config/migrations/003_docker_registry.sql` — Docker repositories table + schema_migrations bootstrap
-- `internal/config/migrations/004_docker_tags.sql` — Docker tags table (tag-to-manifest-digest mapping for pushed images)
+**SQLite** (`internal/config/migrations/sqlite/`):
+
+- `001_init.sql` — Core tables (artifacts, scan_results, artifact_status, audit_log, threat_feed)
+- `002_policy_overrides.sql` — Policy overrides table + lookup index
+- `003_docker_registry.sql` — Docker repositories table + schema_migrations bootstrap
+- `004_docker_tags.sql` — Docker tags table (tag-to-manifest-digest mapping)
+- `005_audit_event_type_index.sql` — Add index on audit_log(event_type, ts)
+- `006_rescan_scheduler.sql` — Rescan scheduler indexes + bootstrap rescan_due_at
+- `007_audit_user_email.sql` — Add user_email column to audit_log
+- `008_tag_digest_history.sql` — Tag digest history table for mutability detection
+- `009_api_keys.sql` — API keys table for proxy authentication
+- `010_api_keys_owner_index.sql` — Add index on api_keys(owner_email)
+
+**PostgreSQL** (`internal/config/migrations/postgres/`) — same 10 migrations with PostgreSQL syntax.
 
 SQLite PRAGMAs applied at startup:
 ```sql
@@ -58,23 +68,32 @@ PRAGMA busy_timeout=5000;
                           │ user_agent       │
                           │ reason           │
                           │ metadata_json    │
+                          │ user_email       │
                           └──────────────────┘
 
-┌──────────────────┐     ┌──────────────────┐
-│   threat_feed    │     │ policy_overrides  │
-│──────────────────│     │──────────────────│
-│ PK sha256 (TEXT) │     │ PK id (INTEGER)  │
-│ ecosystem        │     │ ecosystem        │
-│ package_name     │     │ name             │
-│ version          │     │ version          │
-│ reported_at      │     │ scope            │
-│ source_url       │     │ reason           │
-│ iocs_json        │     │ created_by       │
+┌──────────────────┐     ┌──────────────────┐     ┌──────────────────────┐
+│   threat_feed    │     │ policy_overrides  │     │  tag_digest_history  │
+│──────────────────│     │──────────────────│     │──────────────────────│
+│ PK sha256 (TEXT) │     │ PK id (INTEGER)  │     │ PK id (INTEGER)      │
+│ ecosystem        │     │ ecosystem        │     │ ecosystem            │
+│ package_name     │     │ name             │     │ name                 │
+│ version          │     │ version          │     │ tag_or_version       │
+│ reported_at      │     │ scope            │     │ digest               │
+│ source_url       │     │ reason           │     │ first_seen_at        │
+│ iocs_json        │     │ created_by       │     └──────────────────────┘
 └──────────────────┘     │ created_at       │
-                         │ expires_at       │
-                         │ revoked          │
-                         │ revoked_at       │
-                         └──────────────────┘
+                         │ expires_at       │     ┌──────────────────┐
+                         │ revoked          │     │    api_keys      │
+                         │ revoked_at       │     │──────────────────│
+                         └──────────────────┘     │ PK id (INTEGER)  │
+                                                  │ key_hash (UNIQUE)│
+                                                  │ name             │
+                                                  │ owner_email      │
+                                                  │ enabled          │
+                                                  │ created_at       │
+                                                  │ last_used_at     │
+                                                  │ expires_at       │
+                                                  └──────────────────┘
 ```
 
 ## Tables
@@ -86,7 +105,7 @@ Stores metadata about every artifact that has been downloaded and cached.
 | Column | Type | Description |
 |---|---|---|
 | `id` | TEXT PK | Composite key: `"{ecosystem}:{name}:{version}"` |
-| `ecosystem` | TEXT NOT NULL | Package ecosystem (`pypi`, `npm`, `nuget`, `docker`) |
+| `ecosystem` | TEXT NOT NULL | Package ecosystem (`pypi`, `npm`, `nuget`, `docker`, `maven`, `rubygems`, `go`) |
 | `name` | TEXT NOT NULL | Package name |
 | `version` | TEXT NOT NULL | Package version |
 | `upstream_url` | TEXT NOT NULL | URL from which the artifact was downloaded |
@@ -186,6 +205,7 @@ PENDING_SCAN ──▶ CLEAN ──▶ QUARANTINED ───┘
 | `user_agent` | TEXT | Client user-agent string |
 | `reason` | TEXT | Human-readable reason or description |
 | `metadata_json` | TEXT | Additional JSON metadata |
+| `user_email` | TEXT DEFAULT '' | Email of the user who performed the action (v1.1, set when OIDC auth is active) |
 
 **Event types:**
 
@@ -198,11 +218,14 @@ PENDING_SCAN ──▶ CLEAN ──▶ QUARANTINED ───┘
 | `SCANNED` | Scan completed for an artifact |
 | `OVERRIDE_CREATED` | Policy override created via API |
 | `OVERRIDE_REVOKED` | Policy override revoked via API |
+| `TAG_MUTATED` | Upstream tag/version digest changed (tag mutability detection) |
 | `RESCAN_QUEUED` | Manual rescan triggered via API |
 
 **Go struct:** `model.AuditEntry` (`internal/model/audit.go`)
 
-**Indexes:** `idx_audit_log_ts ON (ts)`
+**Indexes:**
+- `idx_audit_log_ts ON (ts)`
+- `idx_audit_log_event_type ON (event_type, ts)` — used by alert system per-channel filtering
 
 ### `threat_feed`
 
@@ -233,10 +256,10 @@ User-created exceptions that allow artifacts through the policy engine despite s
 | `id` | INTEGER PK AUTOINCREMENT | Override ID |
 | `ecosystem` | TEXT NOT NULL | Package ecosystem |
 | `name` | TEXT NOT NULL | Package name |
-| `version` | TEXT | Package version (null for package-scope overrides) |
+| `version` | TEXT NOT NULL DEFAULT '' | Package version (empty for package-scope overrides) |
 | `scope` | TEXT NOT NULL | `version` (specific version) or `package` (all versions) |
-| `reason` | TEXT | Reason for override (e.g., "False positive: safe package") |
-| `created_by` | TEXT NOT NULL | User/API key that created the override |
+| `reason` | TEXT NOT NULL DEFAULT '' | Reason for override (e.g., "False positive: safe package") |
+| `created_by` | TEXT NOT NULL DEFAULT 'api' | User/API key that created the override |
 | `created_at` | DATETIME NOT NULL | Creation timestamp |
 | `expires_at` | DATETIME | Optional expiration (null = never expires) |
 | `revoked` | BOOLEAN NOT NULL DEFAULT 0 | Soft-delete flag |
@@ -244,7 +267,9 @@ User-created exceptions that allow artifacts through the policy engine despite s
 
 **Go struct:** `model.PolicyOverride` (`internal/model/override.go`)
 
-Key method: `Matches(ecosystem, name, version string) bool` — checks if the override applies to a given artifact, accounting for scope, revocation, and expiration.
+Key method: `Matches(ecosystem, name, version string) bool` — checks if the override applies to a given artifact, accounting for scope, revocation, and expiration. Note: the policy engine uses a direct SQL query for override matching (`engine.go:hasDBOverride()`), not this Go method.
+
+**Indexes:** `idx_policy_overrides_lookup ON (ecosystem, name, version, revoked)`
 
 ### `docker_repositories`
 
@@ -261,6 +286,8 @@ Tracks known Docker image repositories, both upstream (proxied) and internal (pu
 | `sync_enabled` | INTEGER NOT NULL DEFAULT 1 | Whether scheduled sync is enabled |
 
 **Go struct:** `docker.DockerRepository` (`internal/adapter/docker/repos.go`)
+
+**Indexes:** `idx_docker_repos_registry_name ON (registry, name)` (UNIQUE)
 
 ### `docker_tags`
 
@@ -280,6 +307,60 @@ Maps tag names to manifest digests for Docker repositories. Used primarily for p
 
 **Unique constraint:** `(repo_id, tag)` — each tag name is unique per repository. Pushing the same tag again updates the digest (like `docker push myapp:latest`).
 
+**Indexes:** `idx_docker_tags_digest ON (manifest_digest)`
+
+### `tag_digest_history`
+
+Tracks all observed digests for each ecosystem/name/version tuple. Used by tag mutability detection (`internal/adapter/mutability.go`) to identify upstream content changes.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER PK AUTOINCREMENT | Entry ID |
+| `ecosystem` | TEXT NOT NULL | Package ecosystem |
+| `name` | TEXT NOT NULL | Package or image name |
+| `tag_or_version` | TEXT NOT NULL | Tag or version string |
+| `digest` | TEXT NOT NULL | SHA-256 digest observed for this tag/version |
+| `first_seen_at` | TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP | When this digest was first seen |
+
+**Unique constraint:** `(ecosystem, name, tag_or_version, digest)`
+
+**Indexes:** `idx_tag_digest_history_lookup ON (ecosystem, name, tag_or_version)`
+
+### `api_keys`
+
+API keys for proxy endpoint authentication. Keys are either per-user PATs (generated via admin API when OIDC is enabled) or a global shared token.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER PK AUTOINCREMENT | Key ID |
+| `key_hash` | TEXT NOT NULL UNIQUE | SHA-256 hash of the API key (plain key is never stored) |
+| `name` | TEXT NOT NULL | Human-readable key name |
+| `owner_email` | TEXT NOT NULL DEFAULT '' | Email of the key owner (from OIDC) |
+| `enabled` | INTEGER NOT NULL DEFAULT 1 | Whether the key is active |
+| `created_at` | DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP | Creation timestamp |
+| `last_used_at` | DATETIME | Last time the key was used for authentication |
+| `expires_at` | DATETIME | Optional expiration (null = never expires) |
+
+**Go struct:** `model.APIKey` (`internal/model/apikey.go`)
+
+**Indexes:** `idx_api_keys_owner_email ON (owner_email)`
+
+### `schema_migrations`
+
+Tracks which SQL migrations have been applied. Prevents re-running migrations.
+
+| Column | Type | Description |
+|---|---|---|
+| `version` | INTEGER PK | Migration number (e.g., 1, 2, 3...) |
+| `applied_at` | DATETIME NOT NULL | When the migration was applied |
+
+### Additional Indexes (rescan scheduler)
+
+The rescan scheduler requires two indexes for efficient priority queries:
+
+- `idx_artifact_status_rescan ON artifact_status(status, rescan_due_at)` — finds artifacts due for rescan
+- `idx_artifacts_last_accessed ON artifacts(last_accessed_at)` — orders by most recently accessed
+
 ## Artifact ID Convention
 
 Throughout the system, artifacts are identified by the composite string `"{ecosystem}:{name}:{version}"`:
@@ -288,5 +369,8 @@ Throughout the system, artifacts are identified by the composite string `"{ecosy
 - `npm:chalk:5.3.0`
 - `nuget:Newtonsoft.Json:13.0.3`
 - `docker:library/python:3.12-slim`
+- `maven:org.apache.commons:commons-lang3:3.14.0` (4-part: `ecosystem:groupId:artifactId:version`)
+- `rubygems:rake:13.2.1`
+- `go:golang.org/x/text:v0.14.0`
 
 This ID is used as the primary key in the `artifacts` table and as the `artifact_id` foreign key in related tables. It is computed by `model.Artifact.ID()` and URL-encoded/decoded when used in API paths.

@@ -1,13 +1,13 @@
 # Shieldoo Gate
 
-> Open-source supply chain security proxy for Docker, PyPI, npm, NuGet, and more.
+> Open-source supply chain security proxy for Docker, PyPI, npm, NuGet, Maven, RubyGems, Go Modules, and more.
 
 Shieldoo Gate acts as a transparent caching proxy for all major package ecosystems, scanning every artifact before it is served and blocking delivery of malicious content in real time.
 
 ## Key Features
 
 - **Transparent proxy** — zero client-side changes beyond pointing at the Gate URL
-- **Multi-ecosystem** — Docker, PyPI, npm, NuGet (Maven, RubyGems in v1.1)
+- **Multi-ecosystem** — Docker, PyPI, npm, NuGet, Maven, RubyGems, Go Modules
 - **Pluggable scanners** — GuardDog, Trivy, OSV, built-in heuristics
 - **Block & quarantine** — malicious packages never reach your developers or CI
 - **Community threat feed** — fast-path blocking of known malicious package hashes
@@ -40,6 +40,9 @@ Port reference:
 | npm proxy | 4873 | HTTP |
 | NuGet proxy | 5001 | HTTP |
 | Docker proxy | 5002 | HTTP |
+| Maven proxy | 8085 | HTTP |
+| RubyGems proxy | 8086 | HTTP |
+| Go module proxy | 8087 | HTTP |
 | Admin API / Metrics | 8080 | HTTP |
 
 ## Testing

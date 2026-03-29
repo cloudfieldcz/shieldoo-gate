@@ -1,6 +1,6 @@
 # Shieldoo Gate — Documentation
 
-> Open-source supply chain security proxy for Docker, PyPI, npm, NuGet, Maven, and more.
+> Open-source supply chain security proxy for Docker, PyPI, npm, NuGet, Maven, RubyGems, and Go Modules.
 
 ## Overview
 
@@ -45,7 +45,7 @@ Shieldoo Gate Protocol Adapter
 |---|---|
 | **Protocol Adapters** | Native protocol implementations (Docker/OCI, PyPI PEP 503, npm, NuGet V3, Maven, RubyGems, Go Modules) |
 | **Scan Engine** | Pluggable scanner framework (GuardDog, Trivy, OSV, built-in heuristics, dynamic sandbox) |
-| **Cache Store** | Local filesystem with per-ecosystem TTL (S3 backend planned) |
+| **Cache Store** | Local filesystem, S3/MinIO, Azure Blob Storage, or GCS with per-ecosystem TTL |
 | **Policy Engine** | Block / quarantine / warn / allow rules with allowlists |
 | **Policy Overrides** | Dynamic false-positive management and audit trail via UI/API |
 | **Threat Feed** | Periodic threat feed refresh + manual rescan via API |
@@ -62,7 +62,7 @@ Shieldoo Gate Protocol Adapter
 - **Python 3.12+** — GuardDog scanner bridge (gRPC sidecar)
 - **SQLite** (default single-node) / **PostgreSQL** (HA mode, v1.1)
 
-## Implementation Status (v1.0)
+## Implementation Status
 
 | Phase | Module | Status |
 |---|---|---|
@@ -70,16 +70,21 @@ Shieldoo Gate Protocol Adapter
 | 2 | Scanner engine + built-in scanners | Done |
 | 3 | External scanners (GuardDog, Trivy, OSV) | Done |
 | 4 | Cache (local) & policy engine | Done |
-| 5 | Protocol adapters (PyPI, npm, Docker, NuGet, Maven) | Done |
+| 5 | Protocol adapters (PyPI, npm, Docker, NuGet, Maven, RubyGems, Go Modules) | Done |
 | 6 | Admin REST API | Done |
 | 7 | Admin UI (React) | Done |
 | 8 | Main entrypoint, Docker Compose, E2E tests | Done |
-| — | S3 cache backend | Planned |
-| — | PostgreSQL HA backend | Phase 1 done (driver + migrations) |
+| — | Cloud cache backends (S3, Azure Blob, GCS) | Done |
+| — | PostgreSQL HA backend | Done |
 | — | Docker scheduled sync/rescan | Done |
 | — | Helm chart | Done |
+| — | Rescan scheduler | Done |
+| — | Alerting (webhook, Slack, email) | Done |
+| — | OIDC admin authentication | Done |
 | — | Proxy API key auth (PAT) | Done |
 | — | User profile & API key management UI | Done |
+| — | Tag mutability detection | Done |
+| — | Dynamic sandbox (gVisor) | Done |
 
 ## Getting Started
 
@@ -87,7 +92,7 @@ See the [Quick Start in README](../README.md#quick-start) or the [Deployment gui
 
 ### Example Projects
 
-The [`examples/`](../examples/) directory contains minimal projects (Python, npm, .NET) configured to install dependencies through the local proxy. Each has one dependency and a tiny script — a quick way to verify the proxy works.
+The [`examples/`](../examples/) directory contains minimal projects (Python, npm, .NET, Maven, RubyGems, Go) configured to install dependencies through the local proxy. Each has one dependency and a tiny script — a quick way to verify the proxy works.
 
 ### Running with Docker Compose
 

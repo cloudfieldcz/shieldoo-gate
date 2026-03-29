@@ -4,7 +4,7 @@
 
 ## Overview
 
-The policy engine (`internal/policy/`) is the decision layer between scan results and the adapter's response. It evaluates aggregated scan results against configured rules and returns one of three actions: **allow**, **block**, or **quarantine**.
+The policy engine (`internal/policy/`) is the decision layer between scan results and the adapter's response. It evaluates aggregated scan results against configured rules and returns one of four actions: **allow**, **block**, **quarantine**, or **warn**.
 
 The engine consists of two stages:
 
@@ -51,7 +51,7 @@ policy:
     - "npm:lodash"                # Allow all versions (if no version specified)
 ```
 
-Parsed at engine initialization into `AllowlistEntry` structs. If the artifact matches an allowlist entry, it is **allowed** immediately.
+Parsed at engine initialization into `AllowlistEntry` structs. If the artifact matches an allowlist entry, it is **allowed** immediately. Note: the `==` prefix is optional — `"pypi:litellm:1.82.6"` works the same as `"pypi:litellm:==1.82.6"`.
 
 ### Step 3: Verdict Rules
 
@@ -62,7 +62,7 @@ The aggregated verdict is compared against two configurable thresholds:
 | `policy.block_if_verdict` | `MALICIOUS` | Return **BLOCK** |
 | `policy.quarantine_if_verdict` | `SUSPICIOUS` | Return **QUARANTINE** |
 
-If the verdict matches `block_if_verdict`, the artifact is blocked. If it matches `quarantine_if_verdict`, it is quarantined. Otherwise, it is allowed.
+These defaults are enforced programmatically via `viper.SetDefault()` in `config.go`. If omitted from the config file, the defaults apply. If the verdict matches `block_if_verdict`, the artifact is blocked. If it matches `quarantine_if_verdict`, it is quarantined. Otherwise, it is allowed.
 
 ### Step 4: Default
 
@@ -86,7 +86,7 @@ Before policy evaluation, the aggregator (`internal/policy/aggregator.go`) combi
 
 ### Confidence Threshold
 
-The `policy.minimum_confidence` setting (default `0.7`) filters out scanner results that are not confident enough to act on. This prevents low-confidence false positives from triggering blocks.
+The `policy.minimum_confidence` setting (default `0.7`, enforced via `viper.SetDefault()`) filters out scanner results that are not confident enough to act on. This prevents low-confidence false positives from triggering blocks.
 
 The threat feed checker is exempt from this threshold — it bypasses confidence checks entirely.
 
@@ -97,8 +97,9 @@ The threat feed checker is exempt from this threshold — it bypasses confidence
 | **ALLOW** | Serve artifact | `CLEAN` | `SERVED` | Artifact passes all checks; cached and served |
 | **BLOCK** | HTTP 403 | `QUARANTINED` | `BLOCKED` | Artifact is malicious; rejected and quarantined |
 | **QUARANTINE** | HTTP 403 | `QUARANTINED` | `QUARANTINED` | Artifact is suspicious; stored but not served |
+| **WARN** | Serve artifact | `CLEAN` | `TAG_MUTATED` | Used by tag mutability detection; artifact served but alert fired |
 
-Both BLOCK and QUARANTINE result in the artifact being marked as `QUARANTINED` in the database. The difference is in the audit event type and the reason logged.
+Both BLOCK and QUARANTINE result in the artifact being marked as `QUARANTINED` in the database. The difference is in the audit event type and the reason logged. WARN is currently only used by the tag mutability subsystem (not by the verdict-based engine).
 
 ## Policy Overrides (False Positive Management)
 
@@ -122,7 +123,7 @@ Created ──▶ Active ──▶ Revoked (soft-delete)
 - **Active overrides** take effect immediately on the next artifact request
 - **Revoked overrides** are soft-deleted (`revoked=true`, `revoked_at` set) — they remain in the database for audit purposes but no longer match
 - **Expired overrides** automatically stop matching after `expires_at` passes
-- Override matching is checked by `PolicyOverride.Matches()` which verifies ecosystem, name, version (if scope=version), non-revoked, and non-expired
+- Override matching in the policy engine is performed via a direct SQL query in `engine.go:hasDBOverride()`, not the Go `PolicyOverride.Matches()` method. The query checks ecosystem, name, version (if scope=version), non-revoked, and non-expired
 
 ### Override API
 
@@ -182,3 +183,39 @@ Aggregation: exfil result filtered (0.4 < 0.7 threshold), remaining = CLEAN
 Policy: CLEAN below action thresholds → ALLOW
 Result: Artifact served, status CLEAN, audit event SERVED
 ```
+
+## Tag Mutability Detection
+
+The tag mutability subsystem (`internal/adapter/mutability.go`) is part of the policy layer but operates independently from the verdict-based engine. It detects when an upstream registry tag or version resolves to a different digest than previously observed — a potential indicator of supply chain compromise.
+
+### Configuration
+
+```yaml
+policy:
+  tag_mutability:
+    enabled: true
+    action: "quarantine"     # "quarantine" | "warn" | "block"
+    exclude_tags:            # Tags known to be mutable (skip checks)
+      - "latest"
+      - "nightly"
+      - "dev"
+    check_on_cache_hit: false  # Check on every cache hit (adds ~50-200ms latency)
+```
+
+### Detection Flow
+
+1. On cache hit, if `check_on_cache_hit` is enabled, the adapter resolves the upstream tag to its current digest.
+2. The digest is compared against the `tag_digest_history` table.
+3. If a new digest is observed for a previously-seen tag:
+   - **`quarantine`** (default) — Quarantine the new artifact, keep old cached as CLEAN
+   - **`block`** — Return 403 immediately
+   - **`warn`** — Serve the artifact but fire `TAG_MUTATED` audit event and alert
+4. Excluded tags (e.g., `latest`) are skipped.
+
+### Actions
+
+| Action | Behavior | Audit Event |
+|---|---|---|
+| `quarantine` | New artifact quarantined, old cached served | `TAG_MUTATED` |
+| `block` | Return HTTP 403 | `TAG_MUTATED` |
+| `warn` | Serve artifact, fire alert | `TAG_MUTATED` |

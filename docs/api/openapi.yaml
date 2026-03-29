@@ -4,7 +4,7 @@ info:
   description: |
     Administration and observability API for Shieldoo Gate — an open-source
     supply chain security proxy for Docker, PyPI, npm, NuGet, and more.
-  version: 1.0.0
+  version: 1.1.0
   license:
     name: Apache 2.0
     url: https://www.apache.org/licenses/LICENSE-2.0
@@ -30,10 +30,129 @@ tags:
     description: Docker repository and tag management
   - name: api-keys
     description: API key management for proxy authentication
+  - name: auth
+    description: OIDC authentication flow
   - name: metrics
     description: Prometheus metrics
 
 paths:
+  /auth/login:
+    get:
+      summary: Initiate OIDC login flow
+      operationId: authLogin
+      tags: [auth]
+      description: |
+        Redirects the user to the OIDC provider's authorization endpoint.
+        Generates a state parameter (CSRF protection) and PKCE code verifier,
+        stored in short-lived httpOnly cookies.
+      responses:
+        "302":
+          description: Redirect to OIDC provider authorization endpoint
+
+  /auth/callback:
+    get:
+      summary: OIDC callback after provider authorization
+      operationId: authCallback
+      tags: [auth]
+      description: |
+        Handles the OIDC provider's redirect back with an authorization code.
+        Validates state, exchanges the code for tokens using PKCE, verifies
+        the ID token, and sets a session cookie.
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "302":
+          description: Redirect to UI root on success
+        "400":
+          description: Missing or invalid state/code
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Token exchange or verification failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/logout:
+    post:
+      summary: Clear session cookie
+      operationId: authLogout
+      tags: [auth]
+      description: Clears the session cookie, logging the user out.
+      responses:
+        "200":
+          description: Successfully logged out
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    enum: [logged_out]
+
+  /auth/refresh:
+    post:
+      summary: Refresh the session cookie
+      operationId: authRefresh
+      tags: [auth]
+      description: |
+        Re-verifies the session cookie and reissues it with a fresh expiry.
+        Returns 401 if the session is missing or expired.
+      responses:
+        "200":
+          description: Session refreshed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    enum: [refreshed]
+        "401":
+          description: No session or expired token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/userinfo:
+    get:
+      summary: Get authenticated user info
+      operationId: authUserInfo
+      tags: [auth]
+      description: |
+        Returns the current authenticated user's identity (subject, email, name).
+        Requires a valid session cookie or Bearer token.
+      responses:
+        "200":
+          description: Authenticated user information
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserInfo"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /api/v1/health:
     get:
       summary: Service health check
@@ -72,11 +191,11 @@ paths:
       tags: [artifacts]
       responses:
         "200":
-          description: Artifact with current status
+          description: Artifact with current status and scan results
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ArtifactWithStatus"
+                $ref: "#/components/schemas/ArtifactDetail"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -112,7 +231,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AcceptedResponse"
+                $ref: "#/components/schemas/RescanResponse"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -210,7 +329,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PolicyOverride"
+                $ref: "#/components/schemas/CreateOverrideResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
 
@@ -262,7 +381,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PolicyOverride"
+                $ref: "#/components/schemas/CreateArtifactOverrideResponse"
         "404":
           $ref: "#/components/responses/NotFound"
         "400":
@@ -275,7 +394,7 @@ paths:
       tags: [stats]
       responses:
         "200":
-          description: Event counts for last 24h, 7d, and 30d
+          description: Aggregated totals and daily buckets for the last 7 days
           content:
             application/json:
               schema:
@@ -490,13 +609,14 @@ paths:
           description: Invalid request (missing name)
 
     get:
-      summary: List all API keys
+      summary: List API keys owned by the authenticated user
       operationId: listAPIKeys
       tags: [api-keys]
       description: |
-        Returns all API keys (enabled and disabled).
+        Returns API keys owned by the authenticated user (enabled and disabled).
         The key hash and plaintext are never included in the response.
         Only available when both `auth.enabled` and `proxy_auth.enabled` are true.
+        Returns 401 if authentication is missing or invalid.
       responses:
         "200":
           description: List of API keys
@@ -526,6 +646,18 @@ paths:
       responses:
         "204":
           description: Key revoked
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Cannot revoke another user's key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Key not found
 
@@ -669,24 +801,47 @@ components:
         storage_path:
           type: string
 
+    ArtifactStatusObject:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [CLEAN, SUSPICIOUS, QUARANTINED, PENDING_SCAN]
+        quarantine_reason:
+          type: string
+        quarantined_at:
+          type: string
+          format: date-time
+          nullable: true
+        released_at:
+          type: string
+          format: date-time
+          nullable: true
+
     ArtifactWithStatus:
       allOf:
         - $ref: "#/components/schemas/Artifact"
         - type: object
+          required: [id, status]
           properties:
+            id:
+              type: string
+              description: Composite artifact ID (ecosystem:name:version)
+              example: "pypi:requests:2.31.0"
             status:
-              type: string
-              enum: [CLEAN, SUSPICIOUS, QUARANTINED, PENDING_SCAN]
-            quarantine_reason:
-              type: string
-            quarantined_at:
-              type: string
-              format: date-time
-              nullable: true
-            released_at:
-              type: string
-              format: date-time
-              nullable: true
+              $ref: "#/components/schemas/ArtifactStatusObject"
+
+    ArtifactDetail:
+      description: Artifact detail response (returned by GET /api/v1/artifacts/{id})
+      allOf:
+        - $ref: "#/components/schemas/ArtifactWithStatus"
+        - type: object
+          properties:
+            scan_results:
+              type: array
+              items:
+                $ref: "#/components/schemas/ScanResult"
 
     ArtifactPage:
       type: object
@@ -734,34 +889,39 @@ components:
 
     StatsSummary:
       type: object
-      required: [last_24h, last_7d, last_30d]
+      required: [total_artifacts, total_blocked, total_quarantined, total_served, by_period]
       properties:
-        last_24h:
-          $ref: "#/components/schemas/PeriodStats"
-        last_7d:
-          $ref: "#/components/schemas/PeriodStats"
-        last_30d:
-          $ref: "#/components/schemas/PeriodStats"
-
-    PeriodStats:
-      type: object
-      required: [served, blocked, quarantined, released, scanned]
-      properties:
-        served:
+        total_artifacts:
           type: integer
           format: int64
-        blocked:
+          description: Total number of cached artifacts
+        total_blocked:
           type: integer
           format: int64
-        quarantined:
+          description: Number of BLOCKED events in the last 24 hours
+        total_quarantined:
           type: integer
           format: int64
-        released:
+          description: Number of currently quarantined artifacts
+        total_served:
           type: integer
           format: int64
-        scanned:
-          type: integer
-          format: int64
+          description: Total number of SERVED events (all time)
+        by_period:
+          type: object
+          description: Daily buckets for the last 7 days keyed by date (YYYY-MM-DD)
+          additionalProperties:
+            type: object
+            properties:
+              served:
+                type: integer
+                format: int64
+              blocked:
+                type: integer
+                format: int64
+              quarantined:
+                type: integer
+                format: int64
 
     BlockedEntry:
       type: object
@@ -834,7 +994,7 @@ components:
           format: date-time
         event_type:
           type: string
-          enum: [SERVED, BLOCKED, QUARANTINED, RELEASED, SCANNED, OVERRIDE_CREATED, OVERRIDE_REVOKED, RESCAN_QUEUED]
+          enum: [SERVED, BLOCKED, QUARANTINED, RELEASED, SCANNED, OVERRIDE_CREATED, OVERRIDE_REVOKED, TAG_MUTATED, RESCAN_QUEUED]
         artifact_id:
           type: string
         client_ip:
@@ -846,6 +1006,9 @@ components:
         metadata_json:
           type: string
           description: JSON-encoded additional metadata
+        user_email:
+          type: string
+          description: Email of the user who performed the action
 
     AuditPage:
       type: object
@@ -979,8 +1142,9 @@ components:
           enum: [revoked]
           example: revoked
         id:
-          type: integer
-          format: int64
+          type: string
+          description: Override ID (string representation)
+          example: "42"
 
     DockerRepository:
       type: object
@@ -1070,6 +1234,71 @@ components:
           type: string
           format: uri
           example: https://registry-1.docker.io
+
+    RescanResponse:
+      type: object
+      required: [status, artifact_id, message]
+      properties:
+        status:
+          type: string
+          enum: [PENDING_SCAN]
+        artifact_id:
+          type: string
+        message:
+          type: string
+
+    CreateOverrideResponse:
+      type: object
+      required: [id, ecosystem, name, scope, reason]
+      description: Response from POST /api/v1/overrides (subset of PolicyOverride fields)
+      properties:
+        id:
+          type: integer
+          format: int64
+        ecosystem:
+          type: string
+          example: pypi
+        name:
+          type: string
+          example: requests
+        version:
+          type: string
+          example: 2.32.3
+        scope:
+          type: string
+          enum: [version, package]
+        reason:
+          type: string
+
+    CreateArtifactOverrideResponse:
+      type: object
+      required: [id, artifact_id, scope, reason]
+      description: Response from POST /api/v1/artifacts/{id}/override
+      properties:
+        id:
+          type: integer
+          format: int64
+        artifact_id:
+          type: string
+          example: "pypi:requests:2.32.3"
+        scope:
+          type: string
+          enum: [version, package]
+        reason:
+          type: string
+
+    UserInfo:
+      type: object
+      required: [sub, email, name]
+      properties:
+        sub:
+          type: string
+          description: OIDC subject identifier
+        email:
+          type: string
+          format: email
+        name:
+          type: string
 
     ErrorResponse:
       type: object

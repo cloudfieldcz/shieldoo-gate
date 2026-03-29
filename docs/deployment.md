@@ -39,6 +39,9 @@ The `docker/docker-compose.yml` defines two services:
 │  4873 (npm)        │                      │  bridge.sock       │
 │  5001 (NuGet)      │                      └────────────────────┘
 │  5002 (Docker)     │
+│  8085 (Maven)      │
+│  8086 (RubyGems)   │
+│  8087 (Go Modules) │
 │  8080 (Admin API)  │
 └────────────────────┘
 ```
@@ -67,6 +70,9 @@ The `docker/docker-compose.yml` defines two services:
 | 4873 | 4873 | npm |
 | 5001 | 5001 | NuGet |
 | 5002 | 5002 | Docker registry |
+| 8085 | 8085 | Maven repository |
+| 8086 | 8086 | RubyGems |
+| 8087 | 8087 | Go module proxy |
 | 8080 | 8080 | Admin API + React UI |
 
 ### Multi-Stage Dockerfile
@@ -153,7 +159,7 @@ Runs all Go unit tests excluding the e2e directory.
 
 ### E2E Tests (Shell-based, host)
 
-Full-stack tests that start Docker Compose, install real packages through the proxy, and validate behavior. Requires host-installed tools (uv, npm, dotnet, crane, etc.):
+Full-stack tests that start Docker Compose, install real packages through the proxy, and validate behavior. Requires host-installed tools: `docker`, `curl`, `jq`, `uv`, `node`, `npm`, `crane`:
 
 ```bash
 ./tests/e2e-shell/run.sh
@@ -174,7 +180,7 @@ make test-e2e-containerized
 
 This builds a test-runner container (`Dockerfile.test-runner`) containing pinned versions of uv, npm, dotnet, Maven, Ruby, Go, and crane. The container connects to shieldoo-gate via Docker networking (no host port mapping needed). Docker-in-Docker (DinD) is used for Docker registry E2E tests.
 
-The test-runner waits for shieldoo-gate to pass its healthcheck, then runs all test suites sequentially. The exit code reflects test results (0 = all passed, non-zero = failures).
+The test-runner waits for shieldoo-gate to pass its healthcheck, then runs `run_all.sh` which executes all test suites sequentially (including `test_proxy_auth.sh` which is not run by the host-based `run.sh`). The exit code reflects test results (0 = all passed, non-zero = failures).
 
 ### Go E2E Tests
 
@@ -233,6 +239,35 @@ dotnet nuget add source http://localhost:5001/v3/index.json --name shieldoo-gate
 
 Then restart Docker daemon.
 
+### Maven
+
+```xml
+<!-- settings.xml or pom.xml -->
+<repositories>
+  <repository>
+    <id>shieldoo-gate</id>
+    <url>http://localhost:8085</url>
+  </repository>
+</repositories>
+```
+
+### RubyGems / Bundler
+
+```bash
+# gem
+gem install rake --source http://localhost:8086
+
+# Bundler (Gemfile)
+source "http://localhost:8086"
+```
+
+### Go Modules
+
+```bash
+export GOPROXY=http://localhost:8087
+go mod download
+```
+
 ## Example Projects
 
 The `examples/` directory contains minimal projects pre-configured to use the local proxy:
@@ -242,6 +277,9 @@ The `examples/` directory contains minimal projects pre-configured to use the lo
 | `python-requests` | PyPI | `requests` | Python script using requests |
 | `npm-chalk` | npm | `chalk` | Node.js script using chalk |
 | `dotnet-json` | NuGet | `Newtonsoft.Json` | .NET console app |
+| `maven-example` | Maven | `commons-lang3` | Java project using Apache Commons |
+| `rubygems-example` | RubyGems | `rake` | Ruby project using Rake |
+| `go-example` | Go | `golang.org/x/text` | Go module using x/text |
 
 Each example has a README with setup instructions. They are useful for quick verification that the proxy works correctly.
 
@@ -256,6 +294,7 @@ The React admin UI is served on the admin port (default 8080) as a single-page a
 | `/overrides` | Manage policy overrides (create, revoke) |
 | `/audit-log` | View append-only audit log with filtering |
 | `/settings` | Configuration viewer |
+| `/profile` | User profile and API key management (requires OIDC auth) |
 
 Access it at `http://localhost:8080/` in your browser.
 

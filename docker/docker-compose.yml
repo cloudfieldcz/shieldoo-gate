@@ -14,6 +14,9 @@ services:
       - "4873:4873"   # npm
       - "5001:5001"   # NuGet
       - "5002:5002"   # Docker registry
+      - "8085:8085"   # Maven
+      - "8086:8086"   # RubyGems
+      - "8087:8087"   # Go Modules
       - "8080:8080"   # Admin API
     volumes:
       - bridge-socket:/tmp

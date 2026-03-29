@@ -43,7 +43,7 @@ The `Artifact` struct passed to scanners:
 ```go
 type Artifact struct {
     ID          string     // "ecosystem:name:version"
-    Ecosystem   Ecosystem  // pypi, npm, nuget, docker
+    Ecosystem   Ecosystem  // pypi, npm, nuget, docker, maven, rubygems, go
     Name        string
     Version     string
     LocalPath   string     // Path to downloaded artifact on disk
@@ -190,18 +190,36 @@ The threat feed checker scanner (`builtin-threat-feed`) performs a fast-path SHA
 
 ## Ecosystem Coverage Matrix
 
-| Scanner | PyPI | npm | NuGet | Docker |
-|---|:---:|:---:|:---:|:---:|
-| Hash Verifier | x | x | x | x |
-| Install Hook Analyzer | x | x | | |
-| Obfuscation Detector | x | x | x | x |
-| Exfil Detector | x | x | x | x |
-| PTH Inspector | x | | | |
-| Threat Feed Checker | x | x | x | x |
-| GuardDog (bridge) | x | x | | |
-| Trivy (subprocess) | x | x | x | x |
-| OSV (API) | x | x | x | |
-| Sandbox (gVisor) | x | x | x | | x | x |
+| Scanner | PyPI | npm | NuGet | Docker | Maven | RubyGems | Go |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| Hash Verifier | x | x | x | x | | | |
+| Install Hook Analyzer | x | x | | | | | |
+| Obfuscation Detector | x | x | x | x | | | |
+| Exfil Detector | x | x | x | x | | | |
+| PTH Inspector | x | | | | | | |
+| Threat Feed Checker | x | x | x | x | | | |
+| GuardDog (bridge) | x | x | | | | | |
+| Trivy (subprocess) | x | x | x | x | | | |
+| OSV (API) | x | x | x | | | | |
+| Sandbox (gVisor) | x | x | x | | x | x | |
+
+### Scanner Coverage Gaps
+
+**Maven, RubyGems, and Go ecosystems have significantly reduced scanner coverage.** None of the built-in scanners or external scanners (GuardDog, Trivy, OSV) currently support these ecosystems. The only scanner available for Maven and RubyGems is the **Sandbox (gVisor)**, which is:
+
+- **Optional** — disabled by default
+- **Asynchronous** — runs after the artifact is already served to the client
+- **Linux-only** — requires gVisor (runsc) on the host
+
+**Go modules have no scanner coverage at all** — neither built-in, external, nor sandbox scanners support the Go ecosystem. Go modules are proxied and cached but pass through without any scan.
+
+This means that for these three ecosystems, the only protection mechanisms are:
+
+1. **Threat feed** — if the community feed includes SHA-256 hashes for Maven/RubyGems/Go artifacts (the threat feed checker does not filter by ecosystem at the hash level, but it is only registered for PyPI/npm/NuGet/Docker)
+2. **Policy engine** — manual quarantine and overrides still work
+3. **Tag mutability detection** — detects upstream digest changes
+
+Extending built-in scanner support to Maven, RubyGems, and Go is a planned improvement.
 
 ## Dynamic Sandbox Scanner (gVisor)
 
@@ -268,7 +286,9 @@ At startup, the sandbox scanner lists all containers with the `sgw-sandbox-` pre
 
 - Sophisticated malware may fingerprint the gVisor environment (incomplete syscall support, timing differences).
 - `npm install` with native compilation (node-gyp) may exceed the 512MB memory limit, causing OOM kill and `VerdictUnknown`.
-- Docker and Go ecosystems are not supported (Docker images are not "installed", Go modules have no install hooks).
+- **Docker** is not supported — Docker images are not "installed" in the traditional sense; Trivy handles Docker scanning via image layer analysis instead.
+- **Go** is not supported — Go modules have no install hooks or post-install scripts, so there is no meaningful install-time behavior to observe.
+- **Maven and RubyGems are supported** — the sandbox can execute `mvn install:install-file` and `gem install --local` respectively to observe install-time behavior.
 
 ## Health Checks
 

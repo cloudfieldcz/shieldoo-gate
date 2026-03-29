@@ -62,6 +62,7 @@ var knownEventTypes = map[string]bool{
 	"OVERRIDE_CREATED": true,
 	"OVERRIDE_REVOKED": true,
 	"TAG_MUTATED":      true,
+	"RESCAN_QUEUED":    true,
 }
 
 type ServerConfig struct {
@@ -289,6 +290,11 @@ func Load(path string) (*Config, error) {
 	if err := v.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("config: reading %s: %w", path, err)
 	}
+
+	// Set policy defaults before unmarshal so zero-value config is safe.
+	v.SetDefault("policy.block_if_verdict", "MALICIOUS")
+	v.SetDefault("policy.quarantine_if_verdict", "SUSPICIOUS")
+	v.SetDefault("policy.minimum_confidence", 0.7)
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {

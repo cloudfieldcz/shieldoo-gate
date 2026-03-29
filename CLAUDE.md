@@ -97,7 +97,7 @@ uv pip compile requirements.in -o requirements.txt  # to generate pinned deps
 
 ### Frontend
 
-React 18 + TypeScript 5.x, Vite, TailwindCSS, TanStack React Query, Recharts, Radix UI, Axios.
+React 18 + TypeScript 5.x, Vite, TailwindCSS, TanStack React Query, Recharts, Axios.
 
 ### Database
 
