@@ -169,6 +169,10 @@ Each task should map to **one module**. Do not modify multiple unrelated modules
 4. **Never unpin scanner dependencies** — `requirements.txt` must always use `==` with hashes
 5. **Audit log is append-only** — no UPDATE or DELETE on `audit_log` table
 
+## Docker Image
+
+The runtime image (`docker/Dockerfile`) runs as non-root user `sgw`. When adding new paths that the process needs to write to (logs, data, cache), you **must** create the directory and `chown sgw:sgw` it in the Dockerfile. Docker volumes mounted at runtime inherit the container directory's ownership only if the directory already exists with correct permissions.
+
 ## Build & Run
 
 ```bash
