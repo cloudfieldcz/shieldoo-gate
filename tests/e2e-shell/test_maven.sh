@@ -6,6 +6,15 @@ test_maven() {
     log_section "Maven Proxy Tests"
 
     # ------------------------------------------------------------------
+    # 0. Negative test: unauthenticated request must return 401 when auth enabled
+    # ------------------------------------------------------------------
+    if [ "${SGW_PROXY_AUTH_ENABLED:-false}" = "true" ]; then
+        local noauth_status
+        noauth_status=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_MAVEN_URL}/org/apache/commons/commons-lang3/maven-metadata.xml")
+        assert_eq "Maven: unauthenticated request returns 401" "401" "$noauth_status"
+    fi
+
+    # ------------------------------------------------------------------
     # 1. Maven metadata endpoint is accessible
     # ------------------------------------------------------------------
     assert_http_status "Maven: metadata for commons-lang3 returns HTTP 200" \
@@ -33,7 +42,7 @@ test_maven() {
     workdir=$(mktemp -d)
     local jar_path="${workdir}/commons-lang3-3.14.0.jar"
 
-    if curl -sf -o "$jar_path" \
+    if curl -sf "${E2E_CURL_AUTH[@]}" -o "$jar_path" \
         "${E2E_MAVEN_URL}/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.jar"; then
         if file "$jar_path" | grep -qi "zip\|jar\|java"; then
             log_pass "Maven: downloaded JAR is a valid archive"

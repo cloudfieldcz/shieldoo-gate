@@ -16,7 +16,14 @@ test-e2e:
 
 test-e2e-containerized:
 	docker compose -f tests/e2e-shell/docker-compose.e2e.yml build
-	docker compose -f tests/e2e-shell/docker-compose.e2e.yml up --abort-on-container-exit --exit-code-from test-runner
+	@echo "=== E2E Run 1: No authentication ==="
+	docker compose -f tests/e2e-shell/docker-compose.e2e.yml up \
+		--abort-on-container-exit --exit-code-from test-runner
+	docker compose -f tests/e2e-shell/docker-compose.e2e.yml down
+	@echo "=== E2E Run 2: Proxy authentication enabled ==="
+	SGW_PROXY_AUTH_ENABLED=true SGW_PROXY_TOKEN=$$(openssl rand -hex 16) \
+		docker compose -f tests/e2e-shell/docker-compose.e2e.yml up \
+		--abort-on-container-exit --exit-code-from test-runner
 	docker compose -f tests/e2e-shell/docker-compose.e2e.yml down -v
 
 lint:

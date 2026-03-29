@@ -26,7 +26,11 @@ source "${SCRIPT_DIR}/test_gomod.sh"
 source "${SCRIPT_DIR}/test_api.sh"
 source "${SCRIPT_DIR}/test_proxy_auth.sh"
 
-echo "=== Shieldoo Gate E2E Test Suite (containerized) ==="
+_run_label=""
+if [ "${SGW_PROXY_AUTH_ENABLED:-false}" = "true" ]; then
+    _run_label=" [auth enabled]"
+fi
+echo "=== Shieldoo Gate E2E Test Suite (containerized)${_run_label} ==="
 echo "Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo ""
 

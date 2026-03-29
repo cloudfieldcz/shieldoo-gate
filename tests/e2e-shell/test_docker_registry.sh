@@ -63,16 +63,22 @@ test_docker_registry() {
     # on first run (~40MB) and then scans the image. This can take several minutes.
     local CRANE_TIMEOUT=180
 
+    # Crane auth args (when proxy auth enabled)
+    local CRANE_AUTH_ARGS=()
+    if [ -n "$E2E_AUTH_USERINFO" ]; then
+        CRANE_AUTH_ARGS=(--username "ci-bot" --password "${SGW_PROXY_TOKEN}")
+    fi
+
     # _timed_crane wraps crane with a timeout (gtimeout on macOS, timeout on Linux).
     _timed_crane() {
         if command -v gtimeout &>/dev/null; then
-            gtimeout "$CRANE_TIMEOUT" crane "$@"
+            gtimeout "$CRANE_TIMEOUT" crane "$@" "${CRANE_AUTH_ARGS[@]}"
         elif [ -x /opt/homebrew/bin/gtimeout ]; then
-            /opt/homebrew/bin/gtimeout "$CRANE_TIMEOUT" crane "$@"
+            /opt/homebrew/bin/gtimeout "$CRANE_TIMEOUT" crane "$@" "${CRANE_AUTH_ARGS[@]}"
         elif command -v timeout &>/dev/null; then
-            timeout "$CRANE_TIMEOUT" crane "$@"
+            timeout "$CRANE_TIMEOUT" crane "$@" "${CRANE_AUTH_ARGS[@]}"
         else
-            crane "$@"
+            crane "$@" "${CRANE_AUTH_ARGS[@]}"
         fi
     }
 
@@ -80,28 +86,39 @@ test_docker_registry() {
     local manifest_exit
 
     # ==================================================================
+    # Part 0: NEGATIVE TEST — unauthenticated request must return 401
+    # ==================================================================
+    if [ "${SGW_PROXY_AUTH_ENABLED:-false}" = "true" ]; then
+        local noauth_status
+        noauth_status=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_DOCKER_URL}/v2/")
+        assert_eq "Docker Registry: unauthenticated request returns 401" "401" "$noauth_status"
+    fi
+
+    # ==================================================================
     # Part 1: FAST TESTS — no scan pipeline, just routing and API checks
     # ==================================================================
 
     # /v2/ endpoint responds locally
     local v2_status
-    v2_status=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_DOCKER_URL}/v2/")
+    v2_status=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_CURL_AUTH[@]}" "${E2E_DOCKER_URL}/v2/")
     assert_eq "Docker Registry: /v2/ returns 200 (local response)" "200" "$v2_status"
 
     local v2_header
-    v2_header=$(curl -s -D - -o /dev/null "${E2E_DOCKER_URL}/v2/" | grep -i "Docker-Distribution-API-Version")
+    v2_header=$(curl -s -D - -o /dev/null "${E2E_CURL_AUTH[@]}" "${E2E_DOCKER_URL}/v2/" | grep -i "Docker-Distribution-API-Version")
     assert_contains "Docker Registry: /v2/ has API version header" "registry/2.0" "$v2_header"
 
     # Allowlist enforcement (instant — no scan needed)
     log_info "Docker Registry: testing allowlist enforcement..."
     local disallowed_status
     disallowed_status=$(curl -s -o /dev/null -w "%{http_code}" \
+        "${E2E_CURL_AUTH[@]}" \
         -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
         "${E2E_DOCKER_URL}/v2/evil.io/malware/pkg/manifests/latest")
     assert_eq "Docker Registry: disallowed registry (evil.io) returns 403" "403" "$disallowed_status"
 
     local quay_status
     quay_status=$(curl -s -o /dev/null -w "%{http_code}" \
+        "${E2E_CURL_AUTH[@]}" \
         -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
         "${E2E_DOCKER_URL}/v2/quay.io/prometheus/node-exporter/manifests/latest")
     assert_eq "Docker Registry: disallowed registry (quay.io) returns 403" "403" "$quay_status"
@@ -109,6 +126,7 @@ test_docker_registry() {
     # Blob routing (instant — just proxies to upstream, returns 404 for fake digest)
     local blob_status
     blob_status=$(curl -s -o /dev/null -w "%{http_code}" \
+        "${E2E_CURL_AUTH[@]}" \
         "${E2E_DOCKER_URL}/v2/gcr.io/distroless/static/blobs/sha256:0000000000000000000000000000000000000000000000000000000000000000")
     if [ "$blob_status" = "404" ] || [ "$blob_status" = "400" ] || [ "$blob_status" = "401" ]; then
         log_pass "Docker Registry: blob routed to gcr.io correctly (HTTP ${blob_status})"
@@ -116,7 +134,7 @@ test_docker_registry() {
         log_fail "Docker Registry: blob routing returned unexpected HTTP ${blob_status}"
     fi
 
-    # Tag Management API (instant — works with whatever repos exist)
+    # Tag Management API (admin port — no proxy auth needed)
     local registries_status
     registries_status=$(curl -s -o /dev/null -w "%{http_code}" \
         "${E2E_ADMIN_URL}/api/v1/docker/registries")
@@ -142,6 +160,7 @@ test_docker_registry() {
         # X-Shieldoo-Scanned header on cached manifest (instant — already cached)
         local scanned_header
         scanned_header=$(curl -s -D - -o /dev/null \
+            "${E2E_CURL_AUTH[@]}" \
             -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
             "${E2E_DOCKER_URL}/v2/library/hello-world/manifests/latest" 2>/dev/null \
             | grep -i "X-Shieldoo-Scanned")

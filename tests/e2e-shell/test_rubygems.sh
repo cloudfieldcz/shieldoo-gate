@@ -6,6 +6,15 @@ test_rubygems() {
     log_section "RubyGems Proxy Tests"
 
     # ------------------------------------------------------------------
+    # 0. Negative test: unauthenticated request must return 401 when auth enabled
+    # ------------------------------------------------------------------
+    if [ "${SGW_PROXY_AUTH_ENABLED:-false}" = "true" ]; then
+        local noauth_status
+        noauth_status=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_RUBYGEMS_URL}/specs.4.8.gz")
+        assert_eq "RubyGems: unauthenticated request returns 401" "401" "$noauth_status"
+    fi
+
+    # ------------------------------------------------------------------
     # 1. Specs index is accessible
     # ------------------------------------------------------------------
     assert_http_status "RubyGems: /specs.4.8.gz returns HTTP 200" \
@@ -26,7 +35,7 @@ test_rubygems() {
     workdir=$(mktemp -d)
 
     local gem_url="${E2E_RUBYGEMS_URL}/gems/rake-13.1.0.gem"
-    if curl -sf -o "${workdir}/rake-13.1.0.gem" "$gem_url"; then
+    if curl -sf "${E2E_CURL_AUTH[@]}" -o "${workdir}/rake-13.1.0.gem" "$gem_url"; then
         log_pass "RubyGems: gem download succeeded for rake-13.1.0.gem"
     else
         log_fail "RubyGems: gem download failed for rake-13.1.0.gem"

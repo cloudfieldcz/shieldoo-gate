@@ -9,6 +9,15 @@ test_gomod() {
     local version="v1.33.0"
 
     # ------------------------------------------------------------------
+    # 0. Negative test: unauthenticated request must return 401 when auth enabled
+    # ------------------------------------------------------------------
+    if [ "${SGW_PROXY_AUTH_ENABLED:-false}" = "true" ]; then
+        local noauth_status
+        noauth_status=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_GOMOD_URL}/${module}/@v/list")
+        assert_eq "GoMod: unauthenticated request returns 401" "401" "$noauth_status"
+    fi
+
+    # ------------------------------------------------------------------
     # 1. Version list endpoint is accessible
     # ------------------------------------------------------------------
     assert_http_status "GoMod: /@v/list for ${module} returns HTTP 200" \
@@ -19,7 +28,7 @@ test_gomod() {
     # 2. Version info endpoint returns JSON
     # ------------------------------------------------------------------
     local info_resp
-    info_resp=$(curl -sf "${E2E_GOMOD_URL}/${module}/@v/${version}.info")
+    info_resp=$(curl -sf "${E2E_CURL_AUTH[@]}" "${E2E_GOMOD_URL}/${module}/@v/${version}.info")
     if echo "$info_resp" | jq -e '.Version' > /dev/null 2>&1; then
         log_pass "GoMod: .info returns valid JSON with Version field"
     else
@@ -30,7 +39,7 @@ test_gomod() {
     # 3. .mod endpoint returns go.mod content
     # ------------------------------------------------------------------
     local mod_resp
-    mod_resp=$(curl -sf "${E2E_GOMOD_URL}/${module}/@v/${version}.mod")
+    mod_resp=$(curl -sf "${E2E_CURL_AUTH[@]}" "${E2E_GOMOD_URL}/${module}/@v/${version}.mod")
     if grep -q "^module " <<< "$mod_resp"; then
         log_pass "GoMod: .mod returns valid go.mod content"
     else
@@ -44,7 +53,7 @@ test_gomod() {
     workdir=$(mktemp -d)
     local zip_path="${workdir}/module.zip"
 
-    if curl -sf -o "$zip_path" \
+    if curl -sf "${E2E_CURL_AUTH[@]}" -o "$zip_path" \
         "${E2E_GOMOD_URL}/${module}/@v/${version}.zip"; then
         if file "$zip_path" | grep -qi "zip"; then
             log_pass "GoMod: downloaded .zip is a valid zip archive"

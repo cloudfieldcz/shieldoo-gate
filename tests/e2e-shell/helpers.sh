@@ -55,6 +55,29 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Proxy auth configuration
+# ---------------------------------------------------------------------------
+# When SGW_PROXY_AUTH_ENABLED=true, all proxy requests must include Basic Auth.
+# E2E_CURL_AUTH is a bash array used with curl: curl "${E2E_CURL_AUTH[@]}" ...
+# E2E_AUTH_USERINFO is "user:pass@" prefix for embedding in URLs (uv, npm).
+E2E_CURL_AUTH=()
+E2E_AUTH_USERINFO=""
+if [ "${SGW_PROXY_AUTH_ENABLED:-false}" = "true" ] && [ -n "${SGW_PROXY_TOKEN:-}" ]; then
+    E2E_CURL_AUTH=(-u "ci-bot:${SGW_PROXY_TOKEN}")
+    E2E_AUTH_USERINFO="ci-bot:${SGW_PROXY_TOKEN}@"
+fi
+
+# auth_url "http://host:port" → "http://ci-bot:token@host:port" (when auth enabled)
+auth_url() {
+    local url="$1"
+    if [ -n "$E2E_AUTH_USERINFO" ]; then
+        echo "${url//:\/\//:\/\/${E2E_AUTH_USERINFO}}"
+    else
+        echo "$url"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Logging helpers
 # ---------------------------------------------------------------------------
 log_info() {
@@ -126,7 +149,7 @@ assert_http_status() {
     local expected_status="$2"
     local url="$3"
     local actual_status
-    actual_status=$(curl -s -o /dev/null -w "%{http_code}" "$url")
+    actual_status=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_CURL_AUTH[@]}" "$url")
     assert_eq "$desc" "$expected_status" "$actual_status"
 }
 

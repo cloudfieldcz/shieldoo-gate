@@ -6,6 +6,15 @@ test_pypi() {
     log_section "PyPI Proxy Tests"
 
     # ------------------------------------------------------------------
+    # 0. Negative test: unauthenticated request must return 401 when auth enabled
+    # ------------------------------------------------------------------
+    if [ "${SGW_PROXY_AUTH_ENABLED:-false}" = "true" ]; then
+        local noauth_status
+        noauth_status=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_PYPI_URL}/simple/")
+        assert_eq "PyPI: unauthenticated request returns 401" "401" "$noauth_status"
+    fi
+
+    # ------------------------------------------------------------------
     # 1. Simple index is accessible
     # ------------------------------------------------------------------
     assert_http_status "PyPI: /simple/ returns HTTP 200" \
@@ -16,7 +25,7 @@ test_pypi() {
     # 2. Package page has rewritten URLs
     # ------------------------------------------------------------------
     local six_page
-    six_page=$(curl -sf "${E2E_PYPI_URL}/simple/six/")
+    six_page=$(curl -sf "${E2E_CURL_AUTH[@]}" "${E2E_PYPI_URL}/simple/six/")
 
     # Use bash built-in pattern matching instead of echo|grep -q to avoid
     # SIGPIPE failures under set -o pipefail (large responses + grep -q).
@@ -45,7 +54,7 @@ test_pypi() {
     if uv pip install \
             --python .venv/bin/python \
             --no-cache \
-            --index-url "${E2E_PYPI_URL}/simple/" \
+            --index-url "$(auth_url "${E2E_PYPI_URL}")/simple/" \
             -r requirements.txt \
             > install.log 2>&1; then
         log_pass "PyPI: uv pip install succeeded for all fixture packages"
