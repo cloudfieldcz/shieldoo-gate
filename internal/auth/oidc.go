@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -100,5 +101,6 @@ func extractBearerToken(r *http.Request) string {
 func writeAuthError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_, _ = w.Write([]byte(`{"error":"` + message + `"}`))
+	body, _ := json.Marshal(map[string]string{"error": message})
+	_, _ = w.Write(body)
 }

@@ -467,6 +467,47 @@ export GONOSUMCHECK=*
 go mod download
 ```
 
+## Proxy Authentication (v1.1)
+
+When `proxy_auth.enabled: true`, all proxy endpoints require an API key via HTTP Basic Auth. The password field carries the API key; the username is ignored for authentication but logged in the audit trail.
+
+### Client Configuration with API Key
+
+```bash
+# PyPI (pip / uv)
+pip install --index-url https://user:TOKEN@gate:5000/simple/ package-name
+uv pip install --index-url https://user:TOKEN@gate:5000/simple/ package-name
+
+# npm
+npm config set //gate:4873/:_authToken TOKEN
+
+# Docker
+docker login gate:5002 -u user -p TOKEN
+
+# NuGet
+nuget sources add -Source https://gate:5001/v3/index.json -UserName user -Password TOKEN
+
+# RubyGems
+gem sources -a https://user:TOKEN@gate:8086/
+
+# Go Modules
+GOPROXY=https://user:TOKEN@gate:8087 go mod download
+
+# Maven (settings.xml)
+# Add <server><id>shieldoo</id><username>user</username><password>TOKEN</password></server>
+```
+
+### Key Types
+
+| Type | Description | Management |
+|---|---|---|
+| **Per-user PAT** | Personal Access Token tied to OIDC user | `POST /api/v1/api-keys` (requires OIDC auth) |
+| **Global token** | Shared token from env var | Set via `proxy_auth.global_token_env` config |
+
+### TLS Requirement
+
+Basic Auth sends credentials in base64 (not encrypted). **TLS is required** when proxy auth is enabled. Shieldoo Gate does not terminate TLS — use a reverse proxy (nginx, Caddy, Ingress controller) in front.
+
 ## Port Summary
 
 | Ecosystem | Default Port | Docker Compose Host Port |

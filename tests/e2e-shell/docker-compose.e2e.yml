@@ -32,6 +32,9 @@ services:
       - ./config.e2e.yaml:/etc/shieldoo-gate/config.yaml:ro
     environment:
       SGW_SCANNERS_GUARDDOG_BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
+      # Proxy auth: set SGW_PROXY_AUTH_ENABLED=true and SGW_PROXY_TOKEN to enable
+      SGW_PROXY_AUTH_ENABLED: "${SGW_PROXY_AUTH_ENABLED:-false}"
+      SGW_PROXY_TOKEN: "${SGW_PROXY_TOKEN:-}"
     networks:
       - proxy-net
       - internal-net
@@ -94,6 +97,9 @@ services:
       SGW_ADMIN_URL: "http://shieldoo-gate:8080"
       SGW_DOCKER_PORT: "5002"
       SGW_PUSH_REGISTRY_URL: "http://push-registry:5000"
+      # Proxy auth (pass through from host env)
+      SGW_PROXY_AUTH_ENABLED: "${SGW_PROXY_AUTH_ENABLED:-false}"
+      SGW_PROXY_TOKEN: "${SGW_PROXY_TOKEN:-}"
       # Docker-in-Docker access (no socket mount)
       DOCKER_HOST: "tcp://docker-dind:2375"
     networks:

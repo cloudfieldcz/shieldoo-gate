@@ -23,6 +23,14 @@ type Config struct {
 	Log        LogConfig        `mapstructure:"log"`
 	Alerts     AlertsConfig     `mapstructure:"alerts"`
 	Auth       AuthConfig       `mapstructure:"auth"`
+	ProxyAuth  ProxyAuthConfig  `mapstructure:"proxy_auth"`
+}
+
+// ProxyAuthConfig holds API key authentication configuration for proxy endpoints.
+// When Enabled is false (default), proxy endpoints are open — backward compatible.
+type ProxyAuthConfig struct {
+	Enabled        bool   `mapstructure:"enabled"`
+	GlobalTokenEnv string `mapstructure:"global_token_env"`
 }
 
 // AuthConfig holds OIDC authentication configuration for the admin API.
@@ -342,6 +350,10 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if err := c.validateProxyAuth(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -375,6 +387,27 @@ func (c *Config) validateRescan() error {
 	if c.Rescan.MaxConcurrent < 0 {
 		return fmt.Errorf("config: rescan.max_concurrent must be >= 0, got %d", c.Rescan.MaxConcurrent)
 	}
+	return nil
+}
+
+// validateProxyAuth checks proxy authentication configuration.
+func (c *Config) validateProxyAuth() error {
+	if !c.ProxyAuth.Enabled {
+		return nil
+	}
+
+	// At least one auth method must be available.
+	hasGlobalToken := c.ProxyAuth.GlobalTokenEnv != "" && os.Getenv(c.ProxyAuth.GlobalTokenEnv) != ""
+	hasPATSupport := c.Auth.Enabled // PAT management requires OIDC-protected admin API
+
+	if !hasGlobalToken && !hasPATSupport {
+		return fmt.Errorf("config: proxy_auth is enabled but no authentication method is available — set global_token_env to a valid env var or enable auth (OIDC) for PAT support")
+	}
+
+	if c.ProxyAuth.GlobalTokenEnv != "" && os.Getenv(c.ProxyAuth.GlobalTokenEnv) == "" {
+		log.Warn().Str("env_var", c.ProxyAuth.GlobalTokenEnv).Msg("config: proxy_auth.global_token_env references an unset environment variable")
+	}
+
 	return nil
 }
 

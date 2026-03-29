@@ -87,3 +87,8 @@ threat_feed:
 log:
   level: "debug"
   format: "json"
+
+# Proxy auth: disabled by default in E2E; enabled via SGW_PROXY_AUTH_ENABLED env override.
+proxy_auth:
+  enabled: false
+  global_token_env: "SGW_PROXY_TOKEN"

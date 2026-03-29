@@ -157,8 +157,7 @@ log:
 # OIDC authentication for the admin API. When disabled (default),
 # the admin API is fully open — suitable for development/testing.
 # In production, set enabled: true and configure your OIDC provider.
-# NOTE: Proxy endpoints (PyPI, npm, NuGet, Docker, Maven, RubyGems, Go)
-# are NEVER authenticated — they are protected by network segmentation.
+# NOTE: Proxy endpoints can optionally be authenticated via proxy_auth (see below).
 auth:
   enabled: false                       # Enable OIDC auth for admin API
   issuer_url: ""                       # OIDC provider URL (e.g. "https://accounts.google.com")
@@ -203,6 +202,17 @@ alerts:
     tls_skip_verify: false                       # Skip certificate validation (dev only)
     batch_interval: "30s"                        # Accumulate events before sending digest
     on: ["BLOCKED", "QUARANTINED"]               # Event filter
+
+# ─── Proxy Authentication (v1.1) ─────────────────────────────────
+# API key authentication for proxy endpoints (pip, npm, docker, etc.).
+# When disabled (default), proxy endpoints are open — protected by
+# network segmentation only. When enabled, all proxy requests must
+# include a valid API key via HTTP Basic Auth.
+# Keys are either per-user PATs (generated via admin API) or a global
+# shared token from an environment variable.
+proxy_auth:
+  enabled: false                                 # Enable API key auth for proxy endpoints
+  global_token_env: "SGW_PROXY_TOKEN"            # Env var holding a global shared token (optional)
 ```
 
 ## Environment Variable Overrides
@@ -255,6 +265,8 @@ Every config key can be overridden via environment variables using the `SGW_` pr
 | `auth.client_id` | `SGW_AUTH_CLIENT_ID` | `SGW_AUTH_CLIENT_ID=xxx.apps.googleusercontent.com` |
 | `auth.client_secret_env` | `SGW_AUTH_CLIENT_SECRET_ENV` | `SGW_AUTH_CLIENT_SECRET_ENV=SGW_OIDC_CLIENT_SECRET` |
 | `auth.redirect_url` | `SGW_AUTH_REDIRECT_URL` | `SGW_AUTH_REDIRECT_URL=https://gate.example.com:8080/auth/callback` |
+| `proxy_auth.enabled` | `SGW_PROXY_AUTH_ENABLED` | `SGW_PROXY_AUTH_ENABLED=true` |
+| `proxy_auth.global_token_env` | `SGW_PROXY_AUTH_GLOBAL_TOKEN_ENV` | `SGW_PROXY_AUTH_GLOBAL_TOKEN_ENV=MY_TOKEN` |
 | `alerts.email.host` | `SGW_ALERTS_EMAIL_HOST` | `SGW_ALERTS_EMAIL_HOST=smtp.example.com` |
 
 Environment variables take precedence over the YAML config file.
@@ -292,6 +304,7 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 | `RescanConfig` | `rescan` | `Enabled`, `Interval`, `BatchSize`, `MaxConcurrent` |
 | `LogConfig` | `log` | `Level`, `Format` |
 | `AuthConfig` | `auth` | `Enabled`, `IssuerURL`, `ClientID`, `ClientSecretEnv`, `RedirectURL`, `Scopes` |
+| `ProxyAuthConfig` | `proxy_auth` | `Enabled`, `GlobalTokenEnv` |
 | `AlertsConfig` | `alerts` | `Webhook`, `Slack`, `Email` |
 | `WebhookAlertConfig` | `alerts.webhook` | `Enabled`, `URL`, `SecretEnv`, `AllowInsecure`, `On` |
 | `SlackAlertConfig` | `alerts.slack` | `Enabled`, `WebhookEnv`, `On` |
@@ -311,6 +324,7 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 - Unknown `database.backend` values are rejected
 - When `rescan.enabled` is `true`: `rescan.interval` must be a valid Go duration, `rescan.batch_size` >= 0, `rescan.max_concurrent` >= 0
 - When `auth.enabled` is `true`: `auth.issuer_url` and `auth.client_id` must be non-empty
+- When `proxy_auth.enabled` is `true`: at least one auth method must be available — either `global_token_env` references a set env var, or `auth.enabled` is `true` (for PAT support via admin API). If neither is available, startup fails.
 
 ## Rescan Scheduler (v1.1)
 

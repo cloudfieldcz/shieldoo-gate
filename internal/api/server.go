@@ -28,9 +28,10 @@ type Server struct {
 	uiDir         string
 	dockerConfig  config.DockerUpstreamConfig
 	syncSvc       *docker.SyncService
-	oidcMw        *auth.OIDCMiddleware
-	authHandlers  *auth.AuthHandlers
-	authEnabled   bool
+	oidcMw           *auth.OIDCMiddleware
+	authHandlers     *auth.AuthHandlers
+	authEnabled      bool
+	proxyAuthEnabled bool
 }
 
 // NewServer creates a new Server with the given dependencies.
@@ -50,6 +51,12 @@ func (s *Server) SetAuth(oidcMw *auth.OIDCMiddleware, authHandlers *auth.AuthHan
 	s.oidcMw = oidcMw
 	s.authHandlers = authHandlers
 	s.authEnabled = true
+}
+
+// SetProxyAuth configures proxy auth state so that API key management routes
+// are registered only when both OIDC auth and proxy auth are enabled.
+func (s *Server) SetProxyAuth(proxyAuthEnabled, authEnabled bool) {
+	s.proxyAuthEnabled = proxyAuthEnabled && authEnabled
 }
 
 // SetDockerConfig sets the Docker upstream configuration for the registries endpoint.
@@ -126,6 +133,13 @@ func (s *Server) Routes() chi.Router {
 			r.Delete("/docker/repositories/{id}/tags/{tag}", s.handleDeleteDockerTag)
 			r.Post("/docker/sync/{id}", s.handleDockerSync)
 			r.Get("/docker/registries", s.handleListDockerRegistries)
+
+			// API key management (only when auth + proxy_auth are both enabled)
+			if s.proxyAuthEnabled {
+				r.Post("/api-keys", s.handleCreateAPIKey)
+				r.Get("/api-keys", s.handleListAPIKeys)
+				r.Delete("/api-keys/{id}", s.handleRevokeAPIKey)
+			}
 		})
 
 		// Authenticated userinfo endpoint (requires valid session).

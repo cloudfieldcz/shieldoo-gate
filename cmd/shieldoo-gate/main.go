@@ -271,9 +271,30 @@ func main() {
 		log.Warn().Msg("Admin API is UNAUTHENTICATED. Set auth.enabled=true for production.")
 	}
 
+	// Init proxy auth middleware (if enabled).
+	var apiKeyMw *auth.APIKeyMiddleware
+	if cfg.ProxyAuth.Enabled {
+		globalToken := ""
+		if cfg.ProxyAuth.GlobalTokenEnv != "" {
+			globalToken = os.Getenv(cfg.ProxyAuth.GlobalTokenEnv)
+		}
+		apiKeyMw = auth.NewAPIKeyMiddleware(db, globalToken)
+		log.Info().Msg("proxy API key authentication enabled")
+	}
+	// SetProxyAuth on apiServer so it can conditionally register API key management endpoints.
+	apiServer.SetProxyAuth(cfg.ProxyAuth.Enabled, cfg.Auth.Enabled)
+
 	host := cfg.Server.Host
 	if host == "" {
 		host = "0.0.0.0"
+	}
+
+	// wrapProxy applies the API key middleware to a handler if proxy auth is enabled.
+	wrapProxy := func(h http.Handler) http.Handler {
+		if apiKeyMw != nil {
+			return apiKeyMw.Authenticate(h)
+		}
+		return h
 	}
 
 	// Build HTTP servers
@@ -282,13 +303,13 @@ func main() {
 		port    int
 		handler http.Handler
 	}{
-		{"pypi", cfg.Ports.PyPI, pypiAdapter},
-		{"npm", cfg.Ports.NPM, npmAdapter},
-		{"nuget", cfg.Ports.NuGet, nugetAdapter},
-		{"docker", cfg.Ports.Docker, dockerAdapter},
-		{"maven", cfg.Ports.Maven, mavenAdapter},
-		{"rubygems", cfg.Ports.RubyGems, rubygemsAdapter},
-		{"gomod", cfg.Ports.GoMod, gomodAdapter},
+		{"pypi", cfg.Ports.PyPI, wrapProxy(pypiAdapter)},
+		{"npm", cfg.Ports.NPM, wrapProxy(npmAdapter)},
+		{"nuget", cfg.Ports.NuGet, wrapProxy(nugetAdapter)},
+		{"docker", cfg.Ports.Docker, wrapProxy(dockerAdapter)},
+		{"maven", cfg.Ports.Maven, wrapProxy(mavenAdapter)},
+		{"rubygems", cfg.Ports.RubyGems, wrapProxy(rubygemsAdapter)},
+		{"gomod", cfg.Ports.GoMod, wrapProxy(gomodAdapter)},
 		{"admin", cfg.Ports.Admin, apiServer.Routes()},
 	}
 
@@ -363,6 +384,11 @@ func main() {
 
 	if err := g.Wait(); err != nil {
 		log.Error().Err(err).Msg("server error")
+	}
+
+	// Flush pending last_used_at updates before exit.
+	if apiKeyMw != nil {
+		apiKeyMw.Stop()
 	}
 
 	log.Info().Msg("shieldoo-gate stopped")

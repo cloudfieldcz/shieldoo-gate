@@ -24,6 +24,7 @@ source "${SCRIPT_DIR}/test_maven.sh"
 source "${SCRIPT_DIR}/test_rubygems.sh"
 source "${SCRIPT_DIR}/test_gomod.sh"
 source "${SCRIPT_DIR}/test_api.sh"
+source "${SCRIPT_DIR}/test_proxy_auth.sh"
 
 echo "=== Shieldoo Gate E2E Test Suite (containerized) ==="
 echo "Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -71,6 +72,7 @@ test_maven
 test_rubygems
 test_gomod
 test_api
+test_proxy_auth
 
 # ---------------------------------------------------------------------------
 # Summary and exit code
