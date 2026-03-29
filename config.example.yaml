@@ -135,6 +135,14 @@ auth:
   redirect_url: ""                   # e.g. "https://shieldoo-gate.example.com:8080/auth/callback"
   scopes: ["openid", "email", "profile"]
 
+# API key authentication for proxy endpoints (pip, npm, docker, nuget, gem, go).
+# When disabled (default), proxy endpoints are open — protected by network segmentation only.
+# When enabled, all proxy requests require a valid API key via HTTP Basic Auth.
+# Keys are either per-user PATs (generated via admin API) or a global shared token.
+proxy_auth:
+  enabled: false
+  global_token_env: "SGW_PROXY_TOKEN"  # Env var holding the global shared token (optional)
+
 alerts:
   webhook:
     enabled: false

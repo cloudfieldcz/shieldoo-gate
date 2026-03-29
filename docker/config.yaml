@@ -124,6 +124,10 @@ log:
 auth:
   enabled: false
 
+proxy_auth:
+  enabled: false
+  global_token_env: "SGW_PROXY_TOKEN"
+
 alerts:
   webhook:
     enabled: false
