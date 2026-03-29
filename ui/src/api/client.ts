@@ -10,11 +10,28 @@ import type {
   DockerRepository,
   DockerTag,
   DockerRegistry,
+  UserInfo,
+  APIKey,
+  APIKeyCreateResponse,
 } from './types'
 
 const api = axios.create({
   baseURL: '/api/v1',
 })
+
+// Axios instance for auth endpoints (no /api/v1 prefix).
+const authApi = axios.create({})
+
+// Redirect to OIDC login on 401 (unauthenticated).
+const on401 = (error: unknown) => {
+  if (axios.isAxiosError(error) && error.response?.status === 401) {
+    window.location.href = '/auth/login'
+    return new Promise(() => {}) // never resolves — page is navigating away
+  }
+  return Promise.reject(error)
+}
+api.interceptors.response.use((r) => r, on401)
+authApi.interceptors.response.use((r) => r, on401)
 
 export const artifactsApi = {
   list: (page = 1, perPage = 50, ecosystem?: string, status?: string) =>
@@ -100,4 +117,16 @@ export const dockerApi = {
 
   listRegistries: () =>
     api.get<DockerRegistry[]>('/docker/registries').then((r) => r.data),
+}
+
+export const userApi = {
+  me: () => authApi.get<UserInfo>('/auth/userinfo').then((r) => r.data),
+  logout: () => authApi.post('/auth/logout'),
+}
+
+export const apiKeysApi = {
+  list: () => api.get<APIKey[]>('/api-keys').then((r) => r.data),
+  create: (name: string) =>
+    api.post<APIKeyCreateResponse>('/api-keys', { name }).then((r) => r.data),
+  revoke: (id: number) => api.delete(`/api-keys/${id}`),
 }

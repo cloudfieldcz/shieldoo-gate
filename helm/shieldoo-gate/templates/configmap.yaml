@@ -1,0 +1,180 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "shieldoo-gate.fullname" . }}-config
+  labels:
+    {{- include "shieldoo-gate.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    server:
+      host: "0.0.0.0"
+
+    ports:
+      pypi: {{ .Values.ports.pypi }}
+      npm: {{ .Values.ports.npm }}
+      nuget: {{ .Values.ports.nuget }}
+      docker: {{ .Values.ports.docker }}
+      maven: {{ .Values.ports.maven }}
+      rubygems: {{ .Values.ports.rubygems }}
+      gomod: {{ .Values.ports.gomod }}
+      admin: {{ .Values.ports.admin }}
+
+    upstreams:
+      pypi: {{ .Values.upstreams.pypi | quote }}
+      npm: {{ .Values.upstreams.npm | quote }}
+      nuget: {{ .Values.upstreams.nuget | quote }}
+      maven: {{ .Values.upstreams.maven | quote }}
+      rubygems: {{ .Values.upstreams.rubygems | quote }}
+      gomod: {{ .Values.upstreams.gomod | quote }}
+      docker:
+        default_registry: {{ .Values.upstreams.docker.defaultRegistry | quote }}
+        {{- if .Values.upstreams.docker.allowedRegistries }}
+        allowed_registries:
+          {{- toYaml .Values.upstreams.docker.allowedRegistries | nindent 10 }}
+        {{- end }}
+        sync:
+          enabled: {{ .Values.upstreams.docker.sync.enabled }}
+          interval: {{ .Values.upstreams.docker.sync.interval | quote }}
+          rescan_interval: {{ .Values.upstreams.docker.sync.rescanInterval | quote }}
+          max_concurrent: {{ .Values.upstreams.docker.sync.maxConcurrent }}
+        push:
+          enabled: {{ .Values.upstreams.docker.push.enabled }}
+
+    cache:
+      backend: {{ .Values.cache.backend | quote }}
+      {{- if eq .Values.cache.backend "local" }}
+      local:
+        path: {{ .Values.cache.local.path | quote }}
+        max_size_gb: {{ .Values.cache.local.maxSizeGb }}
+      {{- end }}
+      {{- if eq .Values.cache.backend "s3" }}
+      s3:
+        bucket: {{ .Values.cache.s3.bucket | quote }}
+        region: {{ .Values.cache.s3.region | quote }}
+        endpoint: {{ .Values.cache.s3.endpoint | quote }}
+        prefix: {{ .Values.cache.s3.prefix | quote }}
+        force_path_style: {{ .Values.cache.s3.forcePathStyle }}
+        access_key_env: "SGW_S3_ACCESS_KEY"
+        secret_key_env: "SGW_S3_SECRET_KEY"
+      {{- end }}
+      {{- if eq .Values.cache.backend "azure_blob" }}
+      azure_blob:
+        account_name: {{ .Values.cache.azure_blob.accountName | quote }}
+        container_name: {{ .Values.cache.azure_blob.containerName | quote }}
+        connection_string_env: "SGW_AZURE_CONNECTION_STRING"
+        prefix: {{ .Values.cache.azure_blob.prefix | quote }}
+      {{- end }}
+      {{- if eq .Values.cache.backend "gcs" }}
+      gcs:
+        bucket: {{ .Values.cache.gcs.bucket | quote }}
+        credentials_file: {{ .Values.cache.gcs.credentialsFile | quote }}
+        prefix: {{ .Values.cache.gcs.prefix | quote }}
+      {{- end }}
+      ttl:
+        pypi: {{ .Values.cache.ttl.pypi | quote }}
+        npm: {{ .Values.cache.ttl.npm | quote }}
+        nuget: {{ .Values.cache.ttl.nuget | quote }}
+        docker: {{ .Values.cache.ttl.docker | quote }}
+
+    database:
+      backend: {{ .Values.database.backend | quote }}
+      {{- if eq .Values.database.backend "sqlite" }}
+      sqlite:
+        path: {{ .Values.database.sqlite.path | quote }}
+      {{- end }}
+      {{- if eq .Values.database.backend "postgres" }}
+      postgres:
+        dsn: ""
+        max_open_conns: {{ .Values.database.postgres.maxOpenConns }}
+        max_idle_conns: {{ .Values.database.postgres.maxIdleConns }}
+        conn_max_lifetime: {{ .Values.database.postgres.connMaxLifetime | quote }}
+      {{- end }}
+
+    scanners:
+      parallel: {{ .Values.scanners.parallel }}
+      timeout: {{ .Values.scanners.timeout | quote }}
+      guarddog:
+        enabled: {{ .Values.scanners.guarddog.enabled }}
+        bridge_socket: {{ .Values.scanners.guarddog.bridgeSocket | quote }}
+      trivy:
+        enabled: {{ .Values.scanners.trivy.enabled }}
+        binary: {{ .Values.scanners.trivy.binary | quote }}
+        cache_dir: {{ .Values.scanners.trivy.cacheDir | quote }}
+      osv:
+        enabled: {{ .Values.scanners.osv.enabled }}
+        api_url: {{ .Values.scanners.osv.apiUrl | quote }}
+
+    policy:
+      block_if_verdict: {{ .Values.policy.blockIfVerdict | quote }}
+      quarantine_if_verdict: {{ .Values.policy.quarantineIfVerdict | quote }}
+      minimum_confidence: {{ .Values.policy.minimumConfidence }}
+      {{- if .Values.policy.allowlist }}
+      allowlist:
+        {{- toYaml .Values.policy.allowlist | nindent 8 }}
+      {{- end }}
+      tag_mutability:
+        enabled: {{ .Values.policy.tagMutability.enabled }}
+        action: {{ .Values.policy.tagMutability.action | quote }}
+        exclude_tags:
+          {{- toYaml .Values.policy.tagMutability.excludeTags | nindent 10 }}
+        check_on_cache_hit: {{ .Values.policy.tagMutability.checkOnCacheHit }}
+
+    threat_feed:
+      enabled: {{ .Values.threatFeed.enabled }}
+      url: {{ .Values.threatFeed.url | quote }}
+      refresh_interval: {{ .Values.threatFeed.refreshInterval | quote }}
+
+    rescan:
+      enabled: {{ .Values.rescan.enabled }}
+      interval: {{ .Values.rescan.interval | quote }}
+      batch_size: {{ .Values.rescan.batchSize }}
+      max_concurrent: {{ .Values.rescan.maxConcurrent }}
+
+    log:
+      level: {{ .Values.log.level | quote }}
+      format: {{ .Values.log.format | quote }}
+
+    auth:
+      enabled: {{ .Values.auth.enabled }}
+      {{- if .Values.auth.enabled }}
+      issuer_url: {{ .Values.auth.issuerUrl | quote }}
+      client_id: {{ .Values.auth.clientId | quote }}
+      client_secret_env: "SGW_OIDC_CLIENT_SECRET"
+      redirect_url: {{ .Values.auth.redirectUrl | quote }}
+      scopes:
+        {{- toYaml .Values.auth.scopes | nindent 8 }}
+      {{- end }}
+
+    alerts:
+      webhook:
+        enabled: {{ .Values.alerts.webhook.enabled }}
+        {{- if .Values.alerts.webhook.enabled }}
+        url: {{ .Values.alerts.webhook.url | quote }}
+        secret_env: "SGW_WEBHOOK_SECRET"
+        allow_insecure: {{ .Values.alerts.webhook.allowInsecure }}
+        on:
+          {{- toYaml .Values.alerts.webhook.on | nindent 10 }}
+        {{- end }}
+      slack:
+        enabled: {{ .Values.alerts.slack.enabled }}
+        {{- if .Values.alerts.slack.enabled }}
+        webhook_env: "SGW_SLACK_WEBHOOK_URL"
+        on:
+          {{- toYaml .Values.alerts.slack.on | nindent 10 }}
+        {{- end }}
+      email:
+        enabled: {{ .Values.alerts.email.enabled }}
+        {{- if .Values.alerts.email.enabled }}
+        host: {{ .Values.alerts.email.host | quote }}
+        port: {{ .Values.alerts.email.port }}
+        from: {{ .Values.alerts.email.from | quote }}
+        to:
+          {{- toYaml .Values.alerts.email.to | nindent 10 }}
+        username_env: "SGW_SMTP_USER"
+        password_env: "SGW_SMTP_PASS"
+        use_tls: {{ .Values.alerts.email.useTls }}
+        tls_skip_verify: {{ .Values.alerts.email.tlsSkipVerify }}
+        batch_interval: {{ .Values.alerts.email.batchInterval | quote }}
+        on:
+          {{- toYaml .Values.alerts.email.on | nindent 10 }}
+        {{- end }}

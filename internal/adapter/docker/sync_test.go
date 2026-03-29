@@ -21,7 +21,7 @@ import (
 )
 
 func TestSyncService_StartsAndStops(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 	db.SetMaxOpenConns(1)
@@ -44,7 +44,7 @@ func TestSyncService_StartsAndStops(t *testing.T) {
 }
 
 func TestSyncService_StartsAndStops_DefaultInterval(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 	db.SetMaxOpenConns(1)
@@ -66,7 +66,7 @@ func TestSyncService_StartsAndStops_DefaultInterval(t *testing.T) {
 }
 
 func TestListSyncableRepos_FiltersCorrectly(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -85,7 +85,7 @@ func TestListSyncableRepos_FiltersCorrectly(t *testing.T) {
 }
 
 func TestSyncService_SyncRepository_DetectsChange(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 	db.SetMaxOpenConns(1)
@@ -144,7 +144,7 @@ func TestSyncService_SyncRepository_DetectsChange(t *testing.T) {
 }
 
 func TestSyncService_SyncRepository_NoChange_SkipsRescan(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 	db.SetMaxOpenConns(1)
@@ -206,7 +206,7 @@ func TestSyncService_SyncRepository_NoChange_SkipsRescan(t *testing.T) {
 }
 
 func TestSyncService_SyncRepository_Upstream404_DisablesSync(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 	db.SetMaxOpenConns(1)
@@ -260,7 +260,7 @@ func TestSyncService_SyncRepository_Upstream404_DisablesSync(t *testing.T) {
 }
 
 func TestSyncService_SyncRepository_Upstream429_SkipsTag(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 	db.SetMaxOpenConns(1)
@@ -310,7 +310,7 @@ func TestSyncService_SyncRepository_Upstream429_SkipsTag(t *testing.T) {
 }
 
 func TestSyncService_SyncRepository_UpstreamUnreachable_SkipsRepo(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 	db.SetMaxOpenConns(1)
@@ -355,7 +355,7 @@ func TestSyncService_SyncRepository_UpstreamUnreachable_SkipsRepo(t *testing.T) 
 }
 
 func TestDisableSync_SetsSyncEnabledFalse(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -386,7 +386,7 @@ func TestParseRetryAfter_Invalid(t *testing.T) {
 }
 
 func TestSyncService_RescanInterval_Elapsed_TriggersRescan(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 	db.SetMaxOpenConns(1)
@@ -453,7 +453,7 @@ func TestSyncService_RescanInterval_Elapsed_TriggersRescan(t *testing.T) {
 }
 
 func TestSyncService_MultipleRepos_ConcurrentSync(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 	db.SetMaxOpenConns(1)

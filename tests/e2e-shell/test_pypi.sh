@@ -6,6 +6,15 @@ test_pypi() {
     log_section "PyPI Proxy Tests"
 
     # ------------------------------------------------------------------
+    # 0. Negative test: unauthenticated request must return 401 when auth enabled
+    # ------------------------------------------------------------------
+    if [ "${SGW_PROXY_AUTH_ENABLED:-false}" = "true" ]; then
+        local noauth_status
+        noauth_status=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_PYPI_URL}/simple/")
+        assert_eq "PyPI: unauthenticated request returns 401" "401" "$noauth_status"
+    fi
+
+    # ------------------------------------------------------------------
     # 1. Simple index is accessible
     # ------------------------------------------------------------------
     assert_http_status "PyPI: /simple/ returns HTTP 200" \
@@ -16,15 +25,17 @@ test_pypi() {
     # 2. Package page has rewritten URLs
     # ------------------------------------------------------------------
     local six_page
-    six_page=$(curl -sf "${E2E_PYPI_URL}/simple/six/")
+    six_page=$(curl -sf "${E2E_CURL_AUTH[@]}" "${E2E_PYPI_URL}/simple/six/")
 
-    if echo "$six_page" | grep -q "/packages/"; then
+    # Use bash built-in pattern matching instead of echo|grep -q to avoid
+    # SIGPIPE failures under set -o pipefail (large responses + grep -q).
+    if [[ "$six_page" == *"/packages/"* ]]; then
         log_pass "PyPI: package page contains rewritten /packages/ path"
     else
         log_fail "PyPI: package page does not contain /packages/ path"
     fi
 
-    if echo "$six_page" | grep -q "files.pythonhosted.org"; then
+    if [[ "$six_page" == *"files.pythonhosted.org"* ]]; then
         log_fail "PyPI: package page still contains upstream 'files.pythonhosted.org' URL (not rewritten)"
     else
         log_pass "PyPI: package page does not expose upstream 'files.pythonhosted.org'"
@@ -43,7 +54,7 @@ test_pypi() {
     if uv pip install \
             --python .venv/bin/python \
             --no-cache \
-            --index-url "${E2E_PYPI_URL}/simple/" \
+            --index-url "$(auth_url "${E2E_PYPI_URL}")/simple/" \
             -r requirements.txt \
             > install.log 2>&1; then
         log_pass "PyPI: uv pip install succeeded for all fixture packages"
@@ -73,11 +84,14 @@ test_pypi() {
 
     # ------------------------------------------------------------------
     # 6. Gate logs contain scan pipeline entries
+    #    (only when docker_logs can access real container logs)
     # ------------------------------------------------------------------
     local gate_logs
     gate_logs=$(docker_logs shieldoo-gate 2>/dev/null)
 
-    if echo "$gate_logs" | grep -qiE "scan result|policy decision"; then
+    if [[ "$gate_logs" == *"docker_logs not available"* ]]; then
+        log_skip "PyPI: gate logs inspection not available in container mode"
+    elif [[ "$gate_logs" == *"scan result"* ]] || [[ "$gate_logs" == *"policy decision"* ]]; then
         log_pass "PyPI: gate logs contain scan pipeline entries"
     else
         log_fail "PyPI: gate logs do not contain 'scan result' or 'policy decision' entries"

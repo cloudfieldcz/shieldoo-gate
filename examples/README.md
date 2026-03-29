@@ -23,6 +23,9 @@ Each example has **one dependency** and a tiny script that uses it, serving as a
    - Python: [uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
    - Node.js: [Node.js 18+](https://nodejs.org/)
    - .NET: [.NET SDK 8.0+](https://dotnet.microsoft.com/download)
+   - Java: [JDK 11+](https://adoptium.net/) + [Maven 3.6+](https://maven.apache.org/download.cgi)
+   - Ruby: [Ruby 3.0+](https://www.ruby-lang.org/) + Bundler 2.0+
+   - Go: [Go 1.21+](https://go.dev/dl/)
 
 ## Examples
 
@@ -31,6 +34,9 @@ Each example has **one dependency** and a tiny script that uses it, serving as a
 | [python-requests](python-requests/) | PyPI `:5010` | `requests` | HTTP GET request |
 | [npm-chalk](npm-chalk/) | npm `:4873` | `chalk` | Colored terminal output |
 | [dotnet-json](dotnet-json/) | NuGet `:5001` | `Newtonsoft.Json` | JSON serialization |
+| [maven-example](maven-example/) | Maven `:8085` | `commons-lang3` | String utilities |
+| [rubygems-example](rubygems-example/) | RubyGems `:8086` | `rake` | Build automation |
+| [go-example](go-example/) | Go Modules `:8087` | `zerolog` | Structured logging |
 
 Each example is fully independent — you only need the toolchain for the one you want to try.
 

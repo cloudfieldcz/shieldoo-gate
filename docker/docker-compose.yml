@@ -21,6 +21,8 @@ services:
       - gate-cache:/var/cache/shieldoo-gate
       - trivy-cache:/var/cache/trivy
       - ./config.yaml:/etc/shieldoo-gate/config.yaml:ro
+    env_file:
+      - .env
     environment:
       SGW_SCANNERS_GUARDDOG_BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
     restart: unless-stopped

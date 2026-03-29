@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,18 +17,31 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/docker"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/gomod"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/maven"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/npm"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/nuget"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/pypi"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/rubygems"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/alert"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/api"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/auth"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/cache"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/cache/local"
+	azureblobcache "github.com/cloudfieldcz/shieldoo-gate/internal/cache/azureblob"
+	gcscache "github.com/cloudfieldcz/shieldoo-gate/internal/cache/gcs"
+	s3cache "github.com/cloudfieldcz/shieldoo-gate/internal/cache/s3"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/policy"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/scheduler"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner/builtin"
 	guarddog "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/guarddog"
 	osvscanner "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/osv"
+	sandboxscanner "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/sandbox"
 	trivyscanner "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/trivy"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/threatfeed"
 )
@@ -52,19 +66,43 @@ func main() {
 		level = zerolog.InfoLevel
 	}
 	zerolog.SetGlobalLevel(level)
+
+	var logWriter io.Writer = os.Stderr
+	if cfg.Log.File != "" {
+		f, err := os.OpenFile(cfg.Log.File, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			log.Fatal().Err(err).Str("path", cfg.Log.File).Msg("failed to open log file")
+		}
+		defer f.Close()
+		logWriter = io.MultiWriter(os.Stderr, f)
+	}
 	if cfg.Log.Format == "text" {
-		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+		log.Logger = log.Output(zerolog.ConsoleWriter{Out: logWriter})
+	} else {
+		log.Logger = log.Output(logWriter)
 	}
 
 	// Init database
-	db, err := config.InitDB(cfg.Database.SQLite.Path)
+	db, err := config.InitDB(cfg.Database)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to initialize database")
 	}
 	defer db.Close()
 
-	// Init local cache store
-	cacheStore, err := local.NewLocalCacheStore(cfg.Cache.Local.Path, cfg.Cache.Local.MaxSizeGB)
+	// Init cache store
+	var cacheStore cache.CacheStore
+	switch cfg.Cache.Backend {
+	case "s3":
+		cacheStore, err = s3cache.NewS3CacheStore(cfg.Cache.S3)
+	case "azure_blob":
+		cacheStore, err = azureblobcache.NewAzureBlobStore(cfg.Cache.AzureBlob)
+	case "gcs":
+		cacheStore, err = gcscache.NewGCSCacheStore(cfg.Cache.GCS)
+	case "local", "":
+		cacheStore, err = local.NewLocalCacheStore(cfg.Cache.Local.Path, cfg.Cache.Local.MaxSizeGB)
+	default:
+		err = fmt.Errorf("unknown cache backend: %s", cfg.Cache.Backend)
+	}
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to initialize cache store")
 	}
@@ -115,6 +153,29 @@ func main() {
 	scanEngine := scanner.NewEngine(scanners, scanTimeout)
 	log.Info().Int("scanner_count", len(scanners)).Msg("scanner engine initialized")
 
+	// Optional: Sandbox scanner (async, runs outside the synchronous scan path)
+	var sandboxScanner *sandboxscanner.SandboxScanner
+	if cfg.Scanners.Sandbox.Enabled {
+		sbCfg := sandboxscanner.SandboxConfig{
+			Enabled:       cfg.Scanners.Sandbox.Enabled,
+			RuntimeBinary: cfg.Scanners.Sandbox.RuntimeBinary,
+			Timeout:       cfg.Scanners.Sandbox.Timeout,
+			NetworkPolicy: cfg.Scanners.Sandbox.NetworkPolicy,
+			MaxConcurrent: cfg.Scanners.Sandbox.MaxConcurrent,
+		}
+		sb, sbErr := sandboxscanner.NewSandboxScanner(sbCfg)
+		if sbErr != nil {
+			log.Warn().Err(sbErr).Msg("sandbox scanner unavailable, continuing without it")
+		} else {
+			sandboxScanner = sb
+			sandboxScanner.CleanupOrphans()
+			log.Info().Str("runtime", cfg.Scanners.Sandbox.RuntimeBinary).Msg("sandbox scanner enabled (async)")
+		}
+	}
+	if sandboxScanner != nil {
+		adapter.SetAsyncScanner(sandboxScanner)
+	}
+
 	// Init policy engine from config
 	policyEngine := policy.NewEngine(policy.EngineConfig{
 		BlockIfVerdict:      scanner.Verdict(cfg.Policy.BlockIfVerdict),
@@ -122,6 +183,34 @@ func main() {
 		MinimumConfidence:   cfg.Policy.MinimumConfidence,
 		Allowlist:           cfg.Policy.Allowlist,
 	}, db)
+
+	// Init alerter from config.
+	var alerterInstance alert.Alerter
+	if cfg.Alerts.Webhook.Enabled || cfg.Alerts.Slack.Enabled || cfg.Alerts.Email.Enabled {
+		var workers []alert.ChannelConfig
+		if cfg.Alerts.Webhook.Enabled {
+			secret := []byte(os.Getenv(cfg.Alerts.Webhook.SecretEnv))
+			sender := alert.NewWebhookSender(cfg.Alerts.Webhook.URL, secret)
+			var eventFilter []model.EventType
+			for _, ev := range cfg.Alerts.Webhook.On {
+				eventFilter = append(eventFilter, model.EventType(ev))
+			}
+			workers = append(workers, alert.ChannelConfig{
+				Channel:     sender,
+				EventFilter: eventFilter,
+			})
+		}
+		// Slack and Email senders will be added in later tasks.
+		alerterInstance = alert.NewMultiAlerter(workers)
+	} else {
+		alerterInstance = alert.NewMultiAlerter(nil) // no-op alerter
+	}
+	adapter.SetAlerter(alerterInstance)
+	defer func() {
+		if err := alerterInstance.Close(); err != nil {
+			log.Error().Err(err).Msg("alerter shutdown error")
+		}
+	}()
 
 	// Init threat feed client with periodic refresh (if enabled)
 	if cfg.ThreatFeed.Enabled && cfg.ThreatFeed.URL != "" {
@@ -154,19 +243,71 @@ func main() {
 	pypiUpstream := fallback(cfg.Upstreams.PyPI, "https://pypi.org")
 	npmUpstream := fallback(cfg.Upstreams.NPM, "https://registry.npmjs.org")
 	nugetUpstream := fallback(cfg.Upstreams.NuGet, "https://api.nuget.org")
-	// Init all 4 adapters
-	pypiAdapter := pypi.NewPyPIAdapter(db, cacheStore, scanEngine, policyEngine, pypiUpstream)
-	npmAdapter := npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine, npmUpstream)
-	nugetAdapter := nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, nugetUpstream)
+	mavenUpstream := fallback(cfg.Upstreams.Maven, "https://repo1.maven.org/maven2")
+	rubygemsUpstream := fallback(cfg.Upstreams.RubyGems, "https://rubygems.org")
+	gomodUpstream := fallback(cfg.Upstreams.GoMod, "https://proxy.golang.org")
+	// Init all 7 adapters
+	tagMutCfg := cfg.Policy.TagMutability
+	pypiAdapter := pypi.NewPyPIAdapter(db, cacheStore, scanEngine, policyEngine, pypiUpstream, tagMutCfg)
+	npmAdapter := npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine, npmUpstream, tagMutCfg)
+	nugetAdapter := nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, nugetUpstream, tagMutCfg)
 	dockerAdapter := docker.NewDockerAdapter(db, cacheStore, scanEngine, policyEngine, cfg.Upstreams.Docker)
+	mavenAdapter := maven.NewMavenAdapter(db, cacheStore, scanEngine, policyEngine, mavenUpstream)
+	rubygemsAdapter := rubygems.NewRubyGemsAdapter(db, cacheStore, scanEngine, policyEngine, rubygemsUpstream)
+	gomodAdapter := gomod.NewGoModAdapter(db, cacheStore, scanEngine, policyEngine, gomodUpstream)
 
 	// Init admin API server
 	apiServer := api.NewServer(db, cacheStore, scanEngine, policyEngine)
 	apiServer.SetDockerConfig(cfg.Upstreams.Docker)
 
+	// Init OIDC authentication (if enabled).
+	if cfg.Auth.Enabled {
+		authCfg := auth.AuthConfig{
+			Enabled:         true,
+			IssuerURL:       cfg.Auth.IssuerURL,
+			ClientID:        cfg.Auth.ClientID,
+			ClientSecretEnv: cfg.Auth.ClientSecretEnv,
+			RedirectURL:     cfg.Auth.RedirectURL,
+			Scopes:          cfg.Auth.Scopes,
+		}
+		oidcMw, err := auth.NewOIDCMiddleware(context.Background(), cfg.Auth.IssuerURL, cfg.Auth.ClientID)
+		if err != nil {
+			log.Fatal().Err(err).Msg("failed to initialize OIDC middleware")
+		}
+		authHandlers, err := auth.NewAuthHandlers(authCfg)
+		if err != nil {
+			log.Fatal().Err(err).Msg("failed to initialize auth handlers")
+		}
+		apiServer.SetAuth(oidcMw, authHandlers)
+		log.Info().Str("issuer", cfg.Auth.IssuerURL).Msg("OIDC authentication enabled for admin API")
+	} else {
+		log.Warn().Msg("Admin API is UNAUTHENTICATED. Set auth.enabled=true for production.")
+	}
+
+	// Init proxy auth middleware (if enabled).
+	var apiKeyMw *auth.APIKeyMiddleware
+	if cfg.ProxyAuth.Enabled {
+		globalToken := ""
+		if cfg.ProxyAuth.GlobalTokenEnv != "" {
+			globalToken = os.Getenv(cfg.ProxyAuth.GlobalTokenEnv)
+		}
+		apiKeyMw = auth.NewAPIKeyMiddleware(db, globalToken)
+		log.Info().Msg("proxy API key authentication enabled")
+	}
+	// SetProxyAuth on apiServer so it can conditionally register API key management endpoints.
+	apiServer.SetProxyAuth(cfg.ProxyAuth.Enabled, cfg.Auth.Enabled)
+
 	host := cfg.Server.Host
 	if host == "" {
 		host = "0.0.0.0"
+	}
+
+	// wrapProxy applies the API key middleware to a handler if proxy auth is enabled.
+	wrapProxy := func(h http.Handler) http.Handler {
+		if apiKeyMw != nil {
+			return apiKeyMw.Authenticate(h)
+		}
+		return h
 	}
 
 	// Build HTTP servers
@@ -175,10 +316,13 @@ func main() {
 		port    int
 		handler http.Handler
 	}{
-		{"pypi", cfg.Ports.PyPI, pypiAdapter},
-		{"npm", cfg.Ports.NPM, npmAdapter},
-		{"nuget", cfg.Ports.NuGet, nugetAdapter},
-		{"docker", cfg.Ports.Docker, dockerAdapter},
+		{"pypi", cfg.Ports.PyPI, wrapProxy(pypiAdapter)},
+		{"npm", cfg.Ports.NPM, wrapProxy(npmAdapter)},
+		{"nuget", cfg.Ports.NuGet, wrapProxy(nugetAdapter)},
+		{"docker", cfg.Ports.Docker, wrapProxy(dockerAdapter)},
+		{"maven", cfg.Ports.Maven, wrapProxy(mavenAdapter)},
+		{"rubygems", cfg.Ports.RubyGems, wrapProxy(rubygemsAdapter)},
+		{"gomod", cfg.Ports.GoMod, wrapProxy(gomodAdapter)},
 		{"admin", cfg.Ports.Admin, apiServer.Routes()},
 	}
 
@@ -195,6 +339,14 @@ func main() {
 		apiServer.SetSyncService(syncSvc)
 		go syncSvc.Start(ctx)
 		log.Info().Msg("docker sync service enabled")
+	}
+
+	// Start rescan scheduler (if enabled).
+	if cfg.Rescan.Enabled {
+		rescanScheduler := scheduler.NewRescanScheduler(db, cacheStore, scanEngine, policyEngine, cfg.Rescan)
+		rescanScheduler.Start()
+		defer rescanScheduler.Stop()
+		log.Info().Msg("rescan scheduler enabled")
 	}
 
 	sigCh := make(chan os.Signal, 1)
@@ -245,6 +397,11 @@ func main() {
 
 	if err := g.Wait(); err != nil {
 		log.Error().Err(err).Msg("server error")
+	}
+
+	// Flush pending last_used_at updates before exit.
+	if apiKeyMw != nil {
+		apiKeyMw.Stop()
 	}
 
 	log.Info().Msg("shieldoo-gate stopped")

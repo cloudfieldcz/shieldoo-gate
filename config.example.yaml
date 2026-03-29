@@ -8,12 +8,18 @@ ports:
   npm: 4873
   nuget: 5001
   docker: 5002
+  maven: 8085
+  rubygems: 8086
+  gomod: 8087
   admin: 8080
 
 upstreams:
   pypi: "https://pypi.org"
   npm: "https://registry.npmjs.org"
   nuget: "https://api.nuget.org"
+  maven: "https://repo1.maven.org/maven2"
+  rubygems: "https://rubygems.org"
+  gomod: "https://proxy.golang.org"
   docker:
     default_registry: "https://registry-1.docker.io"
     allowed_registries:
@@ -30,10 +36,27 @@ upstreams:
       enabled: false
 
 cache:
-  backend: "local"
+  backend: "local"                 # "local" (default), "s3", "azure_blob", or "gcs"
   local:
     path: "/var/cache/shieldoo-gate"
     max_size_gb: 50
+  s3:
+    bucket: ""                     # S3 bucket name (required when backend is "s3")
+    region: "us-east-1"            # AWS region (required unless endpoint is set)
+    endpoint: ""                   # Custom endpoint for MinIO / S3-compatible services
+    prefix: ""                     # Optional key prefix for all objects
+    force_path_style: false        # Set true for MinIO / S3-compatible services
+    access_key_env: ""             # Env var name for AWS access key (optional; defaults to AWS credential chain)
+    secret_key_env: ""             # Env var name for AWS secret key (optional; defaults to AWS credential chain)
+  azure_blob:
+    account_name: ""               # Azure storage account name (required unless connection_string_env is set)
+    container_name: ""             # Blob container name (required when backend is "azure_blob")
+    connection_string_env: ""      # Env var name holding Azure Storage connection string (optional)
+    prefix: ""                     # Optional key prefix for all blobs
+  gcs:
+    bucket: ""                     # GCS bucket name (required when backend is "gcs")
+    credentials_file: ""           # Path to service account JSON (optional; defaults to GOOGLE_APPLICATION_CREDENTIALS)
+    prefix: ""                     # Optional key prefix for all objects
   ttl:
     pypi: "168h"
     npm: "168h"
@@ -44,6 +67,13 @@ database:
   backend: "sqlite"
   sqlite:
     path: "/var/lib/shieldoo-gate/gate.db"
+  postgres:
+    # DSN should be provided via environment variable SGW_DATABASE_POSTGRES_DSN
+    # to avoid committing credentials to version control.
+    dsn: ""
+    max_open_conns: 25
+    max_idle_conns: 5
+    conn_max_lifetime: "5m"
 
 scanners:
   parallel: true
@@ -58,6 +88,14 @@ scanners:
   osv:
     enabled: true
     api_url: "https://api.osv.dev"
+  # Dynamic sandbox scanner (gVisor). Runs asynchronously after artifact is served.
+  # Requires Linux with gVisor (runsc) installed. Disabled by default.
+  sandbox:
+    enabled: false
+    runtime_binary: "runsc"          # path to gVisor runtime binary
+    timeout: "30s"                   # per-sandbox execution timeout
+    network_policy: "none"           # "none" (no network) or "monitor" (DNS/HTTP logging)
+    max_concurrent: 2                # max concurrent sandbox executions
 
 policy:
   block_if_verdict: "MALICIOUS"
@@ -65,12 +103,66 @@ policy:
   minimum_confidence: 0.7
   allowlist:
     - "pypi:litellm:==1.82.6"
+  tag_mutability:
+    enabled: true
+    action: "warn"                   # "quarantine" | "warn" | "block"
+    exclude_tags: ["latest", "nightly", "dev"]
+    check_on_cache_hit: false        # adds latency to cache hits; use rescan scheduler instead
 
 threat_feed:
   enabled: true
   url: "https://feed.shieldoo.io/malicious-packages.json"
   refresh_interval: "1h"
 
+rescan:
+  enabled: true
+  interval: "6h"                   # How often the scheduler runs
+  batch_size: 100                  # Max artifacts per cycle
+  max_concurrent: 5                # Max parallel scans
+
 log:
   level: "info"
   format: "json"
+
+# OIDC authentication for admin API (opt-in, disabled by default).
+# When disabled, the admin API is fully open — suitable for development/testing.
+# In production, set enabled: true and configure your OIDC provider.
+auth:
+  enabled: false
+  issuer_url: ""                     # OIDC provider URL, e.g. "https://accounts.google.com"
+  client_id: ""                      # OAuth2 client ID from your OIDC provider
+  client_secret_env: "SGW_OIDC_CLIENT_SECRET"  # Env var holding the client secret
+  redirect_url: ""                   # e.g. "https://shieldoo-gate.example.com:8080/auth/callback"
+  scopes: ["openid", "email", "profile"]
+
+# API key authentication for proxy endpoints (pip, npm, docker, nuget, gem, go).
+# When disabled (default), proxy endpoints are open — protected by network segmentation only.
+# When enabled, all proxy requests require a valid API key via HTTP Basic Auth.
+# Keys are either per-user PATs (generated via admin API) or a global shared token.
+proxy_auth:
+  enabled: false
+  global_token_env: "SGW_PROXY_TOKEN"  # Env var holding the global shared token (optional)
+
+alerts:
+  webhook:
+    enabled: false
+    url: "https://hooks.example.com/shieldoo"
+    secret_env: "SGW_WEBHOOK_SECRET"
+    allow_insecure: false
+    on: ["BLOCKED", "QUARANTINED", "TAG_MUTATED"]
+  slack:
+    enabled: false
+    webhook_env: "SGW_SLACK_WEBHOOK_URL"
+    on: ["BLOCKED", "QUARANTINED"]
+  email:
+    enabled: false
+    host: "smtp.example.com"
+    port: 587
+    from: "shieldoo@example.com"
+    to: ["security@example.com"]
+    username_env: "SGW_SMTP_USER"
+    password_env: "SGW_SMTP_PASS"
+    use_tls: true
+    tls_skip_verify: false
+    batch_interval: "30s"
+    on: ["QUARANTINED", "TAG_MUTATED"]

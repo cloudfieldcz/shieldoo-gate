@@ -12,6 +12,8 @@ const (
 	EventScanned         EventType = "SCANNED"
 	EventOverrideCreated EventType = "OVERRIDE_CREATED"
 	EventOverrideRevoked EventType = "OVERRIDE_REVOKED"
+	EventTagMutated      EventType = "TAG_MUTATED"
+	EventRescanQueued    EventType = "RESCAN_QUEUED"
 )
 
 type AuditEntry struct {
@@ -23,4 +25,5 @@ type AuditEntry struct {
 	UserAgent    string    `db:"user_agent" json:"user_agent,omitempty"`
 	Reason       string    `db:"reason" json:"reason,omitempty"`
 	MetadataJSON string    `db:"metadata_json" json:"metadata_json,omitempty"`
+	UserEmail    string    `db:"user_email" json:"user_email,omitempty"`
 }

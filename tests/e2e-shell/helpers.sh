@@ -21,19 +21,61 @@ TESTS_SKIPPED=0
 # ---------------------------------------------------------------------------
 # Port and URL exports
 # ---------------------------------------------------------------------------
+# When running on the host, tests use localhost + mapped ports.
+# When running inside the test-runner container (docker-compose), the SGW_*
+# environment variables override these with container-internal URLs.
+# ---------------------------------------------------------------------------
 export E2E_PYPI_PORT=15010
 export E2E_NPM_PORT=14873
 export E2E_NUGET_PORT=15001
-export E2E_DOCKER_PORT=15002
+export E2E_DOCKER_PORT="${SGW_DOCKER_PORT:-15002}"
+export E2E_MAVEN_PORT=18085
 export E2E_ADMIN_PORT=18080
 export E2E_PUSH_REGISTRY_PORT=15003
+export E2E_RUBYGEMS_PORT=18086
+export E2E_GOMOD_PORT=18087
 
-export E2E_PYPI_URL="http://localhost:${E2E_PYPI_PORT}"
-export E2E_NPM_URL="http://localhost:${E2E_NPM_PORT}"
-export E2E_NUGET_URL="http://localhost:${E2E_NUGET_PORT}"
-export E2E_DOCKER_URL="http://localhost:${E2E_DOCKER_PORT}"
-export E2E_ADMIN_URL="http://localhost:${E2E_ADMIN_PORT}"
-export E2E_PUSH_REGISTRY_URL="http://localhost:${E2E_PUSH_REGISTRY_PORT}"
+export E2E_PYPI_URL="${SGW_PYPI_URL:-http://localhost:${E2E_PYPI_PORT}}"
+export E2E_NPM_URL="${SGW_NPM_URL:-http://localhost:${E2E_NPM_PORT}}"
+export E2E_NUGET_URL="${SGW_NUGET_URL:-http://localhost:${E2E_NUGET_PORT}}"
+export E2E_DOCKER_URL="${SGW_DOCKER_URL:-http://localhost:${E2E_DOCKER_PORT}}"
+export E2E_MAVEN_URL="${SGW_MAVEN_URL:-http://localhost:${E2E_MAVEN_PORT}}"
+export E2E_ADMIN_URL="${SGW_ADMIN_URL:-http://localhost:${E2E_ADMIN_PORT}}"
+export E2E_PUSH_REGISTRY_URL="${SGW_PUSH_REGISTRY_URL:-http://localhost:${E2E_PUSH_REGISTRY_PORT}}"
+export E2E_RUBYGEMS_URL="${SGW_RUBYGEMS_URL:-http://localhost:${E2E_RUBYGEMS_PORT}}"
+export E2E_GOMOD_URL="${SGW_GOMOD_URL:-http://localhost:${E2E_GOMOD_PORT}}"
+
+# Docker registry host for crane (host:port, no scheme).
+# In container: shieldoo-gate:5002; on host: localhost:15002.
+if [ -n "${SGW_DOCKER_URL:-}" ]; then
+    # Strip http:// prefix to get host:port for crane
+    export E2E_DOCKER_REGISTRY_HOST="${SGW_DOCKER_URL#http://}"
+else
+    export E2E_DOCKER_REGISTRY_HOST="localhost:${E2E_DOCKER_PORT}"
+fi
+
+# ---------------------------------------------------------------------------
+# Proxy auth configuration
+# ---------------------------------------------------------------------------
+# When SGW_PROXY_AUTH_ENABLED=true, all proxy requests must include Basic Auth.
+# E2E_CURL_AUTH is a bash array used with curl: curl "${E2E_CURL_AUTH[@]}" ...
+# E2E_AUTH_USERINFO is "user:pass@" prefix for embedding in URLs (uv, npm).
+E2E_CURL_AUTH=()
+E2E_AUTH_USERINFO=""
+if [ "${SGW_PROXY_AUTH_ENABLED:-false}" = "true" ] && [ -n "${SGW_PROXY_TOKEN:-}" ]; then
+    E2E_CURL_AUTH=(-u "ci-bot:${SGW_PROXY_TOKEN}")
+    E2E_AUTH_USERINFO="ci-bot:${SGW_PROXY_TOKEN}@"
+fi
+
+# auth_url "http://host:port" → "http://ci-bot:token@host:port" (when auth enabled)
+auth_url() {
+    local url="$1"
+    if [ -n "$E2E_AUTH_USERINFO" ]; then
+        echo "${url//:\/\//:\/\/${E2E_AUTH_USERINFO}}"
+    else
+        echo "$url"
+    fi
+}
 
 # ---------------------------------------------------------------------------
 # Logging helpers
@@ -107,7 +149,7 @@ assert_http_status() {
     local expected_status="$2"
     local url="$3"
     local actual_status
-    actual_status=$(curl -s -o /dev/null -w "%{http_code}" "$url")
+    actual_status=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_CURL_AUTH[@]}" "$url")
     assert_eq "$desc" "$expected_status" "$actual_status"
 }
 

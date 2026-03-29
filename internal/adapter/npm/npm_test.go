@@ -21,7 +21,7 @@ func setupTestNPM(t *testing.T, upstreamHandler http.HandlerFunc) (*npm.NPMAdapt
 	upstream := httptest.NewServer(upstreamHandler)
 	t.Cleanup(upstream.Close)
 
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 
@@ -34,7 +34,7 @@ func setupTestNPM(t *testing.T, upstreamHandler http.HandlerFunc) (*npm.NPMAdapt
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
 		MinimumConfidence:   0.7,
 	}, nil)
-	return npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL), upstream
+	return npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL, config.TagMutabilityConfig{}), upstream
 }
 
 func TestNPMAdapter_Ecosystem_ReturnsNPM(t *testing.T) {

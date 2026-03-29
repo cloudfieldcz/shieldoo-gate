@@ -29,7 +29,7 @@ func countRows(t *testing.T, db interface{ QueryRowContext(ctx context.Context, 
 }
 
 func TestClient_Refresh_StoresEntries(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -60,7 +60,7 @@ func TestClient_Refresh_StoresEntries(t *testing.T) {
 }
 
 func TestClient_Refresh_ServerDown_ReturnsError(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -70,7 +70,7 @@ func TestClient_Refresh_ServerDown_ReturnsError(t *testing.T) {
 }
 
 func TestClient_Refresh_Idempotent(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -99,6 +99,6 @@ func TestClient_Refresh_Idempotent(t *testing.T) {
 	var count int
 	err = db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM threat_feed").Scan(&count)
 	require.NoError(t, err)
-	// INSERT OR REPLACE means there should still be exactly 1 row.
+	// ON CONFLICT DO UPDATE means there should still be exactly 1 row.
 	assert.Equal(t, 1, count)
 }

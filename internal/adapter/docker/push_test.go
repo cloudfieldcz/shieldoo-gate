@@ -22,7 +22,7 @@ import (
 func setupTestDockerWithPush(t *testing.T) *docker.DockerAdapter {
 	t.Helper()
 
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 
@@ -195,7 +195,7 @@ func TestDockerPush_ManifestPut_CreatesTag(t *testing.T) {
 }
 
 func TestDockerPush_Disabled_Returns403(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 

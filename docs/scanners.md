@@ -201,6 +201,74 @@ The threat feed checker scanner (`builtin-threat-feed`) performs a fast-path SHA
 | GuardDog (bridge) | x | x | | |
 | Trivy (subprocess) | x | x | x | x |
 | OSV (API) | x | x | x | |
+| Sandbox (gVisor) | x | x | x | | x | x |
+
+## Dynamic Sandbox Scanner (gVisor)
+
+The sandbox scanner (`internal/scanner/sandbox/`) provides **dynamic behavioral analysis** by executing artifacts inside a gVisor (runsc) sandbox and monitoring syscall behavior. Unlike all other scanners, it runs **asynchronously** — it does not block the download path.
+
+### How It Works
+
+1. After an artifact is served to the client (synchronous scanners have already passed), the sandbox scanner is invoked in the background.
+2. The artifact is copied into a temporary workspace.
+3. An OCI runtime spec is generated with strict resource limits (512MB memory, 1 CPU core, 100 PIDs).
+4. The ecosystem-specific install command runs inside a gVisor sandbox:
+   - **PyPI:** `pip install --no-deps <artifact>`
+   - **npm:** `npm install <artifact>`
+   - **NuGet:** `dotnet add package --source <dir>`
+   - **Maven:** `mvn install:install-file -Dfile=<artifact>`
+   - **RubyGems:** `gem install <artifact> --local`
+5. gVisor strace logs capture all syscalls during execution.
+6. Behavioral rules analyze the logs for malicious indicators.
+7. If malicious behavior is detected, the artifact is **retroactively quarantined** and an alert is fired.
+
+### Behavioral Detection Rules
+
+| Rule | Severity | Description |
+|---|---|---|
+| DNS non-registry queries | HIGH | DNS query to unknown domain during install |
+| HTTP POST to external | CRITICAL | Data exfiltration attempt |
+| SSH/config writes | CRITICAL | Write to `.ssh` or `.config` — credential theft |
+| Shell execution | HIGH | `/bin/sh` or `-c` during install |
+| .pth file creation | CRITICAL | Python auto-execute vector |
+| Cron job creation | CRITICAL | Persistence mechanism |
+| Excessive forking | HIGH | More than 10 `clone()` calls — potential fork bomb |
+
+### Configuration
+
+```yaml
+scanners:
+  sandbox:
+    enabled: false                   # disabled by default
+    runtime_binary: "runsc"          # path to gVisor runtime binary
+    timeout: "30s"                   # per-sandbox execution timeout
+    network_policy: "none"           # "none" (no network) or "monitor" (DNS/HTTP logging)
+    max_concurrent: 2                # max concurrent sandbox executions
+```
+
+**Network policy:**
+- `"none"` (default, production): No network access in sandbox. Safe, but cannot detect exfiltration attempts.
+- `"monitor"` (research/analysis): Network via DNS proxy allowlist. Official registry domains allowed, others blocked and logged.
+
+### Requirements
+
+- **Linux only:** gVisor (runsc) requires a Linux host. On macOS/Windows, the scanner is automatically skipped.
+- **Disk:** ~5 GB for base images + 1 GB per concurrent sandbox.
+- **Memory:** `max_concurrent * 512MB` (default 1 GB).
+
+### Failure Semantics
+
+The sandbox scanner uses **fail-open with visibility**: if gVisor is unavailable, the scan times out, or any error occurs, it returns `VerdictSuspicious` with confidence 0.0 and the error recorded (not `VerdictClean`). The policy engine can be configured to warn or block on unknown verdicts.
+
+### Orphan Cleanup
+
+At startup, the sandbox scanner lists all containers with the `sgw-sandbox-` prefix and deletes stale ones. This prevents resource leaks from previous crashes.
+
+### Known Limitations
+
+- Sophisticated malware may fingerprint the gVisor environment (incomplete syscall support, timing differences).
+- `npm install` with native compilation (node-gyp) may exceed the 512MB memory limit, causing OOM kill and `VerdictUnknown`.
+- Docker and Go ecosystems are not supported (Docker images are not "installed", Go modules have no install hooks).
 
 ## Health Checks
 

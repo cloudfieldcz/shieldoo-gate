@@ -276,6 +276,238 @@ upstreams:
 { "registry-mirrors": ["http://shieldoo-gate:5002"] }
 ```
 
+## Maven Adapter
+
+| | |
+|---|---|
+| **Package** | `internal/adapter/maven/` |
+| **Protocol** | Maven Repository HTTP Layout |
+| **Default port** | 8085 |
+| **Default upstream** | `https://repo1.maven.org/maven2` |
+| **Compatible clients** | `mvn`, `gradle`, `sbt`, `leiningen` |
+
+### Routes
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/*` | Catch-all — path is parsed to determine action |
+
+### Path Layout
+
+Maven uses a path-based layout where the group ID is encoded as directory segments:
+
+```
+/{groupPath}/{artifactId}/{version}/{artifactId}-{version}[-{classifier}].{ext}
+```
+
+Example: `org.apache.commons:commons-lang3:3.14.0` maps to:
+```
+/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.jar
+```
+
+### How It Works
+
+1. **Scannable files** (`.jar`, `.war`, `.aar`, `.zip`) trigger the scan-on-download flow. The adapter parses the group ID, artifact ID, and version from the URL path, downloads from upstream, scans, and serves or blocks.
+
+2. **Pass-through files** are proxied directly without scanning:
+   - `.pom` — POM metadata
+   - `.sha1`, `.md5`, `.sha256` — checksums
+   - `.asc` — GPG signatures
+   - `maven-metadata.xml` — version listings
+
+3. **Classifier support:** Artifacts with classifiers (e.g., `-sources.jar`, `-javadoc.jar`) are correctly parsed and scanned.
+
+### Artifact ID Format
+
+`maven:{groupId}:{artifactId}:{version}` (e.g., `maven:org.apache.commons:commons-lang3:3.14.0`)
+
+### Security
+
+- **Path traversal protection:** All paths are cleaned with `path.Clean()`, paths containing `..` are rejected, and all path components are validated against `^[a-zA-Z0-9._\-]+$`.
+- **Upstream URL construction:** Uses `url.JoinPath()` exclusively, never string concatenation.
+
+### Known Limitations
+
+- **POM inspection:** POM files may contain `<repositories>` elements pointing to attacker-controlled servers. Currently proxied without inspection. Future work: POM XML validation.
+- **Snapshot versions:** `1.0-SNAPSHOT` versions are proxied but cache behavior may be unexpected since snapshot builds are mutable.
+
+### Client Configuration
+
+```xml
+<!-- settings.xml -->
+<mirrors>
+  <mirror>
+    <id>shieldoo-gate</id>
+    <url>http://shieldoo-gate:8085</url>
+    <mirrorOf>central</mirrorOf>
+  </mirror>
+</mirrors>
+```
+
+```kotlin
+// build.gradle.kts
+repositories {
+    maven { url = uri("http://shieldoo-gate:8085") }
+}
+```
+
+## RubyGems Adapter
+
+| | |
+|---|---|
+| **Package** | `internal/adapter/rubygems/` |
+| **Protocol** | RubyGems API |
+| **Default port** | 8086 |
+| **Default upstream** | `https://rubygems.org` |
+| **Compatible clients** | `gem`, `bundler` |
+
+### Routes
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/gems/{name}-{version}.gem` | **Download gem** -- triggers scan if not cached |
+| `GET` | `/api/v1/gems/{name}.json` | Gem metadata (JSON) -- pass-through |
+| `GET` | `/api/v1/versions/{name}.json` | Version listing -- pass-through |
+| `GET` | `/quick/Marshal.4.8/*` | Compressed gemspec -- pass-through |
+| `GET` | `/specs.4.8.gz` | Full index -- pass-through |
+| `GET` | `/latest_specs.4.8.gz` | Latest index -- pass-through |
+| `GET` | `/prerelease_specs.4.8.gz` | Prerelease index -- pass-through |
+
+### How It Works
+
+1. **Gem downloads** (`/gems/{name}-{version}.gem`) trigger the scan-on-download flow. The adapter parses the gem name and version from the filename, downloads the `.gem` file from upstream, scans it, and either serves or blocks it.
+
+2. **Metadata and index requests** are proxied directly to the upstream rubygems.org without scanning.
+
+3. **Gem filename parsing** handles hyphenated gem names correctly by scanning from right to find the last hyphen followed by a digit. Platform-specific gems (e.g., `nokogiri-1.16.0-x86_64-linux.gem`) have the platform suffix stripped from the version.
+
+### Artifact ID Format
+
+`rubygems:{name}:{version}` (e.g., `rubygems:rails:7.1.3`, `rubygems:aws-sdk-core:3.0.0`)
+
+### Security
+
+- **Path traversal protection:** Filenames are validated against `^[a-zA-Z0-9._\-]+$` and checked for `..` sequences.
+- **Input validation:** Package names and versions are validated using the shared `ValidatePackageName()` and `ValidateVersion()` helpers.
+
+### Known Limitations
+
+- **Compact index API** (`/api/v1/dependencies`, `/info/{name}`) is not yet implemented. Modern Bundler may fall back to the legacy full index API which is slower. If Bundler compatibility is critical, compact index support should be added.
+- **Gem push** is not supported -- this is a read-only proxy.
+
+### Client Configuration
+
+```bash
+# gem install
+gem install rake --source http://shieldoo-gate:8086
+
+# Gemfile
+source "http://shieldoo-gate:8086"
+gem "rails"
+```
+
+## Go Modules Adapter
+
+| | |
+|---|---|
+| **Package** | `internal/adapter/gomod/` |
+| **Protocol** | [GOPROXY Protocol](https://go.dev/ref/mod#goproxy-protocol) |
+| **Default port** | 8087 |
+| **Default upstream** | `https://proxy.golang.org` |
+| **Compatible clients** | `go` (1.13+) |
+
+### Routes
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/{module}/@v/list` | Version listing (text, one version per line) -- pass-through |
+| `GET` | `/{module}/@v/{version}.info` | Version metadata (JSON) -- pass-through |
+| `GET` | `/{module}/@v/{version}.mod` | go.mod file (text) -- pass-through |
+| `GET` | `/{module}/@v/{version}.zip` | **Module source zip** -- triggers scan if not cached |
+| `GET` | `/{module}/@latest` | Latest version info -- pass-through |
+
+### How It Works
+
+1. **Module path encoding:** Go module paths with uppercase characters are encoded per the GOPROXY protocol (e.g., `github.com/Foo/Bar` becomes `github.com/!foo/!bar` in URLs). The adapter uses `golang.org/x/mod/module.UnescapePath()` for decoding -- no custom encoding logic.
+
+2. **Catch-all routing:** Module paths contain slashes (`github.com/user/repo`), so Chi's `{param}` cannot be used. The adapter uses a catch-all `/*` route and parses the path manually, finding the `/@v/` separator to split module path from action.
+
+3. **Major version suffix:** Module paths like `github.com/user/repo/v2` are correctly handled -- the `/v2` is part of the module path, not the version.
+
+4. **Zip downloads** (`.zip`) trigger the scan-on-download flow. The adapter downloads the module source zip from upstream, scans it, and either serves or blocks it. Blocked modules return HTTP 410 Gone (Go convention).
+
+5. **Metadata and list requests** (`.info`, `.mod`, `list`, `@latest`) are proxied directly to the upstream without scanning.
+
+### Artifact ID Format
+
+`go:{module_path}:{version}` (e.g., `go:github.com/rs/zerolog:v1.33.0`)
+
+### Security
+
+- **Path traversal protection:** Paths containing `..` are rejected. Control characters, null bytes, `?`, and `#` in module paths are rejected.
+- **Module path decoding:** Uses `golang.org/x/mod/module.UnescapePath()` exclusively -- no custom encoding.
+- **Upstream URL construction:** Uses `url.JoinPath()` exclusively, never string concatenation.
+
+### Known Limitations
+
+- **No sum.golang.org validation:** The adapter does not validate module checksums against Go's checksum database. Go's security model relies on `sum.golang.org` to detect tampered modules. Clients should keep `GONOSUMDB` unset to maintain checksum verification via their local `go.sum` file. Clients may need `GONOSUMCHECK=*` if the proxy serves content that differs from upstream (e.g., blocked modules).
+- **No private module support:** `GOPRIVATE` patterns and Git credential forwarding are out of scope for v1.1.
+- **No module publishing:** This is a read-only proxy.
+
+### Client Configuration
+
+```bash
+# Set GOPROXY to point at Shieldoo Gate
+export GOPROXY=http://shieldoo-gate:8087
+
+# Required if Go rejects checksums from the proxy
+export GONOSUMCHECK=*
+
+# Download dependencies
+go mod download
+```
+
+## Proxy Authentication (v1.1)
+
+When `proxy_auth.enabled: true`, all proxy endpoints require an API key via HTTP Basic Auth. The password field carries the API key; the username is ignored for authentication but logged in the audit trail.
+
+### Client Configuration with API Key
+
+```bash
+# PyPI (pip / uv)
+pip install --index-url https://user:TOKEN@gate:5000/simple/ package-name
+uv pip install --index-url https://user:TOKEN@gate:5000/simple/ package-name
+
+# npm
+npm config set //gate:4873/:_authToken TOKEN
+
+# Docker
+docker login gate:5002 -u user -p TOKEN
+
+# NuGet
+nuget sources add -Source https://gate:5001/v3/index.json -UserName user -Password TOKEN
+
+# RubyGems
+gem sources -a https://user:TOKEN@gate:8086/
+
+# Go Modules
+GOPROXY=https://user:TOKEN@gate:8087 go mod download
+
+# Maven (settings.xml)
+# Add <server><id>shieldoo</id><username>user</username><password>TOKEN</password></server>
+```
+
+### Key Types
+
+| Type | Description | Management |
+|---|---|---|
+| **Per-user PAT** | Personal Access Token tied to OIDC user | `POST /api/v1/api-keys` (requires OIDC auth) |
+| **Global token** | Shared token from env var | Set via `proxy_auth.global_token_env` config |
+
+### TLS Requirement
+
+Basic Auth sends credentials in base64 (not encrypted). **TLS is required** when proxy auth is enabled. Shieldoo Gate does not terminate TLS — use a reverse proxy (nginx, Caddy, Ingress controller) in front.
+
 ## Port Summary
 
 | Ecosystem | Default Port | Docker Compose Host Port |
@@ -284,4 +516,7 @@ upstreams:
 | npm | 4873 | 4873 |
 | NuGet | 5001 | 5001 |
 | Docker | 5002 | 5002 |
+| Maven | 8085 | 8085 |
+| RubyGems | 8086 | 8086 |
+| Go Modules | 8087 | 8087 |
 | Admin API | 8080 | 8080 |

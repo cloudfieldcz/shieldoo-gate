@@ -28,6 +28,8 @@ tags:
     description: Threat feed management
   - name: docker
     description: Docker repository and tag management
+  - name: api-keys
+    description: API key management for proxy authentication
   - name: metrics
     description: Prometheus metrics
 
@@ -162,7 +164,7 @@ paths:
           description: Filter by event type
           schema:
             type: string
-            enum: [SERVED, BLOCKED, QUARANTINED, RELEASED, SCANNED, OVERRIDE_CREATED, OVERRIDE_REVOKED, RESCAN_QUEUED]
+            enum: [SERVED, BLOCKED, QUARANTINED, RELEASED, SCANNED, OVERRIDE_CREATED, OVERRIDE_REVOKED, TAG_MUTATED, RESCAN_QUEUED]
       responses:
         "200":
           description: Paginated list of audit log entries
@@ -455,6 +457,78 @@ paths:
               schema:
                 type: string
 
+  /api/v1/api-keys:
+    post:
+      summary: Create a new API key
+      operationId: createAPIKey
+      tags: [api-keys]
+      description: |
+        Creates a new per-user API key (PAT) for proxy authentication.
+        The plaintext token is returned only once in the response.
+        Requires OIDC authentication on the admin API.
+        Only available when both `auth.enabled` and `proxy_auth.enabled` are true.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  description: Human-readable label for the key
+                  example: ci-pipeline
+      responses:
+        "201":
+          description: API key created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIKeyCreateResponse"
+        "400":
+          description: Invalid request (missing name)
+
+    get:
+      summary: List all API keys
+      operationId: listAPIKeys
+      tags: [api-keys]
+      description: |
+        Returns all API keys (enabled and disabled).
+        The key hash and plaintext are never included in the response.
+        Only available when both `auth.enabled` and `proxy_auth.enabled` are true.
+      responses:
+        "200":
+          description: List of API keys
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/APIKey"
+
+  /api/v1/api-keys/{id}:
+    delete:
+      summary: Revoke an API key
+      operationId: revokeAPIKey
+      tags: [api-keys]
+      description: |
+        Permanently disables an API key (sets enabled=false).
+        Revocation is permanent — the key cannot be re-enabled.
+        Only available when both `auth.enabled` and `proxy_auth.enabled` are true.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "204":
+          description: Key revoked
+        "404":
+          description: Key not found
+
 components:
   parameters:
     artifactId:
@@ -504,6 +578,45 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
 
   schemas:
+    APIKey:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        owner_email:
+          type: string
+        enabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    APIKeyCreateResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        owner_email:
+          type: string
+        enabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        token:
+          type: string
+          description: Plaintext API key — shown only once, never again
+
     HealthResponse:
       type: object
       required: [status]

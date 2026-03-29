@@ -21,7 +21,7 @@ func setupTestNuGet(t *testing.T, upstreamHandler http.HandlerFunc) (*nuget.NuGe
 	upstream := httptest.NewServer(upstreamHandler)
 	t.Cleanup(upstream.Close)
 
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 
@@ -34,7 +34,7 @@ func setupTestNuGet(t *testing.T, upstreamHandler http.HandlerFunc) (*nuget.NuGe
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
 		MinimumConfidence:   0.7,
 	}, nil)
-	return nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL), upstream
+	return nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL, config.TagMutabilityConfig{}), upstream
 }
 
 func TestNuGetAdapter_Ecosystem_ReturnsNuGet(t *testing.T) {
@@ -118,6 +118,32 @@ func TestNuGetAdapter_Passthrough_RepositorySignatures_Returns200(t *testing.T) 
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "allRepositorySigned")
+}
+
+func TestNuGetAdapter_ServiceIndex_StripsRepositorySignatures_OverHTTP(t *testing.T) {
+	var upstreamBase string
+
+	a, upstream := setupTestNuGet(t, func(w http.ResponseWriter, r *http.Request) {
+		body := `{"version":"3.0.0","resources":[` +
+			`{"@id":"` + upstreamBase + `/v3-flatcontainer/","@type":"PackageBaseAddress/3.0.0"},` +
+			`{"@id":"` + upstreamBase + `/v3-index/repository-signatures/5.0.0/index.json","@type":"RepositorySignatures/5.0.0"}` +
+			`]}`
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	})
+	upstreamBase = upstream.URL
+
+	// HTTP request (no TLS, no X-Forwarded-Proto) — RepositorySignatures must be stripped.
+	req := httptest.NewRequest(http.MethodGet, "/v3/index.json", nil)
+	req.Host = "proxy.example.com"
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.NotContains(t, body, "RepositorySignatures", "RepositorySignatures must be stripped over HTTP")
+	assert.Contains(t, body, "PackageBaseAddress", "other resources must be preserved")
 }
 
 func TestNuGetAdapter_NupkgDownload_InvalidPackageID_Returns400(t *testing.T) {

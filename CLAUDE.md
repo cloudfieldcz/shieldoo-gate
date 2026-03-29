@@ -85,6 +85,15 @@ uv pip compile requirements.in -o requirements.txt  # to generate pinned deps
 - `github.com/google/go-containerregistry` — OCI/Docker registry client
 - `github.com/prometheus/client_golang` — metrics
 - `github.com/stretchr/testify` — test assertions
+- `github.com/coreos/go-oidc/v3` — OIDC discovery + JWT validation
+- `golang.org/x/oauth2` — OAuth2 client
+- `golang.org/x/mod/module` — Go module path encoding
+- `github.com/lib/pq` — PostgreSQL driver
+- `github.com/aws/aws-sdk-go-v2` — AWS S3 client
+- `github.com/Azure/azure-sdk-for-go/sdk/storage/azblob` — Azure Blob Storage
+- `cloud.google.com/go/storage` — Google Cloud Storage
+- `golang.org/x/time/rate` — token-bucket rate limiter
+- `golang.org/x/sync/semaphore` — weighted semaphore
 
 ### Frontend
 
@@ -159,6 +168,10 @@ Each task should map to **one module**. Do not modify multiple unrelated modules
 3. **Never log secrets** — scrub Authorization headers, API keys from all log output
 4. **Never unpin scanner dependencies** — `requirements.txt` must always use `==` with hashes
 5. **Audit log is append-only** — no UPDATE or DELETE on `audit_log` table
+
+## Docker Image
+
+The runtime image (`docker/Dockerfile`) runs as non-root user `sgw`. When adding new paths that the process needs to write to (logs, data, cache), you **must** create the directory and `chown sgw:sgw` it in the Dockerfile. Docker volumes mounted at runtime inherit the container directory's ownership only if the directory already exists with correct permissions.
 
 ## Build & Run
 

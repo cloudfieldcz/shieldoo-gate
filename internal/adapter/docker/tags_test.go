@@ -11,7 +11,7 @@ import (
 )
 
 func TestUpsertTag_CreatesNewTag(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -30,7 +30,7 @@ func TestUpsertTag_CreatesNewTag(t *testing.T) {
 }
 
 func TestUpsertTag_UpdatesExistingTag(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -52,7 +52,7 @@ func TestUpsertTag_UpdatesExistingTag(t *testing.T) {
 }
 
 func TestListTags_ReturnsAllForRepo(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -73,7 +73,7 @@ func TestListTags_ReturnsAllForRepo(t *testing.T) {
 }
 
 func TestListTags_EmptyForNewRepo(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -86,7 +86,7 @@ func TestListTags_EmptyForNewRepo(t *testing.T) {
 }
 
 func TestDeleteTag_RemovesTag(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -106,7 +106,7 @@ func TestDeleteTag_RemovesTag(t *testing.T) {
 }
 
 func TestDeleteTag_NotFound_ReturnsError(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -119,7 +119,7 @@ func TestDeleteTag_NotFound_ReturnsError(t *testing.T) {
 }
 
 func TestGetTagByDigest_ReturnsMatchingTags(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -139,7 +139,7 @@ func TestGetTagByDigest_ReturnsMatchingTags(t *testing.T) {
 }
 
 func TestGetTagByDigest_NoMatch_ReturnsEmpty(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 

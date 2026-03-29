@@ -1,19 +1,74 @@
 package adapter
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/jmoiron/sqlx"
+	"github.com/rs/zerolog/log"
 
+	"github.com/cloudfieldcz/shieldoo-gate/internal/alert"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/policy"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
 )
+
+// globalAlerter holds the package-level alerter set during initialization.
+var globalAlerter atomic.Pointer[alert.Alerter]
+
+// globalAsyncScanner holds the package-level async scanner (e.g. sandbox) set during initialization.
+var globalAsyncScanner atomic.Pointer[scanner.AsyncScanner]
+
+// SetAlerter stores the alerter for use by WriteAuditLog and DispatchAlert.
+func SetAlerter(a alert.Alerter) {
+	globalAlerter.Store(&a)
+}
+
+// SetAsyncScanner stores the async scanner (e.g. sandbox) for use by TriggerAsyncScan.
+func SetAsyncScanner(s scanner.AsyncScanner) {
+	globalAsyncScanner.Store(&s)
+}
+
+// TriggerAsyncScan fires an async sandbox scan after an artifact is served.
+// Non-blocking, safe to call when no async scanner is configured.
+func TriggerAsyncScan(ctx context.Context, artifact scanner.Artifact, localPath string, db *config.GateDB, policyEngine *policy.Engine) {
+	ptr := globalAsyncScanner.Load()
+	if ptr == nil {
+		return
+	}
+	s := *ptr
+	s.ScanAsync(ctx, artifact, localPath, func(result scanner.ScanResult) {
+		if result.Verdict == scanner.VerdictMalicious {
+			description := "sandbox behavioral analysis detected malicious behavior"
+			if len(result.Findings) > 0 {
+				description = "sandbox behavioral analysis: " + result.Findings[0].Description
+			}
+			_, _ = db.Exec(
+				"UPDATE artifact_status SET status = 'QUARANTINED', quarantine_reason = ?, quarantined_at = CURRENT_TIMESTAMP WHERE artifact_id = ?",
+				description, artifact.ID)
+			_ = WriteAuditLog(db, model.AuditEntry{
+				EventType:  model.EventQuarantined,
+				ArtifactID: artifact.ID,
+				Reason:     "sandbox behavioral analysis detected malicious behavior",
+			})
+		}
+	})
+}
+
+// DispatchAlert sends an alert without writing to audit_log.
+// Use when audit_log was already written (e.g., in API handler transactions).
+func DispatchAlert(entry model.AuditEntry) {
+	if a := globalAlerter.Load(); a != nil {
+		(*a).Dispatch(context.Background(), entry)
+	}
+}
 
 // ArtifactLocker provides per-artifact-ID locking so that only one
 // download/scan pipeline runs for a given artifact at a time.
@@ -75,13 +130,13 @@ func WriteJSONError(w http.ResponseWriter, status int, resp ErrorResponse) {
 
 // WriteAuditLog inserts an AuditEntry into the audit_log table.
 // Timestamp is set to now if zero.
-func WriteAuditLog(db *sqlx.DB, entry model.AuditEntry) error {
+func WriteAuditLog(db *config.GateDB, entry model.AuditEntry) error {
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now().UTC()
 	}
 	_, err := db.Exec(
-		`INSERT INTO audit_log (ts, event_type, artifact_id, client_ip, user_agent, reason, metadata_json)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO audit_log (ts, event_type, artifact_id, client_ip, user_agent, reason, metadata_json, user_email)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		entry.Timestamp,
 		entry.EventType,
 		entry.ArtifactID,
@@ -89,16 +144,33 @@ func WriteAuditLog(db *sqlx.DB, entry model.AuditEntry) error {
 		entry.UserAgent,
 		entry.Reason,
 		entry.MetadataJSON,
+		entry.UserEmail,
 	)
 	if err != nil {
 		return fmt.Errorf("adapter: writing audit log: %w", err)
 	}
+	if a := globalAlerter.Load(); a != nil {
+		(*a).Dispatch(context.Background(), entry)
+	}
 	return nil
+}
+
+// UpdateLastAccessedAt bumps the last_accessed_at timestamp for a cached artifact.
+// This keeps the rescan scheduler priority ordering accurate.
+func UpdateLastAccessedAt(db *config.GateDB, artifactID string) {
+	_, err := db.Exec(
+		`UPDATE artifacts SET last_accessed_at = ? WHERE id = ?`,
+		time.Now().UTC(), artifactID,
+	)
+	if err != nil {
+		// Non-critical — log and continue.
+		log.Warn().Err(err).Str("artifact", artifactID).Msg("adapter: failed to update last_accessed_at")
+	}
 }
 
 // GetArtifactStatus retrieves the current status of an artifact by ID.
 // Returns (nil, nil) when no row is found.
-func GetArtifactStatus(db *sqlx.DB, artifactID string) (*model.ArtifactStatus, error) {
+func GetArtifactStatus(db *config.GateDB, artifactID string) (*model.ArtifactStatus, error) {
 	var status model.ArtifactStatus
 	err := db.Get(&status,
 		`SELECT artifact_id, status, quarantine_reason, quarantined_at, released_at, rescan_due_at, last_scan_id
@@ -113,7 +185,7 @@ func GetArtifactStatus(db *sqlx.DB, artifactID string) (*model.ArtifactStatus, e
 }
 
 // InsertScanResults persists a slice of scanner.ScanResult rows for the given artifactID.
-func InsertScanResults(db *sqlx.DB, artifactID string, results []scanner.ScanResult) error {
+func InsertScanResults(db *config.GateDB, artifactID string, results []scanner.ScanResult) error {
 	for _, r := range results {
 		findingsJSON, err := json.Marshal(r.Findings)
 		if err != nil {
@@ -140,7 +212,7 @@ func InsertScanResults(db *sqlx.DB, artifactID string, results []scanner.ScanRes
 }
 
 // InsertArtifact transactionally inserts the artifact row and its initial status row.
-func InsertArtifact(db *sqlx.DB, artifact model.Artifact, status model.ArtifactStatus) error {
+func InsertArtifact(db *config.GateDB, artifact model.Artifact, status model.ArtifactStatus) error {
 	tx, err := db.Beginx()
 	if err != nil {
 		return fmt.Errorf("adapter: beginning transaction: %w", err)
@@ -149,8 +221,12 @@ func InsertArtifact(db *sqlx.DB, artifact model.Artifact, status model.ArtifactS
 
 	artifactID := artifact.ID()
 	_, err = tx.Exec(
-		`INSERT OR REPLACE INTO artifacts (id, ecosystem, name, version, upstream_url, sha256, size_bytes, cached_at, last_accessed_at, storage_path)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO artifacts (id, ecosystem, name, version, upstream_url, sha256, size_bytes, cached_at, last_accessed_at, storage_path)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (id) DO UPDATE SET
+		     ecosystem = EXCLUDED.ecosystem, name = EXCLUDED.name, version = EXCLUDED.version,
+		     upstream_url = EXCLUDED.upstream_url, sha256 = EXCLUDED.sha256, size_bytes = EXCLUDED.size_bytes,
+		     cached_at = EXCLUDED.cached_at, last_accessed_at = EXCLUDED.last_accessed_at, storage_path = EXCLUDED.storage_path`,
 		artifactID,
 		artifact.Ecosystem,
 		artifact.Name,
@@ -167,8 +243,12 @@ func InsertArtifact(db *sqlx.DB, artifact model.Artifact, status model.ArtifactS
 	}
 
 	_, err = tx.Exec(
-		`INSERT OR REPLACE INTO artifact_status (artifact_id, status, quarantine_reason, quarantined_at, released_at, rescan_due_at, last_scan_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO artifact_status (artifact_id, status, quarantine_reason, quarantined_at, released_at, rescan_due_at, last_scan_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (artifact_id) DO UPDATE SET
+		     status = EXCLUDED.status, quarantine_reason = EXCLUDED.quarantine_reason,
+		     quarantined_at = EXCLUDED.quarantined_at, released_at = EXCLUDED.released_at,
+		     rescan_due_at = EXCLUDED.rescan_due_at, last_scan_id = EXCLUDED.last_scan_id`,
 		artifactID,
 		status.Status,
 		status.QuarantineReason,

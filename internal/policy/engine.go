@@ -5,8 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jmoiron/sqlx"
-
+	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
 )
 
@@ -22,12 +21,12 @@ type EngineConfig struct {
 type Engine struct {
 	cfg       EngineConfig
 	allowlist []AllowlistEntry
-	db        *sqlx.DB
+	db        *config.GateDB
 }
 
 // NewEngine creates a new Engine with the supplied configuration.
 // db may be nil — in that case only static allowlist is used.
-func NewEngine(cfg EngineConfig, db *sqlx.DB) *Engine {
+func NewEngine(cfg EngineConfig, db *config.GateDB) *Engine {
 	var parsed []AllowlistEntry
 	for _, raw := range cfg.Allowlist {
 		entry, err := ParseAllowlistEntry(raw)

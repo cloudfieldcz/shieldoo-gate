@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jmoiron/sqlx"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 )
 
 // DockerTag represents a row in the docker_tags table.
@@ -19,9 +19,9 @@ type DockerTag struct {
 }
 
 // UpsertTag creates or updates a tag for a repository.
-// Uses INSERT OR REPLACE on the unique (repo_id, tag) constraint.
+// Uses INSERT ... ON CONFLICT DO UPDATE on the unique (repo_id, tag) constraint.
 // An empty artifactID is stored as NULL to satisfy the FK constraint.
-func UpsertTag(db *sqlx.DB, repoID int64, tag, manifestDigest, artifactID string) error {
+func UpsertTag(db *config.GateDB, repoID int64, tag, manifestDigest, artifactID string) error {
 	now := time.Now().UTC()
 	// Store empty artifact_id as NULL to avoid FK constraint violations.
 	var artID interface{} = artifactID
@@ -44,7 +44,7 @@ func UpsertTag(db *sqlx.DB, repoID int64, tag, manifestDigest, artifactID string
 }
 
 // ListTags returns all tags for a given repository.
-func ListTags(db *sqlx.DB, repoID int64) ([]DockerTag, error) {
+func ListTags(db *config.GateDB, repoID int64) ([]DockerTag, error) {
 	var tags []DockerTag
 	err := db.Select(&tags,
 		"SELECT * FROM docker_tags WHERE repo_id = ? ORDER BY tag", repoID)
@@ -55,7 +55,7 @@ func ListTags(db *sqlx.DB, repoID int64) ([]DockerTag, error) {
 }
 
 // DeleteTag removes a tag from a repository.
-func DeleteTag(db *sqlx.DB, repoID int64, tag string) error {
+func DeleteTag(db *config.GateDB, repoID int64, tag string) error {
 	result, err := db.Exec(
 		"DELETE FROM docker_tags WHERE repo_id = ? AND tag = ?", repoID, tag)
 	if err != nil {
@@ -68,8 +68,20 @@ func DeleteTag(db *sqlx.DB, repoID int64, tag string) error {
 	return nil
 }
 
+// GetTag returns a single tag by repo ID and tag name, or nil if not found.
+func GetTag(db *config.GateDB, repoID int64, tag string) (*DockerTag, error) {
+	var t DockerTag
+	err := db.Get(&t,
+		"SELECT * FROM docker_tags WHERE repo_id = ? AND tag = ?",
+		repoID, tag)
+	if err != nil {
+		return nil, fmt.Errorf("docker: getting tag %s for repo %d: %w", tag, repoID, err)
+	}
+	return &t, nil
+}
+
 // GetTagByDigest returns tags matching a specific manifest digest for a repository.
-func GetTagByDigest(db *sqlx.DB, repoID int64, manifestDigest string) ([]DockerTag, error) {
+func GetTagByDigest(db *config.GateDB, repoID int64, manifestDigest string) ([]DockerTag, error) {
 	var tags []DockerTag
 	err := db.Select(&tags,
 		"SELECT * FROM docker_tags WHERE repo_id = ? AND manifest_digest = ? ORDER BY tag",

@@ -6,6 +6,15 @@ test_npm() {
     log_section "npm Proxy Tests"
 
     # ------------------------------------------------------------------
+    # 0. Negative test: unauthenticated request must return 401 when auth enabled
+    # ------------------------------------------------------------------
+    if [ "${SGW_PROXY_AUTH_ENABLED:-false}" = "true" ]; then
+        local noauth_status
+        noauth_status=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_NPM_URL}/is-odd")
+        assert_eq "npm: unauthenticated request returns 401" "401" "$noauth_status"
+    fi
+
+    # ------------------------------------------------------------------
     # 1. Package metadata accessible
     # ------------------------------------------------------------------
     assert_http_status "npm: /is-odd metadata returns HTTP 200" \
@@ -16,9 +25,9 @@ test_npm() {
     # 2. Tarball URLs in metadata are rewritten (no upstream registry host)
     # ------------------------------------------------------------------
     local metadata
-    metadata=$(curl -sf "${E2E_NPM_URL}/is-odd")
+    metadata=$(curl -sf "${E2E_CURL_AUTH[@]}" "${E2E_NPM_URL}/is-odd")
 
-    if echo "$metadata" | grep -q "registry.npmjs.org"; then
+    if [[ "$metadata" == *"registry.npmjs.org"* ]]; then
         log_fail "npm: package metadata still contains upstream 'registry.npmjs.org' tarball URLs (not rewritten)"
     else
         log_pass "npm: package metadata does not expose upstream 'registry.npmjs.org' tarball URLs"
@@ -30,7 +39,17 @@ test_npm() {
     local workdir
     workdir=$(mktemp -d)
     cp "${SCRIPT_DIR}/fixtures/npm/package.json" "$workdir/"
-    cp "${SCRIPT_DIR}/fixtures/npm/.npmrc" "$workdir/"
+    # Generate .npmrc dynamically with the correct URL (container-aware)
+    echo "registry=${E2E_NPM_URL}/" > "$workdir/.npmrc"
+    # Add Basic Auth to .npmrc when proxy auth is enabled.
+    # npm requires _auth scoped to the registry URL (//host:port/:_auth=...).
+    if [ -n "$E2E_AUTH_USERINFO" ]; then
+        local npm_auth_b64
+        npm_auth_b64=$(printf "ci-bot:%s" "${SGW_PROXY_TOKEN}" | base64 | tr -d '\n')
+        local npm_registry_scope="${E2E_NPM_URL#http:}"  # //host:port
+        echo "${npm_registry_scope}/:_auth=${npm_auth_b64}" >> "$workdir/.npmrc"
+        echo "${npm_registry_scope}/:always-auth=true" >> "$workdir/.npmrc"
+    fi
 
     pushd "$workdir" > /dev/null
 

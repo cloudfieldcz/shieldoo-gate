@@ -1,0 +1,207 @@
+{{- include "shieldoo-gate.validateHA" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "shieldoo-gate.fullname" . }}
+  labels:
+    {{- include "shieldoo-gate.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "shieldoo-gate.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "shieldoo-gate.labels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "shieldoo-gate.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: shieldoo-gate
+          image: {{ include "shieldoo-gate.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "-config"
+            - "/etc/shieldoo-gate/config.yaml"
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: admin
+              containerPort: {{ .Values.ports.admin }}
+              protocol: TCP
+            - name: pypi
+              containerPort: {{ .Values.ports.pypi }}
+              protocol: TCP
+            - name: npm
+              containerPort: {{ .Values.ports.npm }}
+              protocol: TCP
+            - name: nuget
+              containerPort: {{ .Values.ports.nuget }}
+              protocol: TCP
+            - name: docker
+              containerPort: {{ .Values.ports.docker }}
+              protocol: TCP
+            - name: maven
+              containerPort: {{ .Values.ports.maven }}
+              protocol: TCP
+            - name: rubygems
+              containerPort: {{ .Values.ports.rubygems }}
+              protocol: TCP
+            - name: gomod
+              containerPort: {{ .Values.ports.gomod }}
+              protocol: TCP
+          env:
+            {{- if eq .Values.database.backend "postgres" }}
+            - name: SGW_DATABASE_POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "shieldoo-gate.secretName" . }}
+                  key: database-dsn
+            {{- end }}
+            {{- if .Values.auth.enabled }}
+            - name: SGW_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "shieldoo-gate.secretName" . }}
+                  key: oidc-client-secret
+                  optional: true
+            {{- end }}
+            {{- if .Values.alerts.webhook.enabled }}
+            - name: SGW_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "shieldoo-gate.secretName" . }}
+                  key: webhook-secret
+                  optional: true
+            {{- end }}
+            {{- if .Values.alerts.slack.enabled }}
+            - name: SGW_SLACK_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "shieldoo-gate.secretName" . }}
+                  key: slack-webhook-url
+                  optional: true
+            {{- end }}
+            {{- if .Values.alerts.email.enabled }}
+            - name: SGW_SMTP_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "shieldoo-gate.secretName" . }}
+                  key: smtp-username
+                  optional: true
+            - name: SGW_SMTP_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "shieldoo-gate.secretName" . }}
+                  key: smtp-password
+                  optional: true
+            {{- end }}
+            {{- if eq .Values.cache.backend "s3" }}
+            - name: SGW_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "shieldoo-gate.secretName" . }}
+                  key: s3-access-key
+                  optional: true
+            - name: SGW_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "shieldoo-gate.secretName" . }}
+                  key: s3-secret-key
+                  optional: true
+            {{- end }}
+            {{- if eq .Values.cache.backend "azure_blob" }}
+            - name: SGW_AZURE_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "shieldoo-gate.secretName" . }}
+                  key: azure-connection-string
+                  optional: true
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: admin
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: admin
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/shieldoo-gate
+              readOnly: true
+            - name: bridge-socket
+              mountPath: /var/run/shieldoo
+            - name: trivy-cache
+              mountPath: /var/cache/trivy
+            - name: tmp
+              mountPath: /tmp
+            {{- if and .Values.persistence.data.enabled (eq .Values.database.backend "sqlite") }}
+            - name: data
+              mountPath: /data
+            {{- end }}
+            {{- if and .Values.persistence.cache.enabled (eq .Values.cache.backend "local") }}
+            - name: cache
+              mountPath: /cache
+            {{- end }}
+        - name: scanner-bridge
+          image: {{ include "shieldoo-gate.scannerBridgeImage" . }}
+          imagePullPolicy: {{ .Values.scannerBridge.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            - name: BRIDGE_SOCKET
+              value: "/var/run/shieldoo/shieldoo-bridge.sock"
+          resources:
+            {{- toYaml .Values.scannerBridge.resources | nindent 12 }}
+          volumeMounts:
+            - name: bridge-socket
+              mountPath: /var/run/shieldoo
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "shieldoo-gate.fullname" . }}-config
+        - name: bridge-socket
+          emptyDir: {}
+        - name: trivy-cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        {{- if and .Values.persistence.data.enabled (eq .Values.database.backend "sqlite") }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "shieldoo-gate.fullname" . }}-data
+        {{- end }}
+        {{- if and .Values.persistence.cache.enabled (eq .Values.cache.backend "local") }}
+        - name: cache
+          persistentVolumeClaim:
+            claimName: {{ include "shieldoo-gate.fullname" . }}-cache
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

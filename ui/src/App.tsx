@@ -8,6 +8,7 @@ import DockerRepositoryDetail from './pages/DockerRepositoryDetail'
 import AuditLog from './pages/AuditLog'
 import Overrides from './pages/Overrides'
 import Settings from './pages/Settings'
+import Profile from './pages/Profile'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -32,6 +33,7 @@ export default function App() {
             <Route path="/overrides" element={<Overrides />} />
             <Route path="/audit-log" element={<AuditLog />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/profile" element={<Profile />} />
           </Route>
         </Routes>
       </BrowserRouter>

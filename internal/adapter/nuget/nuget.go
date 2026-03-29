@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,10 +15,10 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jmoiron/sqlx"
 	"github.com/rs/zerolog/log"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/cache"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/policy"
@@ -29,30 +30,33 @@ var _ adapter.Adapter = (*NuGetAdapter)(nil)
 
 // NuGetAdapter proxies NuGet V3 API requests and scans .nupkg downloads.
 type NuGetAdapter struct {
-	db           *sqlx.DB
-	cache        cache.CacheStore
-	scanEngine   *scanner.Engine
-	policyEngine *policy.Engine
-	upstreamURL  string
-	router       http.Handler
-	httpClient   *http.Client
+	db               *config.GateDB
+	cache            cache.CacheStore
+	scanEngine       *scanner.Engine
+	policyEngine     *policy.Engine
+	upstreamURL      string
+	router           http.Handler
+	httpClient       *http.Client
+	tagMutabilityCfg config.TagMutabilityConfig
 }
 
 // NewNuGetAdapter creates and wires a NuGetAdapter.
 func NewNuGetAdapter(
-	db *sqlx.DB,
+	db *config.GateDB,
 	cacheStore cache.CacheStore,
 	scanEngine *scanner.Engine,
 	policyEngine *policy.Engine,
 	upstreamURL string,
+	tagMutabilityCfg config.TagMutabilityConfig,
 ) *NuGetAdapter {
 	a := &NuGetAdapter{
-		db:           db,
-		cache:        cacheStore,
-		scanEngine:   scanEngine,
-		policyEngine: policyEngine,
-		upstreamURL:  strings.TrimRight(upstreamURL, "/"),
-		httpClient:   &http.Client{Timeout: 5 * time.Minute},
+		db:               db,
+		cache:            cacheStore,
+		scanEngine:       scanEngine,
+		policyEngine:     policyEngine,
+		upstreamURL:      strings.TrimRight(upstreamURL, "/"),
+		httpClient:        &http.Client{Timeout: 5 * time.Minute},
+		tagMutabilityCfg: tagMutabilityCfg,
 	}
 	a.router = a.buildRouter()
 	return a
@@ -106,8 +110,93 @@ func (a *NuGetAdapter) buildRouter() http.Handler {
 
 // handleServiceIndex proxies the NuGet V3 service index, rewriting upstream
 // URLs so the NuGet client routes all subsequent requests through the proxy.
+// When serving over HTTP, RepositorySignatures resources are stripped because
+// the NuGet client requires them to be served over HTTPS (NU1301).
 func (a *NuGetAdapter) handleServiceIndex(w http.ResponseWriter, r *http.Request) {
-	a.proxyUpstreamRewrite(w, r, "/v3/index.json")
+	isHTTPS := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+	if isHTTPS {
+		a.proxyUpstreamRewrite(w, r, "/v3/index.json")
+		return
+	}
+
+	// HTTP mode: fetch, rewrite, and strip RepositorySignatures resources.
+	target, err := url.JoinPath(a.upstreamURL, "/v3/index.json")
+	if err != nil {
+		http.Error(w, "bad upstream path", http.StatusInternalServerError)
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
+	if err != nil {
+		http.Error(w, "upstream request error", http.StatusInternalServerError)
+		return
+	}
+	if accept := r.Header.Get("Accept"); accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		http.Error(w, "upstream unreachable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	const maxMetadataSize = 10 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataSize))
+	if err != nil {
+		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
+		return
+	}
+
+	// Rewrite upstream URLs to proxy URLs.
+	rewritten := strings.ReplaceAll(string(body), a.upstreamURL+"/", "http://"+r.Host+"/")
+
+	// Strip RepositorySignatures resources — NuGet requires HTTPS for them.
+	rewritten = stripRepositorySignatures(rewritten)
+
+	for key, vals := range resp.Header {
+		if strings.EqualFold(key, "Content-Length") {
+			continue
+		}
+		for _, v := range vals {
+			w.Header().Add(key, v)
+		}
+	}
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(rewritten)))
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.WriteString(w, rewritten)
+}
+
+// stripRepositorySignatures removes RepositorySignatures resources from a
+// NuGet V3 service index JSON. These resources require HTTPS and would cause
+// NU1301 errors when the proxy is accessed over plain HTTP.
+func stripRepositorySignatures(body string) string {
+	var index struct {
+		Version   string            `json:"version"`
+		Resources []json.RawMessage `json:"resources"`
+	}
+	if err := json.Unmarshal([]byte(body), &index); err != nil {
+		return body // not valid JSON, return as-is
+	}
+
+	var filtered []json.RawMessage
+	for _, raw := range index.Resources {
+		var res struct {
+			Type string `json:"@type"`
+		}
+		if err := json.Unmarshal(raw, &res); err == nil {
+			if strings.HasPrefix(res.Type, "RepositorySignatures") {
+				continue
+			}
+		}
+		filtered = append(filtered, raw)
+	}
+	index.Resources = filtered
+
+	out, err := json.Marshal(index)
+	if err != nil {
+		return body
+	}
+	return string(out)
 }
 
 // handleRegistration proxies package registration (metadata) responses,
@@ -189,6 +278,12 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 			})
 			return
 		}
+		// Tag mutability check on cache hit.
+		if adapter.HandleTagMutability(ctx, a.tagMutabilityCfg, a.db, a.httpClient,
+			string(scanner.EcosystemNuGet), pkgID, version, artifactID, upstreamURL, r, w) {
+			return
+		}
+		adapter.UpdateLastAccessedAt(a.db, artifactID)
 		http.ServeFile(w, r, cachedPath)
 		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
 			EventType:  model.EventServed,
@@ -196,6 +291,10 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 			ClientIP:   r.RemoteAddr,
 			UserAgent:  r.UserAgent(),
 		})
+		// Trigger async sandbox scan (non-blocking).
+		adapter.TriggerAsyncScan(r.Context(), scanner.Artifact{
+			ID: artifactID, Ecosystem: scanner.EcosystemNuGet, Name: pkgID, Version: version, LocalPath: cachedPath,
+		}, cachedPath, a.db, a.policyEngine)
 		return
 	}
 
@@ -294,6 +393,9 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 		UserAgent:  r.UserAgent(),
 	})
 	http.ServeFile(w, r, tmpPath)
+
+	// Trigger async sandbox scan (non-blocking).
+	adapter.TriggerAsyncScan(r.Context(), scanArtifact, tmpPath, a.db, a.policyEngine)
 }
 
 // persistArtifact writes artifact, status, and scan results to the DB.

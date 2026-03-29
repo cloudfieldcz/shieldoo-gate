@@ -11,7 +11,7 @@ import (
 )
 
 func TestEnsureRepository_CreatesOnFirstCall(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -24,7 +24,7 @@ func TestEnsureRepository_CreatesOnFirstCall(t *testing.T) {
 }
 
 func TestEnsureRepository_ReturnsExistingOnSecondCall(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -38,7 +38,7 @@ func TestEnsureRepository_ReturnsExistingOnSecondCall(t *testing.T) {
 }
 
 func TestListRepositories_ReturnsAll(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -53,7 +53,7 @@ func TestListRepositories_ReturnsAll(t *testing.T) {
 }
 
 func TestListRepositories_FilterByRegistry(t *testing.T) {
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 

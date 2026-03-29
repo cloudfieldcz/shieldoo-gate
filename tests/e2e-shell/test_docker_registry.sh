@@ -24,7 +24,7 @@ _check_docker_pull_result() {
     fi
 
     # Quarantined = scan pipeline worked correctly — this is a PASS.
-    if echo "$output" | grep -qi "quarantined"; then
+    if grep -qi "quarantined" <<< "$output"; then
         log_pass "${desc} — image correctly quarantined by scan pipeline"
         return 0
     fi
@@ -36,13 +36,13 @@ _check_docker_pull_result() {
     fi
 
     # 502 = scan pipeline issue (e.g. crane.Pull failure), not a routing failure.
-    if echo "$output" | grep -q "502"; then
+    if [[ "$output" == *"502"* ]]; then
         log_skip "${desc} — 502 from scan pipeline (not a routing issue)"
         return 1
     fi
 
     # Docker Hub rate limit
-    if echo "$output" | grep -qi "TOOMANYREQUESTS\|rate limit"; then
+    if grep -qi "TOOMANYREQUESTS\|rate limit" <<< "$output"; then
         log_skip "${desc} — Docker Hub rate limit reached"
         return 1
     fi
@@ -63,6 +63,16 @@ test_docker_registry() {
     # on first run (~40MB) and then scans the image. This can take several minutes.
     local CRANE_TIMEOUT=180
 
+    # Authenticate crane to our proxy registry (when proxy auth enabled).
+    # Uses crane auth login so credentials are scoped to our registry only,
+    # not applied to Docker Hub or other upstream sources.
+    if [ -n "$E2E_AUTH_USERINFO" ]; then
+        crane auth login "$E2E_DOCKER_REGISTRY_HOST" \
+            --username "ci-bot" --password "${SGW_PROXY_TOKEN}" --insecure 2>/dev/null \
+            && log_info "Docker Registry: crane authenticated to proxy" \
+            || log_info "Docker Registry: crane auth login failed (continuing)"
+    fi
+
     # _timed_crane wraps crane with a timeout (gtimeout on macOS, timeout on Linux).
     _timed_crane() {
         if command -v gtimeout &>/dev/null; then
@@ -80,28 +90,39 @@ test_docker_registry() {
     local manifest_exit
 
     # ==================================================================
+    # Part 0: NEGATIVE TEST — unauthenticated request must return 401
+    # ==================================================================
+    if [ "${SGW_PROXY_AUTH_ENABLED:-false}" = "true" ]; then
+        local noauth_status
+        noauth_status=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_DOCKER_URL}/v2/")
+        assert_eq "Docker Registry: unauthenticated request returns 401" "401" "$noauth_status"
+    fi
+
+    # ==================================================================
     # Part 1: FAST TESTS — no scan pipeline, just routing and API checks
     # ==================================================================
 
     # /v2/ endpoint responds locally
     local v2_status
-    v2_status=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_DOCKER_URL}/v2/")
+    v2_status=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_CURL_AUTH[@]}" "${E2E_DOCKER_URL}/v2/")
     assert_eq "Docker Registry: /v2/ returns 200 (local response)" "200" "$v2_status"
 
     local v2_header
-    v2_header=$(curl -s -D - -o /dev/null "${E2E_DOCKER_URL}/v2/" | grep -i "Docker-Distribution-API-Version")
+    v2_header=$(curl -s -D - -o /dev/null "${E2E_CURL_AUTH[@]}" "${E2E_DOCKER_URL}/v2/" | grep -i "Docker-Distribution-API-Version")
     assert_contains "Docker Registry: /v2/ has API version header" "registry/2.0" "$v2_header"
 
     # Allowlist enforcement (instant — no scan needed)
     log_info "Docker Registry: testing allowlist enforcement..."
     local disallowed_status
     disallowed_status=$(curl -s -o /dev/null -w "%{http_code}" \
+        "${E2E_CURL_AUTH[@]}" \
         -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
         "${E2E_DOCKER_URL}/v2/evil.io/malware/pkg/manifests/latest")
     assert_eq "Docker Registry: disallowed registry (evil.io) returns 403" "403" "$disallowed_status"
 
     local quay_status
     quay_status=$(curl -s -o /dev/null -w "%{http_code}" \
+        "${E2E_CURL_AUTH[@]}" \
         -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
         "${E2E_DOCKER_URL}/v2/quay.io/prometheus/node-exporter/manifests/latest")
     assert_eq "Docker Registry: disallowed registry (quay.io) returns 403" "403" "$quay_status"
@@ -109,6 +130,7 @@ test_docker_registry() {
     # Blob routing (instant — just proxies to upstream, returns 404 for fake digest)
     local blob_status
     blob_status=$(curl -s -o /dev/null -w "%{http_code}" \
+        "${E2E_CURL_AUTH[@]}" \
         "${E2E_DOCKER_URL}/v2/gcr.io/distroless/static/blobs/sha256:0000000000000000000000000000000000000000000000000000000000000000")
     if [ "$blob_status" = "404" ] || [ "$blob_status" = "400" ] || [ "$blob_status" = "401" ]; then
         log_pass "Docker Registry: blob routed to gcr.io correctly (HTTP ${blob_status})"
@@ -116,7 +138,7 @@ test_docker_registry() {
         log_fail "Docker Registry: blob routing returned unexpected HTTP ${blob_status}"
     fi
 
-    # Tag Management API (instant — works with whatever repos exist)
+    # Tag Management API (admin port — no proxy auth needed)
     local registries_status
     registries_status=$(curl -s -o /dev/null -w "%{http_code}" \
         "${E2E_ADMIN_URL}/api/v1/docker/registries")
@@ -131,21 +153,22 @@ test_docker_registry() {
 
     # Pull hello-world (~13kB) — the smallest possible image
     log_info "Docker Registry: pulling hello-world (this triggers Trivy DB download on first run)..."
-    manifest_output=$(_timed_crane manifest "localhost:${E2E_DOCKER_PORT}/library/hello-world:latest" --insecure 2>&1)
+    manifest_output=$(_timed_crane manifest "${E2E_DOCKER_REGISTRY_HOST}/library/hello-world:latest" --insecure 2>&1)
     manifest_exit=$?
     _check_docker_pull_result \
         "Docker Registry: hello-world pull + scan from Docker Hub" \
-        "$manifest_output" "$manifest_exit" "skip"
+        "$manifest_output" "$manifest_exit" "skip" || true
 
     # If hello-world succeeded, Trivy DB is now cached — subsequent pulls will be faster.
     if [ "$manifest_exit" -eq 0 ]; then
         # X-Shieldoo-Scanned header on cached manifest (instant — already cached)
         local scanned_header
         scanned_header=$(curl -s -D - -o /dev/null \
+            "${E2E_CURL_AUTH[@]}" \
             -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
             "${E2E_DOCKER_URL}/v2/library/hello-world/manifests/latest" 2>/dev/null \
             | grep -i "X-Shieldoo-Scanned")
-        if echo "$scanned_header" | grep -qi "true"; then
+        if grep -qi "true" <<< "$scanned_header"; then
             log_pass "Docker Registry: X-Shieldoo-Scanned: true on cached manifest"
         else
             log_skip "Docker Registry: X-Shieldoo-Scanned header not found"
@@ -162,11 +185,11 @@ test_docker_registry() {
 
     # Pull gcr.io/distroless/static (~2MB) — proves multi-upstream routing
     log_info "Docker Registry: pulling gcr.io/distroless/static (multi-upstream routing test)..."
-    manifest_output=$(_timed_crane manifest "localhost:${E2E_DOCKER_PORT}/gcr.io/distroless/static:latest" --insecure 2>&1)
+    manifest_output=$(_timed_crane manifest "${E2E_DOCKER_REGISTRY_HOST}/gcr.io/distroless/static:latest" --insecure 2>&1)
     manifest_exit=$?
     _check_docker_pull_result \
         "Docker Registry: gcr.io/distroless/static via multi-upstream routing" \
-        "$manifest_output" "$manifest_exit" "skip"
+        "$manifest_output" "$manifest_exit" "skip" || true
 
     # ==================================================================
     # Part 3: PUSH TESTS — push internal images via crane copy
@@ -174,28 +197,28 @@ test_docker_registry() {
 
     log_info "Docker Registry: testing push to internal namespace..."
     local push_output
-    if push_output=$(_timed_crane copy "hello-world:latest" "localhost:${E2E_DOCKER_PORT}/myteam/testapp:v1.0" --insecure 2>&1); then
+    if push_output=$(_timed_crane copy "hello-world:latest" "${E2E_DOCKER_REGISTRY_HOST}/myteam/testapp:v1.0" --insecure 2>&1); then
         log_pass "Docker Registry: push to internal namespace succeeded"
 
         # Pull back the pushed image
         log_info "Docker Registry: pulling back pushed image..."
-        if manifest_output=$(_timed_crane manifest "localhost:${E2E_DOCKER_PORT}/myteam/testapp:v1.0" --insecure 2>&1); then
+        if manifest_output=$(_timed_crane manifest "${E2E_DOCKER_REGISTRY_HOST}/myteam/testapp:v1.0" --insecure 2>&1); then
             log_pass "Docker Registry: pull-back of pushed image succeeded"
         else
             _check_docker_pull_result \
                 "Docker Registry: pull-back of pushed image" \
-                "$manifest_output" "$?" "skip"
+                "$manifest_output" "$?" "skip" || true
         fi
     else
         _check_docker_pull_result \
             "Docker Registry: push to internal namespace" \
-            "$push_output" "$?" "skip"
+            "$push_output" "$?" "skip" || true
     fi
 
     # Push to upstream namespace must be rejected (instant — no scan)
     log_info "Docker Registry: testing push rejection for upstream namespaces..."
     local push_upstream_output
-    if push_upstream_output=$(_timed_crane copy "hello-world:latest" "localhost:${E2E_DOCKER_PORT}/gcr.io/evil/image:v1.0" --insecure 2>&1); then
+    if push_upstream_output=$(_timed_crane copy "hello-world:latest" "${E2E_DOCKER_REGISTRY_HOST}/gcr.io/evil/image:v1.0" --insecure 2>&1); then
         log_fail "Docker Registry: push to gcr.io namespace should have been rejected"
     else
         log_pass "Docker Registry: push to upstream namespace (gcr.io) correctly rejected"
@@ -253,7 +276,9 @@ test_docker_registry() {
     # Gate logs contain docker scan pipeline entries
     local gate_logs
     gate_logs=$(docker_logs shieldoo-gate 2>/dev/null)
-    if echo "$gate_logs" | grep -qi "docker.*scan"; then
+    if [[ "$gate_logs" == *"docker_logs not available"* ]]; then
+        log_skip "Docker Registry: gate logs inspection not available in container mode"
+    elif grep -qi "docker.*scan" <<< "$gate_logs"; then
         log_pass "Docker Registry: gate logs contain Docker scan entries"
     else
         log_skip "Docker Registry: no Docker scan entries in logs (scans may not have completed)"

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -8,7 +9,7 @@ import (
 )
 
 func TestInitDB_CreatesAllTables(t *testing.T) {
-	db, err := InitDB(":memory:")
+	db, err := InitDB(SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -22,7 +23,7 @@ func TestInitDB_CreatesAllTables(t *testing.T) {
 }
 
 func TestInitDB_SetsWALMode(t *testing.T) {
-	db, err := InitDB(":memory:")
+	db, err := InitDB(SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -34,7 +35,7 @@ func TestInitDB_SetsWALMode(t *testing.T) {
 }
 
 func TestInitDB_EnablesForeignKeys(t *testing.T) {
-	db, err := InitDB(":memory:")
+	db, err := InitDB(SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -45,12 +46,12 @@ func TestInitDB_EnablesForeignKeys(t *testing.T) {
 }
 
 func TestInitDB_Idempotent(t *testing.T) {
-	db, err := InitDB(":memory:")
+	db, err := InitDB(SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
 	// Running migrations again should not error (CREATE TABLE IF NOT EXISTS)
-	migrations, err := readMigrations()
+	migrations, err := readMigrations(sqliteMigrationFS, "migrations/sqlite")
 	require.NoError(t, err)
 	for _, sql := range migrations {
 		_, err = db.Exec(sql)
@@ -59,7 +60,7 @@ func TestInitDB_Idempotent(t *testing.T) {
 }
 
 func TestInitDB_Migration003_DockerRepositories(t *testing.T) {
-	db, err := InitDB(":memory:")
+	db, err := InitDB(SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
@@ -74,10 +75,173 @@ func TestInitDB_Migration003_DockerRepositories(t *testing.T) {
 	require.NoError(t, err)
 
 	// Run migrations again (simulates restart) — should not fail
-	migrations, err := readMigrations()
+	migrations, err := readMigrations(sqliteMigrationFS, "migrations/sqlite")
 	require.NoError(t, err)
 	for i, sql := range migrations {
 		_, err := db.Exec(sql)
 		require.NoError(t, err, "migration %d failed on re-run", i+1)
 	}
+}
+
+func TestInitDB_UnknownBackend_ReturnsError(t *testing.T) {
+	_, err := InitDB(DatabaseConfig{Backend: "mysql"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown database backend")
+}
+
+func TestInitDB_EmptyBackend_DefaultsToSQLite(t *testing.T) {
+	// Empty backend should default to sqlite.
+	db, err := InitDB(DatabaseConfig{
+		Backend: "",
+		SQLite:  SQLiteConfig{Path: ":memory:"},
+	})
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Verify it's a working SQLite database.
+	var count int
+	err = db.Get(&count, "SELECT COUNT(*) FROM artifacts")
+	require.NoError(t, err)
+}
+
+func TestInitDB_PostgresBackend_EmptyDSN_FailsAtConnect(t *testing.T) {
+	// Postgres with an invalid (empty) DSN should fail.
+	_, err := InitDB(DatabaseConfig{
+		Backend: "postgres",
+		Postgres: PostgresConfig{
+			DSN: "host=localhost port=99999 dbname=nonexistent sslmode=disable",
+		},
+	})
+	// We expect a connection/ping error, not a clean init.
+	require.Error(t, err)
+}
+
+func TestGateDB_Rebind_SQLite_KeepsQuestionMarks(t *testing.T) {
+	db, err := InitDB(SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Verify that Rebind on SQLite keeps ? placeholders.
+	rebound := db.Rebind("SELECT * FROM artifacts WHERE id = ? AND name = ?")
+	assert.Equal(t, "SELECT * FROM artifacts WHERE id = ? AND name = ?", rebound)
+}
+
+func TestGateDB_Exec_WorksWithRebind(t *testing.T) {
+	db, err := InitDB(SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Insert using GateDB.Exec which auto-rebinds.
+	_, err = db.Exec(
+		`INSERT INTO audit_log (ts, event_type) VALUES (?, ?)`,
+		"2025-01-01T00:00:00Z", "TEST",
+	)
+	require.NoError(t, err)
+
+	var count int
+	err = db.Get(&count, "SELECT COUNT(*) FROM audit_log WHERE event_type = ?", "TEST")
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+}
+
+func TestGateDB_Beginx_ReturnsGateTx(t *testing.T) {
+	db, err := InitDB(SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+
+	tx, err := db.Beginx()
+	require.NoError(t, err)
+
+	// GateTx.Exec should auto-rebind.
+	_, err = tx.Exec(
+		`INSERT INTO audit_log (ts, event_type) VALUES (?, ?)`,
+		"2025-01-01T00:00:00Z", "TX_TEST",
+	)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+
+	var eventType string
+	err = db.Get(&eventType, "SELECT event_type FROM audit_log WHERE event_type = ?", "TX_TEST")
+	require.NoError(t, err)
+	assert.Equal(t, "TX_TEST", eventType)
+}
+
+func TestGateDB_Query_WorksWithRebind(t *testing.T) {
+	db, err := InitDB(SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+
+	_, err = db.Exec(
+		`INSERT INTO audit_log (ts, event_type) VALUES (?, ?)`,
+		"2025-01-01T00:00:00Z", "Q_TEST",
+	)
+	require.NoError(t, err)
+
+	rows, err := db.Query("SELECT event_type FROM audit_log WHERE event_type = ?", "Q_TEST")
+	require.NoError(t, err)
+	defer rows.Close()
+
+	require.True(t, rows.Next())
+	var et string
+	require.NoError(t, rows.Scan(&et))
+	assert.Equal(t, "Q_TEST", et)
+}
+
+func TestGateDB_QueryRow_WorksWithRebind(t *testing.T) {
+	db, err := InitDB(SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+
+	_, err = db.Exec(
+		`INSERT INTO audit_log (ts, event_type) VALUES (?, ?)`,
+		"2025-01-01T00:00:00Z", "QR_TEST",
+	)
+	require.NoError(t, err)
+
+	row := db.QueryRow("SELECT event_type FROM audit_log WHERE event_type = ?", "QR_TEST")
+	var et string
+	require.NoError(t, row.Scan(&et))
+	assert.Equal(t, "QR_TEST", et)
+}
+
+func TestGateDB_Select_WorksWithRebind(t *testing.T) {
+	db, err := InitDB(SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+
+	_, err = db.Exec(
+		`INSERT INTO audit_log (ts, event_type) VALUES (?, ?)`,
+		"2025-01-01T00:00:00Z", "SEL_TEST",
+	)
+	require.NoError(t, err)
+
+	type AuditRow struct {
+		EventType string         `db:"event_type"`
+		Reason    sql.NullString `db:"reason"`
+	}
+	var rows []AuditRow
+	err = db.Select(&rows, "SELECT event_type, reason FROM audit_log WHERE event_type = ?", "SEL_TEST")
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "SEL_TEST", rows[0].EventType)
+}
+
+func TestReadMigrations_SQLite_ReturnsAllMigrations(t *testing.T) {
+	migrations, err := readMigrations(sqliteMigrationFS, "migrations/sqlite")
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(migrations), 5, "expected at least 5 SQLite migrations")
+}
+
+func TestReadMigrations_Postgres_ReturnsAllMigrations(t *testing.T) {
+	migrations, err := readMigrations(postgresMigrationFS, "migrations/postgres")
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, len(migrations), 5, "expected at least 5 PostgreSQL migrations")
+}
+
+func TestReadMigrations_SQLiteAndPostgres_SameCount(t *testing.T) {
+	sqliteMigs, err := readMigrations(sqliteMigrationFS, "migrations/sqlite")
+	require.NoError(t, err)
+	pgMigs, err := readMigrations(postgresMigrationFS, "migrations/postgres")
+	require.NoError(t, err)
+	assert.Equal(t, len(sqliteMigs), len(pgMigs), "SQLite and PostgreSQL migration count must match")
 }

@@ -12,6 +12,9 @@ const (
 	EcosystemNPM    Ecosystem = "npm"
 	EcosystemDocker Ecosystem = "docker"
 	EcosystemNuGet  Ecosystem = "nuget"
+	EcosystemMaven    Ecosystem = "maven"
+	EcosystemRubyGems Ecosystem = "rubygems"
+	EcosystemGo       Ecosystem = "go"
 )
 
 type Verdict string

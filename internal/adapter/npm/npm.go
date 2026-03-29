@@ -14,10 +14,10 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jmoiron/sqlx"
 	"github.com/rs/zerolog/log"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/cache"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/policy"
@@ -29,30 +29,33 @@ var _ adapter.Adapter = (*NPMAdapter)(nil)
 
 // NPMAdapter proxies the npm Registry API and tarball downloads.
 type NPMAdapter struct {
-	db           *sqlx.DB
-	cache        cache.CacheStore
-	scanEngine   *scanner.Engine
-	policyEngine *policy.Engine
-	upstreamURL  string
-	router       http.Handler
-	httpClient   *http.Client
+	db               *config.GateDB
+	cache            cache.CacheStore
+	scanEngine       *scanner.Engine
+	policyEngine     *policy.Engine
+	upstreamURL      string
+	router           http.Handler
+	httpClient       *http.Client
+	tagMutabilityCfg config.TagMutabilityConfig
 }
 
 // NewNPMAdapter creates and wires an NPMAdapter.
 func NewNPMAdapter(
-	db *sqlx.DB,
+	db *config.GateDB,
 	cacheStore cache.CacheStore,
 	scanEngine *scanner.Engine,
 	policyEngine *policy.Engine,
 	upstreamURL string,
+	tagMutabilityCfg config.TagMutabilityConfig,
 ) *NPMAdapter {
 	a := &NPMAdapter{
-		db:           db,
-		cache:        cacheStore,
-		scanEngine:   scanEngine,
-		policyEngine: policyEngine,
-		upstreamURL:  strings.TrimRight(upstreamURL, "/"),
-		httpClient:   &http.Client{Timeout: 5 * time.Minute},
+		db:               db,
+		cache:            cacheStore,
+		scanEngine:       scanEngine,
+		policyEngine:     policyEngine,
+		upstreamURL:      strings.TrimRight(upstreamURL, "/"),
+		httpClient:        &http.Client{Timeout: 5 * time.Minute},
+		tagMutabilityCfg: tagMutabilityCfg,
 	}
 	a.router = a.buildRouter()
 	return a
@@ -209,6 +212,12 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 			})
 			return
 		}
+		// Tag mutability check on cache hit.
+		if adapter.HandleTagMutability(ctx, a.tagMutabilityCfg, a.db, a.httpClient,
+			string(scanner.EcosystemNPM), pkgName, version, artifactID, upstreamURL, r, w) {
+			return
+		}
+		adapter.UpdateLastAccessedAt(a.db, artifactID)
 		http.ServeFile(w, r, cachedPath)
 		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
 			EventType:  model.EventServed,
@@ -216,6 +225,10 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 			ClientIP:   r.RemoteAddr,
 			UserAgent:  r.UserAgent(),
 		})
+		// Trigger async sandbox scan (non-blocking).
+		adapter.TriggerAsyncScan(r.Context(), scanner.Artifact{
+			ID: artifactID, Ecosystem: scanner.EcosystemNPM, Name: pkgName, Version: version, LocalPath: cachedPath,
+		}, cachedPath, a.db, a.policyEngine)
 		return
 	}
 
@@ -314,6 +327,9 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 		UserAgent:  r.UserAgent(),
 	})
 	http.ServeFile(w, r, tmpPath)
+
+	// Trigger async sandbox scan (non-blocking).
+	adapter.TriggerAsyncScan(r.Context(), scanArtifact, tmpPath, a.db, a.policyEngine)
 }
 
 // persistArtifact writes artifact, status, and scan results to the DB.

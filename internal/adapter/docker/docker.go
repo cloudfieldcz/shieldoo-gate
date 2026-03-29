@@ -17,7 +17,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/crane"
-	"github.com/jmoiron/sqlx"
 	"github.com/rs/zerolog/log"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
@@ -37,7 +36,7 @@ var _ adapter.Adapter = (*DockerAdapter)(nil)
 // Manifests are scanned via Trivy before being served. Blobs are passed
 // through directly since scanning happens at the manifest/image level.
 type DockerAdapter struct {
-	db          *sqlx.DB
+	db          *config.GateDB
 	cache       cache.CacheStore
 	scanEngine  *scanner.Engine
 	policyEng   *policy.Engine
@@ -54,7 +53,7 @@ type DockerAdapter struct {
 // If cfg.Push.Enabled, automatically initializes push support with a
 // BlobStore at os.TempDir()/shieldoo-gate-blobs.
 func NewDockerAdapter(
-	db *sqlx.DB,
+	db *config.GateDB,
 	cacheStore cache.CacheStore,
 	scanEngine *scanner.Engine,
 	policyEngine *policy.Engine,
@@ -83,7 +82,7 @@ func NewDockerAdapter(
 // NewDockerAdapterWithPush creates a DockerAdapter with push support enabled.
 // The blobStore is used for storing pushed image blobs locally.
 func NewDockerAdapterWithPush(
-	db *sqlx.DB,
+	db *config.GateDB,
 	cacheStore cache.CacheStore,
 	scanEngine *scanner.Engine,
 	policyEngine *policy.Engine,
@@ -192,6 +191,13 @@ func (a *DockerAdapter) handleV2Wildcard(w http.ResponseWriter, r *http.Request)
 			})
 			return
 		}
+		// For internal namespaces, try serving from BlobStore first.
+		if a.pushHandler != nil && a.cfg.Push.Enabled && a.resolver.IsPushAllowed(name) {
+			if a.serveInternalManifest(w, r, name, ref) {
+				return
+			}
+		}
+
 		registry, imagePath, upstreamURL, err := a.resolver.Resolve(name)
 		if err != nil {
 			adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
@@ -218,6 +224,12 @@ func (a *DockerAdapter) handleV2Wildcard(w http.ResponseWriter, r *http.Request)
 				Reason: err.Error(),
 			})
 			return
+		}
+		// For internal namespaces, serve blobs from BlobStore.
+		if a.pushHandler != nil && a.cfg.Push.Enabled && a.resolver.IsPushAllowed(name) {
+			if a.serveInternalBlob(w, r, digest) {
+				return
+			}
 		}
 		registry, imagePath, upstreamURL, err := a.resolver.Resolve(name)
 		if err != nil {
@@ -430,6 +442,13 @@ func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request
 			Artifact: artifactID,
 			Reason:   policyResult.Reason,
 		})
+		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+			EventType:  model.EventBlocked,
+			ArtifactID: artifactID,
+			Reason:     policyResult.Reason,
+			ClientIP:   r.RemoteAddr,
+			UserAgent:  r.UserAgent(),
+		})
 		return
 	case policy.ActionQuarantine:
 		now := time.Now().UTC()
@@ -438,6 +457,13 @@ func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request
 			Error:    "quarantined",
 			Artifact: artifactID,
 			Reason:   policyResult.Reason,
+		})
+		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+			EventType:  model.EventQuarantined,
+			ArtifactID: artifactID,
+			Reason:     policyResult.Reason,
+			ClientIP:   r.RemoteAddr,
+			UserAgent:  r.UserAgent(),
 		})
 		return
 	}
@@ -449,6 +475,78 @@ func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Docker-Content-Digest", manifestDigest)
 	w.Header().Set("Location", fmt.Sprintf("/v2/%s/manifests/%s", name, ref))
 	w.WriteHeader(http.StatusCreated)
+}
+
+// serveInternalManifest tries to serve a manifest for an internally-pushed image.
+// Returns true if the manifest was served (or an error response was written), false to fall through to upstream.
+func (a *DockerAdapter) serveInternalManifest(w http.ResponseWriter, r *http.Request, name, ref string) bool {
+	// Look up the internal repository.
+	repo, err := EnsureRepository(a.db, "", name, true)
+	if err != nil {
+		return false
+	}
+
+	// Resolve tag → manifest digest.
+	tag, err := GetTag(a.db, repo.ID, ref)
+	if err != nil {
+		// Tag not found — not an internal image, fall through.
+		return false
+	}
+
+	// Check artifact status (quarantine check).
+	safeName := MakeSafeName("", name)
+	artifactID := fmt.Sprintf("docker:%s:%s", safeName, ref)
+	status, err := adapter.GetArtifactStatus(a.db, artifactID)
+	if err != nil {
+		log.Error().Err(err).Str("artifact", artifactID).Msg("docker: failed to check internal artifact status")
+		http.Error(w, "internal error checking artifact status", http.StatusServiceUnavailable)
+		return true
+	}
+	if status != nil && status.Status == model.StatusQuarantined {
+		adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+			Error:    "quarantined",
+			Artifact: artifactID,
+			Reason:   status.QuarantineReason,
+		})
+		return true
+	}
+
+	// Fetch manifest from BlobStore.
+	manifestBytes, err := a.pushHandler.blobStore.Get(tag.ManifestDigest)
+	if err != nil {
+		log.Debug().Err(err).Str("digest", tag.ManifestDigest).Msg("docker: internal manifest not in blobstore, falling through")
+		return false
+	}
+
+	log.Info().Str("artifact", artifactID).Str("digest", tag.ManifestDigest).Msg("docker: serving internal manifest from blobstore")
+	adapter.UpdateLastAccessedAt(a.db, artifactID)
+	w.Header().Set("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
+	w.Header().Set("Docker-Content-Digest", tag.ManifestDigest)
+	w.Header().Set("X-Shieldoo-Scanned", "true")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(manifestBytes)
+	_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+		EventType:  model.EventServed,
+		ArtifactID: artifactID,
+		ClientIP:   r.RemoteAddr,
+		UserAgent:  r.UserAgent(),
+	})
+	return true
+}
+
+// serveInternalBlob tries to serve a blob from the BlobStore for internally-pushed images.
+// Returns true if the blob was served, false to fall through to upstream.
+func (a *DockerAdapter) serveInternalBlob(w http.ResponseWriter, _ *http.Request, digest string) bool {
+	data, err := a.pushHandler.blobStore.Get(digest)
+	if err != nil {
+		return false
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Docker-Content-Digest", digest)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+	return true
 }
 
 // handleManifest runs the full scan-on-pull pipeline for manifest requests.
@@ -488,6 +586,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 			return
 		}
 		// Serve cached manifest.
+		adapter.UpdateLastAccessedAt(a.db, artifactID)
 		manifestBytes, err := os.ReadFile(cachedPath)
 		if err != nil {
 			log.Error().Err(err).Str("artifact", artifactID).Msg("docker: failed to read cached manifest")
@@ -504,6 +603,10 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 			ClientIP:   r.RemoteAddr,
 			UserAgent:  r.UserAgent(),
 		})
+		// Trigger async sandbox scan (non-blocking).
+		adapter.TriggerAsyncScan(r.Context(), scanner.Artifact{
+			ID: artifactID, Ecosystem: scanner.EcosystemDocker, Name: safeName, Version: ref, LocalPath: cachedPath,
+		}, cachedPath, a.db, a.policyEng)
 		return
 	}
 
@@ -694,6 +797,9 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 	w.Header().Set("X-Shieldoo-Scanned", "true")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, bytes.NewReader(manifestBytes))
+
+	// Trigger async sandbox scan (non-blocking).
+	adapter.TriggerAsyncScan(r.Context(), scanArtifact, scanArtifact.LocalPath, a.db, a.policyEng)
 }
 
 // fetchManifest downloads the manifest from the upstream registry.

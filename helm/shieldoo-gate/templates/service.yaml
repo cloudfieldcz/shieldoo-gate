@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "shieldoo-gate.fullname" . }}
+  labels:
+    {{- include "shieldoo-gate.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.ports.admin }}
+      targetPort: admin
+      protocol: TCP
+      name: admin
+    - port: {{ .Values.ports.pypi }}
+      targetPort: pypi
+      protocol: TCP
+      name: pypi
+    - port: {{ .Values.ports.npm }}
+      targetPort: npm
+      protocol: TCP
+      name: npm
+    - port: {{ .Values.ports.nuget }}
+      targetPort: nuget
+      protocol: TCP
+      name: nuget
+    - port: {{ .Values.ports.docker }}
+      targetPort: docker
+      protocol: TCP
+      name: docker
+    - port: {{ .Values.ports.maven }}
+      targetPort: maven
+      protocol: TCP
+      name: maven
+    - port: {{ .Values.ports.rubygems }}
+      targetPort: rubygems
+      protocol: TCP
+      name: rubygems
+    - port: {{ .Values.ports.gomod }}
+      targetPort: gomod
+      protocol: TCP
+      name: gomod
+  selector:
+    {{- include "shieldoo-gate.selectorLabels" . | nindent 4 }}

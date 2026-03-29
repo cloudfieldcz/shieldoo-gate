@@ -1,6 +1,6 @@
 # Shieldoo Gate — Documentation
 
-> Open-source supply chain security proxy for Docker, PyPI, npm, NuGet, and more.
+> Open-source supply chain security proxy for Docker, PyPI, npm, NuGet, Maven, and more.
 
 ## Overview
 
@@ -13,10 +13,12 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
 - [Architecture](architecture.md) — component overview, request flow, startup sequence, concurrency model
 - [Data Model](data-model.md) — database schema, Go structs, table relationships, migrations
 - [Scanners](scanners.md) — scan engine, built-in and external scanners, aggregation, threat feed
-- [Protocol Adapters](adapters.md) — PyPI, npm, NuGet, Docker proxy implementations and routing
+- [Protocol Adapters](adapters.md) — PyPI, npm, NuGet, Docker, Maven, RubyGems, Go Modules proxy implementations and routing
 - [Policy Engine](policy.md) — evaluation order, overrides, allowlists, aggregation rules, examples
 - [Configuration](configuration.md) — full `config.yaml` reference, environment variables, Go structs
-- [Deployment](deployment.md) — Docker Compose, local development, client configuration, testing
+  - [Authentication](configuration.md#authentication-v11) — OIDC admin API authentication (v1.1)
+  - [Alerts](configuration.md#alerts-v11) — webhook, Slack, and email notification channels
+- [Deployment](deployment.md) — Docker Compose, Kubernetes (Helm), local development, client configuration, testing
 
 ### Reference
 
@@ -41,20 +43,24 @@ Shieldoo Gate Protocol Adapter
 
 | Component | Description |
 |---|---|
-| **Protocol Adapters** | Native protocol implementations (Docker/OCI, PyPI PEP 503, npm, NuGet V3) |
-| **Scan Engine** | Pluggable scanner framework (GuardDog, Trivy, OSV, built-in heuristics) |
+| **Protocol Adapters** | Native protocol implementations (Docker/OCI, PyPI PEP 503, npm, NuGet V3, Maven, RubyGems, Go Modules) |
+| **Scan Engine** | Pluggable scanner framework (GuardDog, Trivy, OSV, built-in heuristics, dynamic sandbox) |
 | **Cache Store** | Local filesystem with per-ecosystem TTL (S3 backend planned) |
 | **Policy Engine** | Block / quarantine / warn / allow rules with allowlists |
 | **Policy Overrides** | Dynamic false-positive management and audit trail via UI/API |
-| **Threat Feed** | Periodic threat feed refresh + manual rescan via API (automatic rescan scheduler planned) |
-| **Admin UI + REST API** | Dashboard, artifact management, audit log |
+| **Threat Feed** | Periodic threat feed refresh + manual rescan via API |
+| **Rescan Scheduler** | Background re-scanning of cached artifacts to detect newly discovered threats |
+| **Alerting** | Real-time notifications via webhook, Slack, and email for security events (v1.1) |
+| **Authentication** | OIDC admin API authentication with Authorization Code + PKCE flow (v1.1) |
+| **Proxy Auth** | Per-user PAT and global token for proxy endpoint authentication (v1.1) |
+| **Admin UI + REST API** | Dashboard, artifact management, audit log, user profile & API key management |
 
 ## Technology Stack
 
 - **Go 1.25+** — core proxy, API, built-in scanners
 - **TypeScript + React 18** — admin UI
 - **Python 3.12+** — GuardDog scanner bridge (gRPC sidecar)
-- **SQLite** (single-node; PostgreSQL HA mode planned)
+- **SQLite** (default single-node) / **PostgreSQL** (HA mode, v1.1)
 
 ## Implementation Status (v1.0)
 
@@ -64,14 +70,16 @@ Shieldoo Gate Protocol Adapter
 | 2 | Scanner engine + built-in scanners | Done |
 | 3 | External scanners (GuardDog, Trivy, OSV) | Done |
 | 4 | Cache (local) & policy engine | Done |
-| 5 | Protocol adapters (PyPI, npm, Docker, NuGet) | Done |
+| 5 | Protocol adapters (PyPI, npm, Docker, NuGet, Maven) | Done |
 | 6 | Admin REST API | Done |
 | 7 | Admin UI (React) | Done |
 | 8 | Main entrypoint, Docker Compose, E2E tests | Done |
 | — | S3 cache backend | Planned |
-| — | PostgreSQL HA backend | Planned |
+| — | PostgreSQL HA backend | Phase 1 done (driver + migrations) |
 | — | Docker scheduled sync/rescan | Done |
-| — | Helm chart | Planned |
+| — | Helm chart | Done |
+| — | Proxy API key auth (PAT) | Done |
+| — | User profile & API key management UI | Done |
 
 ## Getting Started
 
@@ -115,14 +123,17 @@ make build
 # Unit tests
 make test
 
-# E2E tests (isolated Docker stack, real package installs, API validation)
+# E2E tests — host-based (requires uv, npm, dotnet, crane, etc.)
 ./tests/e2e-shell/run.sh
+
+# E2E tests — containerized (recommended, only requires Docker)
+make test-e2e-containerized
 
 # Lint
 make lint
 ```
 
-The scanner bridge must be started separately:
+The scanner bridge must be started separately (host-based development only):
 
 ```bash
 cd scanner-bridge
@@ -134,7 +145,13 @@ python main.py
 ### Running E2E Tests
 
 ```bash
-# Start the full stack first (see above), then:
+# Containerized (recommended — no host tools needed beyond Docker)
+make test-e2e-containerized
+
+# Host-based (requires all package managers installed locally)
+./tests/e2e-shell/run.sh
+
+# Go E2E tests
 make test-e2e
 ```
 

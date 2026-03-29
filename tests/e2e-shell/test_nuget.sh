@@ -14,6 +14,15 @@ test_nuget() {
     fi
 
     # ------------------------------------------------------------------
+    # 1b. Negative test: unauthenticated request must return 401 when auth enabled
+    # ------------------------------------------------------------------
+    if [ "${SGW_PROXY_AUTH_ENABLED:-false}" = "true" ]; then
+        local noauth_status
+        noauth_status=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_NUGET_URL}/v3/index.json")
+        assert_eq "NuGet: unauthenticated request returns 401" "401" "$noauth_status"
+    fi
+
+    # ------------------------------------------------------------------
     # 2. Service index accessible
     # ------------------------------------------------------------------
     assert_http_status "NuGet: /v3/index.json returns HTTP 200" \
@@ -26,7 +35,27 @@ test_nuget() {
     local workdir
     workdir=$(mktemp -d)
     cp "${SCRIPT_DIR}/fixtures/nuget/E2ETest.csproj" "$workdir/"
-    cp "${SCRIPT_DIR}/fixtures/nuget/nuget.config" "$workdir/"
+
+    # Generate nuget.config dynamically with the correct URL (container-aware)
+    local _nuget_creds=""
+    if [ -n "$E2E_AUTH_USERINFO" ]; then
+        _nuget_creds="
+  <packageSourceCredentials>
+    <shieldoo-e2e>
+      <add key=\"Username\" value=\"ci-bot\" />
+      <add key=\"ClearTextPassword\" value=\"${SGW_PROXY_TOKEN}\" />
+    </shieldoo-e2e>
+  </packageSourceCredentials>"
+    fi
+    cat > "$workdir/nuget.config" <<NUGETEOF
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="shieldoo-e2e" value="${E2E_NUGET_URL}/v3/index.json" allowInsecureConnections="true" />
+  </packageSources>${_nuget_creds}
+</configuration>
+NUGETEOF
 
     # Create minimal Program.cs so the project is valid
     mkdir -p "$workdir"

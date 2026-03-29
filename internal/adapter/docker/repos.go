@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jmoiron/sqlx"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 )
 
 // DockerRepository represents a row in docker_repositories.
@@ -19,14 +19,15 @@ type DockerRepository struct {
 }
 
 // EnsureRepository returns the existing repo or creates a new one.
-// SECURITY: Uses atomic INSERT OR IGNORE + SELECT to avoid TOCTOU race conditions
+// SECURITY: Uses atomic INSERT ... ON CONFLICT DO NOTHING + SELECT to avoid TOCTOU race conditions
 // under concurrent first-access for the same image.
-func EnsureRepository(db *sqlx.DB, registry, name string, isInternal bool) (*DockerRepository, error) {
+func EnsureRepository(db *config.GateDB, registry, name string, isInternal bool) (*DockerRepository, error) {
 	now := time.Now().UTC()
-	// Atomic: INSERT OR IGNORE avoids unique constraint violation under concurrent access.
+	// Atomic: ON CONFLICT DO NOTHING avoids unique constraint violation under concurrent access.
 	_, _ = db.Exec(
-		`INSERT OR IGNORE INTO docker_repositories (registry, name, is_internal, created_at, sync_enabled)
-		 VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO docker_repositories (registry, name, is_internal, created_at, sync_enabled)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT (registry, name) DO NOTHING`,
 		registry, name, isInternal, now, !isInternal,
 	)
 
@@ -40,7 +41,7 @@ func EnsureRepository(db *sqlx.DB, registry, name string, isInternal bool) (*Doc
 }
 
 // GetRepositoryByID returns a single repository by its ID.
-func GetRepositoryByID(db *sqlx.DB, id int64) (*DockerRepository, error) {
+func GetRepositoryByID(db *config.GateDB, id int64) (*DockerRepository, error) {
 	var repo DockerRepository
 	err := db.Get(&repo, "SELECT * FROM docker_repositories WHERE id = ?", id)
 	if err != nil {
@@ -50,7 +51,7 @@ func GetRepositoryByID(db *sqlx.DB, id int64) (*DockerRepository, error) {
 }
 
 // ListRepositories returns all repos, optionally filtered by registry.
-func ListRepositories(db *sqlx.DB, registry string) ([]DockerRepository, error) {
+func ListRepositories(db *config.GateDB, registry string) ([]DockerRepository, error) {
 	var repos []DockerRepository
 	if registry != "" {
 		return repos, db.Select(&repos, "SELECT * FROM docker_repositories WHERE registry = ? ORDER BY name", registry)

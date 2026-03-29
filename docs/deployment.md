@@ -1,6 +1,6 @@
 # Deployment
 
-> How to run Shieldoo Gate with Docker Compose, locally for development, and how to configure clients.
+> How to run Shieldoo Gate with Docker Compose, Kubernetes (Helm), locally for development, and how to configure clients.
 
 ## Docker Compose (Recommended)
 
@@ -136,6 +136,7 @@ npm run build  # Production build to dist/
 | `make build` | Build Go binary to `bin/shieldoo-gate` |
 | `make test` | Run unit tests (excludes e2e) |
 | `make test-e2e` | Run Go e2e tests |
+| `make test-e2e-containerized` | Run containerized E2E tests (no host tools needed) |
 | `make lint` | Run `go vet` |
 | `make proto` | Regenerate protobuf/gRPC code from `scanner-bridge/proto/scanner.proto` |
 | `make clean` | Remove `bin/` directory |
@@ -150,22 +151,30 @@ make test
 
 Runs all Go unit tests excluding the e2e directory.
 
-### E2E Tests (Shell-based)
+### E2E Tests (Shell-based, host)
 
-Full-stack tests that start Docker Compose, install real packages through the proxy, and validate behavior:
+Full-stack tests that start Docker Compose, install real packages through the proxy, and validate behavior. Requires host-installed tools (uv, npm, dotnet, crane, etc.):
 
 ```bash
-# Start the full stack first
-docker compose -f docker/docker-compose.yml up -d
-
-# Run shell-based e2e tests
 ./tests/e2e-shell/run.sh
 ```
 
 The `tests/e2e-shell/` directory contains:
-- Per-ecosystem test scripts (PyPI, npm, NuGet)
+- Per-ecosystem test scripts (PyPI, npm, NuGet, Docker, Maven, RubyGems, Go Modules)
 - Fixture files for testing
 - Docker Compose stack for isolated testing
+
+### E2E Tests (Containerized) -- Recommended
+
+Runs all E2E tests inside a Docker container with all package managers pre-installed. No host tools needed beyond Docker. This is the recommended approach for CI/CD and reproducible testing:
+
+```bash
+make test-e2e-containerized
+```
+
+This builds a test-runner container (`Dockerfile.test-runner`) containing pinned versions of uv, npm, dotnet, Maven, Ruby, Go, and crane. The container connects to shieldoo-gate via Docker networking (no host port mapping needed). Docker-in-Docker (DinD) is used for Docker registry E2E tests.
+
+The test-runner waits for shieldoo-gate to pass its healthcheck, then runs all test suites sequentially. The exit code reflects test results (0 = all passed, non-zero = failures).
 
 ### Go E2E Tests
 
@@ -272,3 +281,127 @@ shieldoo_gate_scanner_errors_total{scanner}            # counter
 - The scanner bridge runs as a **separate process** — compromised artifacts cannot escape the scan environment
 - The audit log is **append-only** — all decisions are traceable
 - Artifact storage encryption at rest is delegated to the storage backend / filesystem
+
+## Kubernetes (Helm Chart)
+
+Shieldoo Gate provides a Helm chart for Kubernetes deployment in `helm/shieldoo-gate/`.
+
+### Quick Start
+
+```bash
+# Install with default values (single replica, SQLite, local cache)
+helm install shieldoo-gate ./helm/shieldoo-gate/
+
+# Verify
+kubectl get pods -l app.kubernetes.io/name=shieldoo-gate
+kubectl port-forward svc/shieldoo-gate 8080:8080
+curl http://localhost:8080/api/v1/health
+```
+
+### HA Setup with PostgreSQL + S3
+
+For production with multiple replicas, you must use PostgreSQL and a shared cache backend (S3, Azure Blob, or GCS). SQLite and local cache do not support multi-replica deployments -- the chart will fail validation if you try.
+
+```bash
+# Create a secret with credentials
+kubectl create secret generic shieldoo-secrets \
+  --from-literal=database-dsn='postgres://user:pass@pghost:5432/shieldoo?sslmode=require' \
+  --from-literal=s3-access-key='AKIA...' \
+  --from-literal=s3-secret-key='...'
+
+# Install with HA values
+helm install shieldoo-gate ./helm/shieldoo-gate/ \
+  --set replicaCount=3 \
+  --set database.backend=postgres \
+  --set cache.backend=s3 \
+  --set cache.s3.bucket=shieldoo-cache \
+  --set cache.s3.region=us-east-1 \
+  --set existingSecret=shieldoo-secrets \
+  --set podDisruptionBudget.enabled=true
+```
+
+### Ingress Configuration
+
+```yaml
+# values-ingress.yaml
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: shieldoo-gate.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          port: admin
+  tls:
+    - secretName: shieldoo-gate-tls
+      hosts:
+        - shieldoo-gate.example.com
+```
+
+```bash
+helm install shieldoo-gate ./helm/shieldoo-gate/ -f values-ingress.yaml
+```
+
+### Secret Management
+
+The chart supports two approaches for managing secrets:
+
+1. **Inline secrets** (development only): Set values under `secrets.*` in `values.yaml`. These are base64-encoded into a Kubernetes Secret.
+
+2. **Existing secret** (recommended for production): Create a Kubernetes Secret separately (or via an external secrets operator like External Secrets, Sealed Secrets, or Vault) and reference it with `existingSecret`.
+
+Secret keys used by the chart:
+
+| Key | Purpose |
+|---|---|
+| `database-dsn` | PostgreSQL connection string |
+| `webhook-secret` | Webhook HMAC signing secret |
+| `slack-webhook-url` | Slack incoming webhook URL |
+| `smtp-username` | SMTP authentication username |
+| `smtp-password` | SMTP authentication password |
+| `oidc-client-secret` | OIDC client secret for admin auth |
+| `s3-access-key` | AWS/S3 access key |
+| `s3-secret-key` | AWS/S3 secret key |
+| `azure-connection-string` | Azure Storage connection string |
+
+### Image Pinning
+
+For production, use image digests instead of mutable tags:
+
+```yaml
+image:
+  repository: ghcr.io/cloudfieldcz/shieldoo-gate
+  digest: "sha256:abc123..."  # digest takes precedence over tag
+```
+
+### Security Features
+
+The chart enforces the following security contexts by default:
+
+- `runAsNonRoot: true` -- containers must run as non-root
+- `runAsUser: 1000` -- the `sgw` user
+- `readOnlyRootFilesystem: true` -- no writes to container filesystem
+- `allowPrivilegeEscalation: false`
+- `capabilities.drop: ["ALL"]` -- drop all Linux capabilities
+- `automountServiceAccountToken: false` -- no automatic token mount
+
+### Architecture
+
+The Helm chart deploys a Deployment with two containers:
+
+```
+Pod
+├── shieldoo-gate (main proxy)
+│   ├── /etc/shieldoo-gate/config.yaml  (ConfigMap)
+│   ├── /data/                           (PVC, SQLite mode)
+│   ├── /cache/                          (PVC, local cache mode)
+│   ├── /var/run/shieldoo/               (emptyDir, shared socket)
+│   └── /var/cache/trivy/                (emptyDir)
+└── scanner-bridge (GuardDog sidecar)
+    └── /var/run/shieldoo/               (emptyDir, shared socket)
+```
+
+The scanner bridge communicates with the main container via a Unix socket at `/var/run/shieldoo/shieldoo-bridge.sock`, mounted from a shared `emptyDir` volume.

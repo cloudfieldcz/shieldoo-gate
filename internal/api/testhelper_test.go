@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/require"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/api"
@@ -12,10 +11,10 @@ import (
 )
 
 // newTestServer creates an in-memory SQLite-backed Server for use in tests.
-func newTestServer(t *testing.T) (*api.Server, *sqlx.DB) {
+func newTestServer(t *testing.T) (*api.Server, *config.GateDB) {
 	t.Helper()
 
-	db, err := config.InitDB(":memory:")
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err, "failed to init in-memory database")
 	t.Cleanup(func() { db.Close() })
 
@@ -24,7 +23,7 @@ func newTestServer(t *testing.T) (*api.Server, *sqlx.DB) {
 }
 
 // insertTestArtifact inserts a minimal artifact row and returns its id.
-func insertTestArtifact(t *testing.T, db *sqlx.DB, id, ecosystem, name, version string) {
+func insertTestArtifact(t *testing.T, db *config.GateDB, id, ecosystem, name, version string) {
 	t.Helper()
 
 	now := time.Now().UTC()
