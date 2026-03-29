@@ -63,22 +63,26 @@ test_docker_registry() {
     # on first run (~40MB) and then scans the image. This can take several minutes.
     local CRANE_TIMEOUT=180
 
-    # Crane auth args (when proxy auth enabled)
-    local CRANE_AUTH_ARGS=()
+    # Authenticate crane to our proxy registry (when proxy auth enabled).
+    # Uses crane auth login so credentials are scoped to our registry only,
+    # not applied to Docker Hub or other upstream sources.
     if [ -n "$E2E_AUTH_USERINFO" ]; then
-        CRANE_AUTH_ARGS=(--username "ci-bot" --password "${SGW_PROXY_TOKEN}")
+        crane auth login "$E2E_DOCKER_REGISTRY_HOST" \
+            --username "ci-bot" --password "${SGW_PROXY_TOKEN}" --insecure 2>/dev/null \
+            && log_info "Docker Registry: crane authenticated to proxy" \
+            || log_info "Docker Registry: crane auth login failed (continuing)"
     fi
 
     # _timed_crane wraps crane with a timeout (gtimeout on macOS, timeout on Linux).
     _timed_crane() {
         if command -v gtimeout &>/dev/null; then
-            gtimeout "$CRANE_TIMEOUT" crane "$@" "${CRANE_AUTH_ARGS[@]}"
+            gtimeout "$CRANE_TIMEOUT" crane "$@"
         elif [ -x /opt/homebrew/bin/gtimeout ]; then
-            /opt/homebrew/bin/gtimeout "$CRANE_TIMEOUT" crane "$@" "${CRANE_AUTH_ARGS[@]}"
+            /opt/homebrew/bin/gtimeout "$CRANE_TIMEOUT" crane "$@"
         elif command -v timeout &>/dev/null; then
-            timeout "$CRANE_TIMEOUT" crane "$@" "${CRANE_AUTH_ARGS[@]}"
+            timeout "$CRANE_TIMEOUT" crane "$@"
         else
-            crane "$@" "${CRANE_AUTH_ARGS[@]}"
+            crane "$@"
         fi
     }
 
@@ -153,7 +157,7 @@ test_docker_registry() {
     manifest_exit=$?
     _check_docker_pull_result \
         "Docker Registry: hello-world pull + scan from Docker Hub" \
-        "$manifest_output" "$manifest_exit" "skip"
+        "$manifest_output" "$manifest_exit" "skip" || true
 
     # If hello-world succeeded, Trivy DB is now cached — subsequent pulls will be faster.
     if [ "$manifest_exit" -eq 0 ]; then
@@ -185,7 +189,7 @@ test_docker_registry() {
     manifest_exit=$?
     _check_docker_pull_result \
         "Docker Registry: gcr.io/distroless/static via multi-upstream routing" \
-        "$manifest_output" "$manifest_exit" "skip"
+        "$manifest_output" "$manifest_exit" "skip" || true
 
     # ==================================================================
     # Part 3: PUSH TESTS — push internal images via crane copy
@@ -203,12 +207,12 @@ test_docker_registry() {
         else
             _check_docker_pull_result \
                 "Docker Registry: pull-back of pushed image" \
-                "$manifest_output" "$?" "skip"
+                "$manifest_output" "$?" "skip" || true
         fi
     else
         _check_docker_pull_result \
             "Docker Registry: push to internal namespace" \
-            "$push_output" "$?" "skip"
+            "$push_output" "$?" "skip" || true
     fi
 
     # Push to upstream namespace must be rejected (instant — no scan)

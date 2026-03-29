@@ -46,9 +46,9 @@ test_proxy_auth() {
     local create_resp
     create_resp=$(curl -sf -X POST "${E2E_ADMIN_URL}/api/v1/api-keys" \
         -H "Content-Type: application/json" \
-        -d '{"name":"e2e-test-key"}' 2>/dev/null)
+        -d '{"name":"e2e-test-key"}' 2>/dev/null) || true
 
-    if [ $? -eq 0 ] && [ -n "$create_resp" ]; then
+    if [ -n "$create_resp" ]; then
         local pat_token
         pat_token=$(echo "$create_resp" | jq -r '.token // empty')
 
