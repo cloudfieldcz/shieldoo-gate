@@ -48,6 +48,10 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
 		return
 	}
+	if len(req.Name) > 255 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name too long (max 255 characters)"})
+		return
+	}
 
 	// Generate plaintext token.
 	plaintext, err := generateAPIKey()
@@ -84,9 +88,15 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, resp)
 }
 
-// handleListAPIKeys returns all API keys without plaintext or hash values.
+// handleListAPIKeys returns API keys owned by the authenticated user.
 func (s *Server) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
-	keys, err := s.db.ListAPIKeys()
+	user := auth.UserFromContext(r.Context())
+	if user == nil || user.Email == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	keys, err := s.db.ListAPIKeysByOwner(user.Email)
 	if err != nil {
 		log.Error().Err(err).Msg("api: failed to list api keys")
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list keys"})
@@ -97,7 +107,14 @@ func (s *Server) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRevokeAPIKey permanently disables an API key.
+// Only the key owner can revoke their own keys.
 func (s *Server) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
+	user := auth.UserFromContext(r.Context())
+	if user == nil || user.Email == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
@@ -105,9 +122,20 @@ func (s *Server) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Verify ownership before revoking.
+	key, err := s.db.GetAPIKey(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
+		return
+	}
+	if key.OwnerEmail != user.Email {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "you can only revoke your own keys"})
+		return
+	}
+
 	if err := s.db.RevokeAPIKey(id); err != nil {
 		log.Error().Err(err).Int64("key_id", id).Msg("api: failed to revoke api key")
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to revoke key"})
 		return
 	}
 

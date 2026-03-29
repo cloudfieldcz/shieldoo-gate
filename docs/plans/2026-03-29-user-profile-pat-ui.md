@@ -13,14 +13,14 @@ Přidání user menu do hlavního layoutu (kliknutelný email v headeru) s dropd
 
 ## Aktuální stav
 
-### Backend (hotovo, není třeba měnit)
+### Backend (vyžaduje drobné opravy — owner-scoping)
 
-| Endpoint | Metoda | Popis |
-|----------|--------|-------|
-| `/auth/userinfo` | GET | Vrací `{sub, email, name}` přihlášeného uživatele |
-| `/api/v1/api-keys` | POST | Vytvoří PAT, vrátí plaintext jednorázově |
-| `/api/v1/api-keys` | GET | Seznam všech PAT (bez hash/plaintext) |
-| `/api/v1/api-keys/{id}` | DELETE | Revokuje PAT (soft-disable) |
+| Endpoint | Metoda | Popis | Stav |
+|----------|--------|-------|------|
+| `/auth/userinfo` | GET | Vrací `{sub, email, name}` přihlášeného uživatele | OK |
+| `/api/v1/api-keys` | POST | Vytvoří PAT, vrátí plaintext jednorázově | OK |
+| `/api/v1/api-keys` | GET | Seznam PAT — **OPRAVIT: filtrovat per owner** | OPRAVA |
+| `/api/v1/api-keys/{id}` | DELETE | Revokuje PAT — **OPRAVIT: owner check** | OPRAVA |
 
 Backend handlery: `internal/api/apikeys.go:40-129`
 Model: `internal/model/apikey.go:1-16`
@@ -37,7 +37,7 @@ Route registrace: `internal/api/server.go:138-148`
 | Logout | Neexistuje v UI — jen POST endpoint | Položka v user dropdown menu |
 | API client | Nemá `apiKeysApi` ani `userApi` | Oba přidány v `client.ts` |
 | Types | Nemá `APIKey` ani `UserInfo` typy | Přidány v `types.ts` |
-| Routing | 7 routes pod Layout | +1 route `/profile` |
+| Routing | 8 Route elementů pod Layout | +1 route `/profile` |
 
 ### Relevantní soubory
 
@@ -51,34 +51,55 @@ Route registrace: `internal/api/server.go:138-148`
 
 ### Architektura
 
-Celý scope je **frontend-only** — backend je hotový a není třeba ho měnit.
+Scope zahrnuje **frontend + drobné backend opravy** (owner-scoping na list/revoke).
 
 ```
 Layout.tsx
 ├── Sidebar (beze změn)
 ├── Header (NOVÝ — top bar s user menu)
-│   └── UserMenu component
+│   └── UserMenu component (veškerý stav UVNITŘ komponenty — ne v Layout)
 │       ├── Email + avatar placeholder
-│       ├── Dropdown: "Profile", "Logout"
-│       └── useQuery → GET /auth/userinfo
+│       ├── Dropdown: "Profile", "Logout" (Radix DropdownMenu pro a11y)
+│       └── useQuery → GET /auth/userinfo (staleTime: Infinity)
 └── <Outlet /> (beze změn)
 
 Profile.tsx (NOVÁ stránka)
 ├── User info card (email, name, sub)
-├── API Keys section
-│   ├── Create button → POST /api/v1/api-keys → modal s plaintext tokenem
-│   ├── Tabulka existujících klíčů (name, created_at, last_used_at, status)
-│   └── Revoke button → DELETE /api/v1/api-keys/{id}
-└── Usage instructions (jak token použít s pip/npm/docker)
+├── API Keys section (skrytá pokud GET /api-keys vrátí 404)
+│   ├── Create button → POST /api/v1/api-keys → non-dismissible modal s tokenem
+│   ├── Tabulka klíčů (name, created_at, last_used_at, status)
+│   │   └── Revoked klíče zobrazeny greyed out s "Revoked" badge
+│   └── Revoke button → confirmation dialog → DELETE /api/v1/api-keys/{id}
+└── Usage instructions (snippety per ecosystem)
 ```
 
 ### Databázové změny
 
-N/A — schema `api_keys` tabulky již existuje.
+Přidat index na `owner_email` pro efektivní filtrování:
 
-### Změny v servisní vrstvě
+```sql
+-- SQLite
+CREATE INDEX IF NOT EXISTS idx_api_keys_owner_email ON api_keys(owner_email);
 
-N/A — backend API je kompletní.
+-- PostgreSQL
+CREATE INDEX IF NOT EXISTS idx_api_keys_owner_email ON api_keys(owner_email);
+```
+
+### Změny v servisní vrstvě (backend opravy)
+
+#### Owner-scoped list
+
+Nová DB metoda `ListAPIKeysByOwner(ownerEmail string)`:
+```go
+func (db *GateDB) ListAPIKeysByOwner(ownerEmail string) ([]model.APIKey, error)
+// SELECT ... FROM api_keys WHERE owner_email = ? ORDER BY created_at DESC
+```
+
+Handler `handleListAPIKeys` upraven — čte email z OIDC kontextu a volá `ListAPIKeysByOwner`.
+
+#### Owner-scoped revoke
+
+Handler `handleRevokeAPIKey` upraven — před revokací ověří, že `key.OwnerEmail == user.Email`.
 
 ### Změny v UI
 
@@ -103,15 +124,32 @@ export interface APIKey {
 export interface APIKeyCreateResponse {
   id: number
   name: string
-  plaintext_key: string
+  owner_email: string
+  enabled: boolean
+  created_at: string
+  token: string    // backend JSON field je "token", NE "plaintext_key"
 }
 ```
 
 #### 2. Nové API funkce (`ui/src/api/client.ts`)
 
 ```typescript
+// Druhá axios instance pro auth endpointy (bez /api/v1 prefix, S 401 interceptorem)
+const authApi = axios.create({})
+authApi.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (axios.isAxiosError(error) && error.response?.status === 401) {
+      window.location.href = '/auth/login'
+      return new Promise(() => {})
+    }
+    return Promise.reject(error)
+  },
+)
+
 export const userApi = {
-  me: () => axios.get<UserInfo>('/auth/userinfo').then(r => r.data),
+  me: () => authApi.get<UserInfo>('/auth/userinfo').then(r => r.data),
+  logout: () => authApi.post('/auth/logout'),
 }
 
 export const apiKeysApi = {
@@ -121,25 +159,61 @@ export const apiKeysApi = {
 }
 ```
 
-Poznámka: `userApi.me()` používá base axios (ne `api` instanci s `/api/v1` prefix), protože endpoint je `/auth/userinfo`.
+#### 3. UserMenu komponent (`ui/src/components/UserMenu.tsx`)
 
-#### 3. Layout změna (`ui/src/components/Layout.tsx`)
+- Použít `@radix-ui/react-dropdown-menu` pro a11y (keyboard nav, ARIA)
+- Veškerý dropdown stav UVNITŘ komponenty (ne v Layout — prevence re-renderů)
+- `useQuery({ queryKey: ['userinfo'], queryFn: userApi.me, staleTime: Infinity })` — data se nemění během session
+- Loading state: skeleton placeholder v headeru
+- Error state (non-401): fallback label "User", retry při další navigaci
 
-Přidání top header baru s user menu:
-- `useQuery(['userinfo'], userApi.me)` — načte user info
-- Zobrazí email vpravo nahoře
-- Click → dropdown s "Profile" a "Logout"
-- Logout → POST `/auth/logout` → redirect na `/auth/login`
+#### 4. Layout změna (`ui/src/components/Layout.tsx`)
 
-#### 4. Nová stránka Profile (`ui/src/pages/Profile.tsx`)
+Přidání top header baru:
+- Main content wrappnut do sloupcového flex containeru: header nahoře, `<Outlet />` pod ním
+- Header obsahuje `<UserMenu />` vpravo
+- Profile je **záměrně NE** v sidebar navigaci — je přístupný pouze přes UserMenu dropdown (sidebar = systémové features, profil = per-user)
+
+#### 5. Nová stránka Profile (`ui/src/pages/Profile.tsx`)
 
 Sekce:
 - **User info** — email, jméno (read-only)
 - **API Keys** — tabulka + create + revoke
-- **Create flow** — input pro název → POST → modal s plaintext tokenem (kopírovatelný, zobrazený jednou)
-- **Usage instructions** — jak použít token s `pip install --index-url http://user:TOKEN@host:5010/simple/`
+  - `useQuery({ queryKey: ['api-keys'], queryFn: apiKeysApi.list, staleTime: 2 * 60 * 1000 })` — delší staleTime, data se mění jen explicitními akcemi
+  - Po create/revoke: `queryClient.invalidateQueries({ queryKey: ['api-keys'] })` pro okamžitý refresh
+  - Pokud GET vrátí 404 → sekce skrytá s info "API key management is not enabled in this deployment"
+  - Revoked klíče zobrazeny greyed out s "Revoked" badge (audit trail)
+- **Create flow:**
+  - Input pro název (required, trimmed, 1-100 znaků, inline validace)
+  - POST → non-dismissible modal (Radix Dialog) s tokenem
+  - Modal nelze zavřít Escape ani klikem mimo — jen explicitní "Done" tlačítko
+  - Varování: "Make sure you have copied the token. You will not be able to see it again."
+  - Po zavření modalu: vyčistit token ze stavu
+- **Revoke flow:**
+  - Confirmation dialog: "Are you sure you want to revoke '{name}'? This action cannot be undone. Any systems using this token will lose access immediately."
+- **Usage instructions** — copy-paste snippety per ecosystem:
+  ```
+  # PyPI
+  pip install --index-url http://<email>:$SGW_TOKEN@<host>:5010/simple/ <package>
 
-#### 5. Route registrace (`ui/src/App.tsx`)
+  # npm
+  npm config set //<host>:4873/:_authToken $SGW_TOKEN
+
+  # Docker
+  docker login <host>:5002 -u <email> -p $SGW_TOKEN
+
+  # NuGet
+  dotnet nuget add source http://<host>:5001/v3/index.json -n shieldoo -u <email> -p $SGW_TOKEN
+
+  # Go modules
+  GONOSUMCHECK=<host>:8087/* GOPROXY=http://<email>:$SGW_TOKEN@<host>:8087 go get <module>
+
+  # RubyGems
+  gem sources --add http://<email>:$SGW_TOKEN@<host>:8086/
+  ```
+  Doporučení: používat env variable `$SGW_TOKEN` místo inline tokenu (bezpečnější — neloguje se do shell history).
+
+#### 6. Route registrace (`ui/src/App.tsx`)
 
 Přidání `<Route path="/profile" element={<Profile />} />`.
 
@@ -152,34 +226,42 @@ N/A — žádné nové config hodnoty.
 ### Nové soubory
 - `ui/src/pages/Profile.tsx` — profil + PAT management stránka
 - `ui/src/components/UserMenu.tsx` — user menu dropdown komponent
+- `internal/config/migrations/sqlite/010_api_keys_owner_index.sql` — index na owner_email
+- `internal/config/migrations/postgres/010_api_keys_owner_index.sql` — index na owner_email
 
 ### Upravené soubory
 - `ui/src/api/types.ts:107` — přidání `UserInfo`, `APIKey`, `APIKeyCreateResponse` typů
-- `ui/src/api/client.ts:116` — přidání `userApi` a `apiKeysApi`
+- `ui/src/api/client.ts:116` — přidání `authApi` instance, `userApi` a `apiKeysApi`
 - `ui/src/components/Layout.tsx:13-55` — přidání header baru s UserMenu
 - `ui/src/App.tsx:1-41` — import Profile, přidání `/profile` route
+- `internal/config/db_apikeys.go:36-44` — nová metoda `ListAPIKeysByOwner`
+- `internal/api/apikeys.go:88-115` — owner-scoping na list a revoke handlery
+- `ui/package.json` — přidání `@radix-ui/react-dropdown-menu`, `@radix-ui/react-dialog`
 
 ### Soubory BEZ změn (důležité)
-- `internal/api/apikeys.go` — backend je hotový
 - `internal/auth/handlers.go` — userinfo endpoint je hotový
 - `internal/api/server.go` — routes jsou registrované
+- `internal/model/apikey.go` — model se nemění
 - `ui/src/pages/Settings.tsx` — zůstává pro systémové nastavení
 - `ui/src/pages/Dashboard.tsx` — beze změn
 
 ## Implementační fáze
 
-Celý scope je jedna koherentní fáze — všechny části jsou provázané a nemá smysl je dělit.
+### Fáze 1: Backend opravy (owner-scoping)
 
-### Fáze 1: User Profile & PAT UI
+Prerequisite pro frontend — bez tohoto by UI ukazoval cizí klíče.
 
-Vše se implementuje najednou, protože:
-- UserMenu potřebuje `userApi` → potřebuje typy
-- Profile potřebuje `apiKeysApi` → potřebuje typy
-- Route potřebuje Profile komponent
-- Testovat lze až když je vše propojené
+- [ ] Přidat migration `010_api_keys_owner_index.sql` (SQLite + PostgreSQL)
+- [ ] Přidat `ListAPIKeysByOwner` do `db_apikeys.go`
+- [ ] Upravit `handleListAPIKeys` — filtrovat per owner
+- [ ] Upravit `handleRevokeAPIKey` — owner check
+- [ ] Unit testy pro owner-scoping
+
+### Fáze 2: Frontend — User Profile & PAT UI
 
 - [ ] Přidat TypeScript typy do `types.ts`
-- [ ] Přidat `userApi` a `apiKeysApi` do `client.ts`
+- [ ] Přidat `authApi` instanci, `userApi` a `apiKeysApi` do `client.ts`
+- [ ] Nainstalovat `@radix-ui/react-dropdown-menu` a `@radix-ui/react-dialog`
 - [ ] Vytvořit `UserMenu.tsx` komponent
 - [ ] Upravit `Layout.tsx` — přidat header s UserMenu
 - [ ] Vytvořit `Profile.tsx` stránku s PAT management
@@ -190,23 +272,30 @@ Vše se implementuje najednou, protože:
 
 | Riziko | Dopad | Pravděpodobnost | Mitigace |
 |--------|-------|-----------------|----------|
-| Plaintext token zobrazen v UI a uživatel ho ztratí | Střední — musí vytvořit nový | Střední | Jasný UX: "Tento token se zobrazí pouze jednou. Zkopírujte si ho nyní." |
-| UserMenu dropdown se překrývá se sidebar | Nízký | Nízká | Z-index management, positioning relative to header |
-| `/auth/userinfo` vrátí 401 po expiraci session | Střední | Střední | Axios interceptor již handluje 401 → redirect na login |
+| Plaintext token zobrazen v UI a uživatel ho ztratí | Střední — musí vytvořit nový | Střední | Non-dismissible modal s "Done" tlačítkem + varování |
+| UserMenu dropdown se překrývá se sidebar | Nízký | Nízká | Z-index management, Radix handles positioning |
+| `/auth/userinfo` vrátí 401 po expiraci session | Střední | Střední | `authApi` instance s 401 interceptorem → redirect na login |
+| Uživatel omylem revokuje token používaný v CI/CD | Vysoký | Nízká | Confirmation dialog s jasným varováním |
+| Token v clipboard/shell history | Nízký | Střední | Usage instructions doporučují env variable místo inline |
 
 ## Testování
 
 ### Unit testy
-N/A — jedná se o čistě UI práci, backend testy již existují v `internal/api/apikeys_test.go`.
+- `TestListAPIKeys_FiltersByOwner` — ověří že user vidí jen své klíče
+- `TestRevokeAPIKey_RejectsNonOwner` — ověří 403 pro cizí klíč
 
 ### Manuální testy
 - [ ] Přihlásit se přes OIDC → ověřit že header zobrazuje email
 - [ ] Kliknout na email → dropdown s "Profile" a "Logout"
+- [ ] Keyboard navigace v dropdown (Tab, Enter, Escape)
 - [ ] Přejít na Profile → vidět user info
-- [ ] Vytvořit PAT → zobrazí se plaintext token, lze zkopírovat
+- [ ] Vytvořit PAT → non-dismissible modal s tokenem, "Done" tlačítko
+- [ ] Zkopírovat token, zavřít modal → token zmizí ze stavu
 - [ ] Ověřit že plaintext token funguje: `curl -u me:TOKEN http://localhost:5010/simple/`
-- [ ] Revokovat PAT → zmizí z tabulky (nebo se zobrazí jako disabled)
+- [ ] Revokovat PAT → confirmation dialog → klíč greyed out s "Revoked" badge
+- [ ] Ověřit že revokovaný token nefunguje
 - [ ] Logout → redirect na login stránku
+- [ ] Pokud proxy_auth vypnutý → API Keys sekce skrytá s info message
 
 ### Verifikace
 ```bash
@@ -223,8 +312,27 @@ make test
 ## Poznámky
 
 - Plaintext token se zobrazuje **jednou** při vytvoření — backend ho neukládá, nelze ho znovu získat
-- `apiKeysApi` endpointy jsou registrované jen když `proxy_auth.enabled=true` A `auth.enabled=true` — pokud je proxy auth vypnutý, Profile stránka by měla sekci API Keys skrýt nebo zobrazit info message
-- UserMenu by neměl volat `/auth/userinfo` pokud auth není enabled — ale v praxi se tam uživatel bez auth nedostane (serveSPA redirectuje)
+- Po zavření create modalu se token vyčistí z React stavu
+- `apiKeysApi` endpointy jsou registrované jen když `proxy_auth.enabled=true` A `auth.enabled=true` — pokud proxy auth vypnutý, GET vrátí 404 a UI sekci skryje
+- Profile je záměrně NE v sidebar navigaci — přístupný pouze přes UserMenu dropdown
+- Pagination na api-keys není potřeba pro v1.1 — očekávaná kardinalita je nízká (< 100 klíčů per user)
+- Usage instructions doporučují `$SGW_TOKEN` env variable místo inline tokenu v URL
+
+## Cross-check review výsledky
+
+Analýza prošla 4 paralelními reviews (BA, Dev, Security, Perf). Zapracované nálezy:
+
+| Nález | Závažnost | Řešení |
+|-------|-----------|--------|
+| `plaintext_key` → `token` field name | Kritický | Opraven typ na `token` |
+| ListAPIKeys vrací klíče všech uživatelů | Vysoký | Přidána Fáze 1 — backend owner-scoping |
+| RevokeAPIKey bez owner check | Střední | Přidán owner check do Fáze 1 |
+| `userApi.me()` bez 401 interceptoru | Střední | Nová `authApi` instance s interceptorem |
+| Chybí confirmation dialog pro revoke | Střední | Přidán requirement |
+| Token modal dismissible | Střední | Non-dismissible modal, explicitní "Done" |
+| userinfo staleTime 30s zbytečně krátký | Střední | `staleTime: Infinity` |
+| Chybí query invalidation po mutacích | Střední | Přidán requirement |
+| CSRF na logout/revoke | Nízký | Zamítnuto — SameSite=Lax + non-simple methods dostatečné |
 
 ## Reference
 

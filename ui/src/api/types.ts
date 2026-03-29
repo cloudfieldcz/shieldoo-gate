@@ -104,3 +104,27 @@ export interface DockerRegistry {
   host: string
   url: string
 }
+
+export interface UserInfo {
+  sub: string
+  email: string
+  name: string
+}
+
+export interface APIKey {
+  id: number
+  name: string
+  owner_email: string
+  enabled: boolean
+  created_at: string
+  last_used_at?: string
+}
+
+export interface APIKeyCreateResponse {
+  id: number
+  name: string
+  owner_email: string
+  enabled: boolean
+  created_at: string
+  token: string
+}

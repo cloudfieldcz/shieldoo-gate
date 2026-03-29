@@ -52,7 +52,8 @@ Shieldoo Gate Protocol Adapter
 | **Rescan Scheduler** | Background re-scanning of cached artifacts to detect newly discovered threats |
 | **Alerting** | Real-time notifications via webhook, Slack, and email for security events (v1.1) |
 | **Authentication** | OIDC admin API authentication with Authorization Code + PKCE flow (v1.1) |
-| **Admin UI + REST API** | Dashboard, artifact management, audit log |
+| **Proxy Auth** | Per-user PAT and global token for proxy endpoint authentication (v1.1) |
+| **Admin UI + REST API** | Dashboard, artifact management, audit log, user profile & API key management |
 
 ## Technology Stack
 
@@ -77,6 +78,8 @@ Shieldoo Gate Protocol Adapter
 | — | PostgreSQL HA backend | Phase 1 done (driver + migrations) |
 | — | Docker scheduled sync/rescan | Done |
 | — | Helm chart | Done |
+| — | Proxy API key auth (PAT) | Done |
+| — | User profile & API key management UI | Done |
 
 ## Getting Started
 

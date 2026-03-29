@@ -324,7 +324,7 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 - Unknown `database.backend` values are rejected
 - When `rescan.enabled` is `true`: `rescan.interval` must be a valid Go duration, `rescan.batch_size` >= 0, `rescan.max_concurrent` >= 0
 - When `auth.enabled` is `true`: `auth.issuer_url` and `auth.client_id` must be non-empty
-- When `proxy_auth.enabled` is `true`: at least one auth method must be available — either `global_token_env` references a set env var, or `auth.enabled` is `true` (for PAT support via admin API). If neither is available, startup fails.
+- When `proxy_auth.enabled` is `true`: at least one auth method must be available — either `global_token_env` references a set env var, or `auth.enabled` is `true` (for PAT support via admin API). If neither is available, startup fails. When both `auth` and `proxy_auth` are enabled, users can generate Personal Access Tokens (PATs) from the **Profile** page in the admin UI (`/profile`).
 
 ## Rescan Scheduler (v1.1)
 

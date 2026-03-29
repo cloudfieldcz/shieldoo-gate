@@ -155,6 +155,10 @@ func (s *Server) Routes() chi.Router {
 }
 
 // serveSPA serves the React SPA from uiDir with fallback to index.html.
+// When auth is enabled, HTML page requests (SPA routes) require a valid
+// session cookie — otherwise the browser is redirected to /auth/login.
+// Static assets (JS, CSS, images) are always served without auth so the
+// login page itself can load.
 func (s *Server) serveSPA(w http.ResponseWriter, r *http.Request) {
 	path := filepath.Join(s.uiDir, filepath.Clean(r.URL.Path))
 
@@ -164,8 +168,20 @@ func (s *Server) serveSPA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If the file exists, serve it; otherwise fall back to index.html for SPA routing
-	if _, err := os.Stat(path); os.IsNotExist(err) {
+	// Check if this is an SPA route (file doesn't exist on disk → index.html fallback).
+	// Static assets (JS/CSS/images) exist on disk and are served without auth.
+	_, statErr := os.Stat(path)
+	isSPARoute := os.IsNotExist(statErr)
+
+	if isSPARoute && s.authEnabled {
+		cookie, err := r.Cookie("shieldoo_session")
+		if err != nil || cookie.Value == "" {
+			http.Redirect(w, r, "/auth/login", http.StatusFound)
+			return
+		}
+	}
+
+	if isSPARoute {
 		http.ServeFile(w, r, filepath.Join(s.uiDir, "index.html"))
 		return
 	}

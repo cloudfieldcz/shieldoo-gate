@@ -51,14 +51,23 @@ func (m *OIDCMiddleware) Authenticate(next http.Handler) http.Handler {
 		}
 
 		if rawToken == "" {
-			writeAuthError(w, http.StatusUnauthorized, "missing bearer token or session cookie")
+			// Browser requests get redirected to login; API clients get 401 JSON.
+			if isBrowserRequest(r) {
+				http.Redirect(w, r, "/auth/login", http.StatusFound)
+			} else {
+				writeAuthError(w, http.StatusUnauthorized, "missing bearer token or session cookie")
+			}
 			return
 		}
 
 		idToken, err := m.verifier.Verify(r.Context(), rawToken)
 		if err != nil {
 			log.Debug().Err(err).Msg("auth: token verification failed")
-			writeAuthError(w, http.StatusUnauthorized, "invalid or expired token")
+			if isBrowserRequest(r) {
+				http.Redirect(w, r, "/auth/login", http.StatusFound)
+			} else {
+				writeAuthError(w, http.StatusUnauthorized, "invalid or expired token")
+			}
 			return
 		}
 
@@ -95,6 +104,13 @@ func extractBearerToken(r *http.Request) string {
 		return ""
 	}
 	return strings.TrimSpace(parts[1])
+}
+
+// isBrowserRequest returns true when the request likely comes from a web browser
+// (accepts HTML) rather than an API client (accepts JSON / no Accept header).
+func isBrowserRequest(r *http.Request) bool {
+	accept := r.Header.Get("Accept")
+	return strings.Contains(accept, "text/html")
 }
 
 // writeAuthError writes a JSON 401/403 error response.

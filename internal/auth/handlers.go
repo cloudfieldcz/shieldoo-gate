@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -33,16 +35,18 @@ type AuthConfig struct {
 
 // AuthHandlers implements the OIDC Authorization Code flow with PKCE.
 type AuthHandlers struct {
-	oauth2Cfg *oauth2.Config
-	provider  *oidc.Provider
-	verifier  *oidc.IDTokenVerifier
-	cfg       AuthConfig
+	oauth2Cfg  *oauth2.Config
+	provider   *oidc.Provider
+	verifier   *oidc.IDTokenVerifier
+	cfg        AuthConfig
+	secureCookie bool // true when RedirectURL uses HTTPS
 }
 
 // NewAuthHandlers creates auth handlers by performing OIDC discovery against
 // the configured issuer URL.
 func NewAuthHandlers(cfg AuthConfig) (*AuthHandlers, error) {
-	provider, err := oidc.NewProvider(oidc.InsecureIssuerURLContext(nil, cfg.IssuerURL), cfg.IssuerURL)
+	ctx := context.Background()
+	provider, err := oidc.NewProvider(oidc.InsecureIssuerURLContext(ctx, cfg.IssuerURL), cfg.IssuerURL)
 	if err != nil {
 		return nil, fmt.Errorf("auth: discovering OIDC provider at %s: %w", cfg.IssuerURL, err)
 	}
@@ -69,11 +73,14 @@ func NewAuthHandlers(cfg AuthConfig) (*AuthHandlers, error) {
 		ClientID: cfg.ClientID,
 	})
 
+	secure := strings.HasPrefix(cfg.RedirectURL, "https://")
+
 	return &AuthHandlers{
-		oauth2Cfg: oauth2Cfg,
-		provider:  provider,
-		verifier:  verifier,
-		cfg:       cfg,
+		oauth2Cfg:    oauth2Cfg,
+		provider:     provider,
+		verifier:     verifier,
+		cfg:          cfg,
+		secureCookie: secure,
 	}, nil
 }
 
@@ -93,14 +100,15 @@ func (h *AuthHandlers) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Store state in a short-lived httpOnly cookie.
+	// SameSite=Lax so the cookie survives the cross-site redirect back from the IdP.
 	http.SetCookie(w, &http.Cookie{
 		Name:     stateCookieName,
 		Value:    state,
 		Path:     "/auth",
 		MaxAge:   300, // 5 minutes
 		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
+		Secure:   h.secureCookie,
+		SameSite: http.SameSiteLaxMode,
 	})
 
 	// Store PKCE verifier in a short-lived httpOnly cookie.
@@ -110,8 +118,8 @@ func (h *AuthHandlers) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		Path:     "/auth",
 		MaxAge:   300,
 		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
+		Secure:   h.secureCookie,
+		SameSite: http.SameSiteLaxMode,
 	})
 
 	codeChallenge := generateCodeChallenge(codeVerifier)
@@ -145,8 +153,8 @@ func (h *AuthHandlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		Path:     "/auth",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
+		Secure:   h.secureCookie,
+		SameSite: http.SameSiteLaxMode,
 	})
 
 	// Retrieve PKCE verifier.
@@ -163,8 +171,8 @@ func (h *AuthHandlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		Path:     "/auth",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
+		Secure:   h.secureCookie,
+		SameSite: http.SameSiteLaxMode,
 	})
 
 	// Check for error from provider.
@@ -205,15 +213,15 @@ func (h *AuthHandlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set session cookie with the ID token (httpOnly + Secure + SameSite=Strict).
+	// Set session cookie with the ID token.
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    rawIDToken,
 		Path:     "/",
 		MaxAge:   int(15 * time.Minute / time.Second), // 15 minutes
 		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
+		Secure:   h.secureCookie,
+		SameSite: http.SameSiteLaxMode,
 	})
 
 	// Redirect to the UI root.
@@ -241,8 +249,8 @@ func (h *AuthHandlers) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
+		Secure:   h.secureCookie,
+		SameSite: http.SameSiteLaxMode,
 	})
 
 	w.Header().Set("Content-Type", "application/json")
@@ -273,8 +281,8 @@ func (h *AuthHandlers) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		MaxAge:   int(15 * time.Minute / time.Second),
 		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
+		Secure:   h.secureCookie,
+		SameSite: http.SameSiteLaxMode,
 	})
 
 	w.Header().Set("Content-Type", "application/json")

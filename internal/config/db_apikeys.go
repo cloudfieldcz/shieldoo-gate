@@ -43,6 +43,26 @@ func (db *GateDB) ListAPIKeys() ([]model.APIKey, error) {
 	return keys, nil
 }
 
+// ListAPIKeysByOwner returns API keys owned by the given email, ordered by creation time descending.
+func (db *GateDB) ListAPIKeysByOwner(ownerEmail string) ([]model.APIKey, error) {
+	var keys []model.APIKey
+	err := db.Select(&keys, "SELECT id, key_hash, name, owner_email, enabled, created_at, last_used_at FROM api_keys WHERE owner_email = ? ORDER BY created_at DESC", ownerEmail)
+	if err != nil {
+		return nil, fmt.Errorf("db: list api keys by owner: %w", err)
+	}
+	return keys, nil
+}
+
+// GetAPIKey returns a single API key by ID (regardless of enabled state).
+func (db *GateDB) GetAPIKey(id int64) (*model.APIKey, error) {
+	var key model.APIKey
+	err := db.Get(&key, "SELECT id, key_hash, name, owner_email, enabled, created_at, last_used_at FROM api_keys WHERE id = ?", id)
+	if err != nil {
+		return nil, fmt.Errorf("db: get api key: %w", err)
+	}
+	return &key, nil
+}
+
 // RevokeAPIKey permanently disables an API key by setting enabled=false.
 func (db *GateDB) RevokeAPIKey(id int64) error {
 	res, err := db.Exec("UPDATE api_keys SET enabled = 0 WHERE id = ?", id)
