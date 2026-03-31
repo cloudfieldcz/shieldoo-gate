@@ -35,10 +35,10 @@ api.interceptors.response.use((r) => r, on401)
 authApi.interceptors.response.use((r) => r, on401)
 
 export const artifactsApi = {
-  list: (page = 1, perPage = 50, ecosystem?: string, status?: string) =>
+  list: (page = 1, perPage = 50, ecosystem?: string, status?: string, name?: string, version?: string) =>
     api
       .get<PaginatedResponse<ArtifactWithStatus>>('/artifacts', {
-        params: { page, per_page: perPage, ecosystem, status },
+        params: { page, per_page: perPage, ecosystem, status, name, version },
       })
       .then((r) => r.data),
 

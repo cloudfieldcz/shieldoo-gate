@@ -35,6 +35,7 @@ type PyPIAdapter struct {
 	scanEngine     *scanner.Engine
 	policyEngine   *policy.Engine
 	upstreamURL    string
+	filesHost      string // CDN for package file downloads; defaults to pypiFilesHost
 	router         http.Handler
 	httpClient     *http.Client
 	tagMutabilityCfg config.TagMutabilityConfig
@@ -55,11 +56,18 @@ func NewPyPIAdapter(
 		scanEngine:       scanEngine,
 		policyEngine:     policyEngine,
 		upstreamURL:      strings.TrimRight(upstreamURL, "/"),
+		filesHost:        pypiFilesHost,
 		httpClient:        &http.Client{Timeout: 5 * time.Minute},
 		tagMutabilityCfg: tagMutabilityCfg,
 	}
 	a.router = a.buildRouter()
 	return a
+}
+
+// SetFilesHost overrides the CDN host used for package file downloads.
+// Intended for testing only.
+func (a *PyPIAdapter) SetFilesHost(host string) {
+	a.filesHost = strings.TrimRight(host, "/")
 }
 
 // Ecosystem implements adapter.Adapter.
@@ -122,9 +130,8 @@ const pypiFilesHost = "https://files.pythonhosted.org"
 func (a *PyPIAdapter) handlePackageDownload(w http.ResponseWriter, r *http.Request) {
 	filePath := chi.URLParam(r, "*")
 
-	// PyPI serves package files from files.pythonhosted.org, not pypi.org.
-	// Our rewritten URLs use relative /packages/ paths, so we map back to the CDN.
-	upstreamFull := pypiFilesHost + "/packages/" + filePath
+	// Map relative /packages/ paths back to the files CDN host.
+	upstreamFull := a.filesHost + "/packages/" + filePath
 
 	// uv requests .metadata files — proxy those directly without scanning.
 	if strings.HasSuffix(filePath, ".metadata") {

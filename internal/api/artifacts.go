@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -99,27 +100,90 @@ func parsePagination(q url.Values) (page, perPage int) {
 	return page, perPage
 }
 
+const maxFilterLen = 256
+
+// escapeLike escapes LIKE metacharacters (%, _, \) so they are treated as literals.
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
+}
+
 // handleListArtifacts handles GET /api/v1/artifacts.
+// Supports filtering by ecosystem, status, name (substring), version (substring).
 func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 	page, perPage := parsePagination(r.URL.Query())
 	offset := (page - 1) * perPage
 
+	// Parse filter parameters.
+	ecosystem := r.URL.Query().Get("ecosystem")
+	status := r.URL.Query().Get("status")
+	name := r.URL.Query().Get("name")
+	version := r.URL.Query().Get("version")
+
+	// Validate input length.
+	if len(name) > maxFilterLen {
+		writeError(w, http.StatusBadRequest, "name filter too long")
+		return
+	}
+	if len(version) > maxFilterLen {
+		writeError(w, http.StatusBadRequest, "version filter too long")
+		return
+	}
+
+	// Build dynamic WHERE clause.
+	conditions := []string{}
+	args := []any{}
+
+	if ecosystem != "" {
+		conditions = append(conditions, "a.ecosystem = ?")
+		args = append(args, ecosystem)
+	}
+	if status != "" {
+		if status == "PENDING_SCAN" {
+			conditions = append(conditions, "s.artifact_id IS NULL")
+		} else {
+			conditions = append(conditions, "s.status = ?")
+			args = append(args, status)
+		}
+	}
+	if name != "" {
+		conditions = append(conditions, `a.name LIKE ? ESCAPE '\'`)
+		args = append(args, "%"+escapeLike(name)+"%")
+	}
+	if version != "" {
+		conditions = append(conditions, `a.version LIKE ? ESCAPE '\'`)
+		args = append(args, "%"+escapeLike(version)+"%")
+	}
+
+	where := ""
+	if len(conditions) > 0 {
+		where = "WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	// Count total matching rows.
+	countQuery := `SELECT COUNT(*) FROM artifacts a LEFT JOIN artifact_status s ON a.id = s.artifact_id ` + where
 	var total int
-	if err := s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM artifacts`).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(r.Context(), countQuery, args...).Scan(&total); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to count artifacts")
 		return
 	}
 
-	rows, err := s.db.QueryxContext(r.Context(),
-		`SELECT a.ecosystem, a.name, a.version, a.upstream_url, a.sha256,
+	// Query matching rows.
+	selectQuery := `SELECT a.ecosystem, a.name, a.version, a.upstream_url, a.sha256,
 		        a.size_bytes, a.cached_at, a.last_accessed_at, a.storage_path,
 		        COALESCE(s.status, 'PENDING_SCAN') AS status,
 		        COALESCE(s.quarantine_reason, '') AS quarantine_reason,
 		        s.quarantined_at, s.released_at
 		 FROM artifacts a
 		 LEFT JOIN artifact_status s ON a.id = s.artifact_id
-		 ORDER BY a.cached_at DESC
-		 LIMIT ? OFFSET ?`, perPage, offset)
+		 ` + where + `
+		 ORDER BY a.name ASC, a.version ASC
+		 LIMIT ? OFFSET ?`
+	selectArgs := append(args, perPage, offset) //nolint:gocritic
+
+	rows, err := s.db.QueryxContext(r.Context(), selectQuery, selectArgs...)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to query artifacts")
 		return

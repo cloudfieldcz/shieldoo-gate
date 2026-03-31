@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { artifactsApi } from '../api/client'
 import type { ArtifactWithStatus } from '../api/types'
@@ -22,11 +22,33 @@ export default function Artifacts() {
   const [page, setPage] = useState(1)
   const [ecosystem, setEcosystem] = useState('')
   const [status, setStatus] = useState('')
+  const [name, setName] = useState('')
+  const [version, setVersion] = useState('')
+  const [debouncedName, setDebouncedName] = useState('')
+  const [debouncedVersion, setDebouncedVersion] = useState('')
   const [selected, setSelected] = useState<ArtifactWithStatus | null>(null)
 
+  // Debounce name search (300ms)
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedName(name), 300)
+    return () => clearTimeout(timer)
+  }, [name])
+
+  // Debounce version search (300ms)
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedVersion(version), 300)
+    return () => clearTimeout(timer)
+  }, [version])
+
+  // Reset page when any filter changes (using debounced values for text inputs)
+  useEffect(() => {
+    setPage(1)
+    setSelected(null)
+  }, [ecosystem, status, debouncedName, debouncedVersion])
+
   const listQuery = useQuery({
-    queryKey: ['artifacts', page, ecosystem, status],
-    queryFn: () => artifactsApi.list(page, PER_PAGE, ecosystem || undefined, status || undefined),
+    queryKey: ['artifacts', page, ecosystem, status, debouncedName, debouncedVersion],
+    queryFn: () => artifactsApi.list(page, PER_PAGE, ecosystem || undefined, status || undefined, debouncedName || undefined, debouncedVersion || undefined),
     retry: 1,
   })
 
@@ -77,10 +99,6 @@ export default function Artifacts() {
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE))
   const detail = detailQuery.data
 
-  function handleFilterChange() {
-    setPage(1)
-    setSelected(null)
-  }
 
   return (
     <div className="p-8 space-y-4">
@@ -94,7 +112,7 @@ export default function Artifacts() {
         <select
           className="border border-gray-300 rounded-md px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
           value={ecosystem}
-          onChange={(e) => { setEcosystem(e.target.value); handleFilterChange() }}
+          onChange={(e) => setEcosystem(e.target.value)}
         >
           <option value="">All Ecosystems</option>
           {ECOSYSTEMS.filter(Boolean).map((e) => (
@@ -105,13 +123,29 @@ export default function Artifacts() {
         <select
           className="border border-gray-300 rounded-md px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
           value={status}
-          onChange={(e) => { setStatus(e.target.value); handleFilterChange() }}
+          onChange={(e) => setStatus(e.target.value)}
         >
           <option value="">All Statuses</option>
           {STATUSES.filter(Boolean).map((s) => (
             <option key={s} value={s}>{s}</option>
           ))}
         </select>
+
+        <input
+          type="text"
+          placeholder="Search name..."
+          className="border border-gray-300 rounded-md px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 w-48"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+
+        <input
+          type="text"
+          placeholder="Search version..."
+          className="border border-gray-300 rounded-md px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 w-36"
+          value={version}
+          onChange={(e) => setVersion(e.target.value)}
+        />
 
         <span className="text-sm text-gray-500 ml-auto">
           {listQuery.isLoading ? 'Loading...' : `${total} artifact${total !== 1 ? 's' : ''}`}

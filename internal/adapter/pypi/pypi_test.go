@@ -34,7 +34,9 @@ func setupTestPyPI(t *testing.T, upstreamHandler http.HandlerFunc) (*pypi.PyPIAd
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
 		MinimumConfidence:   0.7,
 	}, nil)
-	return pypi.NewPyPIAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL, config.TagMutabilityConfig{}), upstream
+	a := pypi.NewPyPIAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL, config.TagMutabilityConfig{})
+	a.SetFilesHost(upstream.URL)
+	return a, upstream
 }
 
 func TestPyPIAdapter_Ecosystem_ReturnsPyPI(t *testing.T) {
