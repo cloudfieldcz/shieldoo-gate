@@ -1,6 +1,9 @@
 # Stage 1: Build React UI
 FROM node:20.19.0-alpine3.21 AS ui-builder
 
+ARG APP_VERSION=dev
+ENV VITE_APP_VERSION=${APP_VERSION}
+
 WORKDIR /ui
 COPY ui/package.json ui/package-lock.json ./
 RUN npm ci

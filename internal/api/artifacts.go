@@ -393,7 +393,12 @@ func (s *Server) handleReleaseArtifact(w http.ResponseWriter, r *http.Request) {
 	_, err = tx.ExecContext(r.Context(),
 		`INSERT INTO artifact_status (artifact_id, status, released_at)
 		 VALUES (?, 'CLEAN', ?)
-		 ON CONFLICT(artifact_id) DO UPDATE SET status='CLEAN', released_at=excluded.released_at`,
+		 ON CONFLICT(artifact_id) DO UPDATE SET
+		     status='CLEAN',
+		     released_at=excluded.released_at,
+		     quarantine_reason='',
+		     quarantined_at=NULL,
+		     rescan_due_at=NULL`,
 		id, now)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to release artifact")

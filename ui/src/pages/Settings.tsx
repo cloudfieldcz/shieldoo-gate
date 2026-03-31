@@ -116,7 +116,7 @@ export default function Settings() {
         <dl className="space-y-2">
           {[
             ['Product', 'Shieldoo Gate'],
-            ['Version', 'v1.0.0'],
+            ['Version', `v${import.meta.env.VITE_APP_VERSION || 'dev'}`],
             ['License', 'Apache 2.0'],
             ['Repository', 'github.com/shieldoo/shieldoo-gate'],
           ].map(([label, value]) => (

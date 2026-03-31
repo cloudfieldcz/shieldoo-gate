@@ -1,0 +1,156 @@
+services:
+
+  # ---------- Traefik (reverse proxy + TLS) ----------
+  traefik:
+    image: traefik:v3.6.12
+    restart: unless-stopped
+    command:
+      - --api.dashboard=false
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.le.acme.tlschallenge=true
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/acme/acme.json
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-acme:/acme
+    networks:
+      - proxy
+
+  # ---------- PostgreSQL ----------
+  postgres:
+    image: postgres:16.13-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------- Scanner Bridge (GuardDog gRPC sidecar) ----------
+  scanner-bridge:
+    image: ghcr.io/cloudfieldcz/scanner-bridge:${SGW_VERSION:-latest}
+    restart: unless-stopped
+    volumes:
+      - bridge-socket:/tmp
+    environment:
+      BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
+    networks:
+      - backend
+
+  # ---------- Shieldoo Gate ----------
+  shieldoo-gate:
+    image: ghcr.io/cloudfieldcz/shieldoo-gate:${SGW_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      scanner-bridge:
+        condition: service_started
+    volumes:
+      - bridge-socket:/tmp
+      - gate-cache:/var/cache/shieldoo-gate
+      - trivy-cache:/var/cache/trivy
+      - ./config.yaml:/etc/shieldoo-gate/config.yaml:ro
+    env_file:
+      - .env
+    environment:
+      SGW_SCANNERS_GUARDDOG_BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
+      SGW_DATABASE_POSTGRES_DSN: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
+    labels:
+      # Shared middleware — forward headers for reverse proxy awareness
+      - traefik.http.middlewares.sgw-headers.headers.customrequestheaders.X-Forwarded-Proto=https
+
+      # Admin UI
+      - traefik.enable=true
+      - traefik.http.routers.sgw-admin.rule=Host(`${SGW_DOMAIN}`)
+      - traefik.http.routers.sgw-admin.entrypoints=websecure
+      - traefik.http.routers.sgw-admin.tls.certresolver=le
+      - traefik.http.routers.sgw-admin.middlewares=sgw-headers
+      - traefik.http.routers.sgw-admin.service=sgw-admin
+      - traefik.http.services.sgw-admin.loadbalancer.server.port=8080
+
+      # PyPI
+      - traefik.http.routers.sgw-pypi.rule=Host(`pypi.${SGW_DOMAIN}`)
+      - traefik.http.routers.sgw-pypi.entrypoints=websecure
+      - traefik.http.routers.sgw-pypi.tls.certresolver=le
+      - traefik.http.routers.sgw-pypi.middlewares=sgw-headers
+      - traefik.http.routers.sgw-pypi.service=sgw-pypi
+      - traefik.http.services.sgw-pypi.loadbalancer.server.port=5000
+
+      # npm
+      - traefik.http.routers.sgw-npm.rule=Host(`npm.${SGW_DOMAIN}`)
+      - traefik.http.routers.sgw-npm.entrypoints=websecure
+      - traefik.http.routers.sgw-npm.tls.certresolver=le
+      - traefik.http.routers.sgw-npm.middlewares=sgw-headers
+      - traefik.http.routers.sgw-npm.service=sgw-npm
+      - traefik.http.services.sgw-npm.loadbalancer.server.port=4873
+
+      # NuGet
+      - traefik.http.routers.sgw-nuget.rule=Host(`nuget.${SGW_DOMAIN}`)
+      - traefik.http.routers.sgw-nuget.entrypoints=websecure
+      - traefik.http.routers.sgw-nuget.tls.certresolver=le
+      - traefik.http.routers.sgw-nuget.middlewares=sgw-headers
+      - traefik.http.routers.sgw-nuget.service=sgw-nuget
+      - traefik.http.services.sgw-nuget.loadbalancer.server.port=5001
+
+      # Docker registry
+      - traefik.http.routers.sgw-docker.rule=Host(`cr.${SGW_DOMAIN}`)
+      - traefik.http.routers.sgw-docker.entrypoints=websecure
+      - traefik.http.routers.sgw-docker.tls.certresolver=le
+      - traefik.http.routers.sgw-docker.middlewares=sgw-headers
+      - traefik.http.routers.sgw-docker.service=sgw-docker
+      - traefik.http.services.sgw-docker.loadbalancer.server.port=5002
+
+      # Maven
+      - traefik.http.routers.sgw-maven.rule=Host(`maven.${SGW_DOMAIN}`)
+      - traefik.http.routers.sgw-maven.entrypoints=websecure
+      - traefik.http.routers.sgw-maven.tls.certresolver=le
+      - traefik.http.routers.sgw-maven.middlewares=sgw-headers
+      - traefik.http.routers.sgw-maven.service=sgw-maven
+      - traefik.http.services.sgw-maven.loadbalancer.server.port=8085
+
+      # RubyGems
+      - traefik.http.routers.sgw-gems.rule=Host(`gems.${SGW_DOMAIN}`)
+      - traefik.http.routers.sgw-gems.entrypoints=websecure
+      - traefik.http.routers.sgw-gems.tls.certresolver=le
+      - traefik.http.routers.sgw-gems.middlewares=sgw-headers
+      - traefik.http.routers.sgw-gems.service=sgw-gems
+      - traefik.http.services.sgw-gems.loadbalancer.server.port=8086
+
+      # Go Modules
+      - traefik.http.routers.sgw-go.rule=Host(`go.${SGW_DOMAIN}`)
+      - traefik.http.routers.sgw-go.entrypoints=websecure
+      - traefik.http.routers.sgw-go.tls.certresolver=le
+      - traefik.http.routers.sgw-go.middlewares=sgw-headers
+      - traefik.http.routers.sgw-go.service=sgw-go
+      - traefik.http.services.sgw-go.loadbalancer.server.port=8087
+    networks:
+      - proxy
+      - backend
+
+volumes:
+  postgres-data:
+  bridge-socket:
+  gate-cache:
+  trivy-cache:
+  traefik-acme:
+
+networks:
+  proxy:
+  backend:

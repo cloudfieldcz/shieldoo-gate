@@ -44,7 +44,7 @@ export default function Layout() {
 
         {/* Footer */}
         <div className="px-6 py-4 border-t border-gray-700 text-xs text-gray-500">
-          v1.0.0 &mdash; Apache 2.0
+          v{import.meta.env.VITE_APP_VERSION || 'dev'} &mdash; Apache 2.0
         </div>
       </aside>
 

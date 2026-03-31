@@ -116,9 +116,17 @@ func TestHandleQuarantineAndRelease_Flow(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rec2.Body).Decode(&rBody))
 	assert.Equal(t, "CLEAN", rBody["status"])
 
-	// Verify status updated
+	// Verify status updated and quarantine fields cleared
 	require.NoError(t, db.QueryRow(`SELECT status FROM artifact_status WHERE artifact_id = 'pypi:evil:0.1.0'`).Scan(&status))
 	assert.Equal(t, "CLEAN", status)
+
+	var quarantineReason string
+	require.NoError(t, db.QueryRow(`SELECT COALESCE(quarantine_reason, '') FROM artifact_status WHERE artifact_id = 'pypi:evil:0.1.0'`).Scan(&quarantineReason))
+	assert.Empty(t, quarantineReason, "quarantine_reason should be cleared after release")
+
+	var rescanDueAt *string
+	require.NoError(t, db.QueryRow(`SELECT rescan_due_at FROM artifact_status WHERE artifact_id = 'pypi:evil:0.1.0'`).Scan(&rescanDueAt))
+	assert.Nil(t, rescanDueAt, "rescan_due_at should be NULL after release to prevent immediate re-quarantine")
 
 	// Verify release audit log entry
 	var releaseCount int

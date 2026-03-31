@@ -56,6 +56,9 @@ export default function Artifacts() {
   const releaseMutation = useMutation({
     mutationFn: (id: string) => artifactsApi.release(id),
     onSuccess: () => {
+      if (selected) {
+        setSelected({ ...selected, status: { ...selected.status, status: 'CLEAN', quarantine_reason: '' } })
+      }
       void qc.invalidateQueries({ queryKey: ['artifacts'] })
       void qc.invalidateQueries({ queryKey: ['artifact-detail', selected?.id] })
     },
