@@ -11,12 +11,40 @@ const verdictConfig = {
   MALICIOUS: { label: 'Malicious', icon: XCircle, color: 'text-red-600', bg: 'bg-red-50 border-red-200' },
 }
 
+type FindingValue = {
+  severity?: string
+  category?: string
+  description?: string
+  location?: string
+  IoCs?: string[]
+  iocs?: string[]
+}
+
+function formatFinding(finding: FindingValue): string {
+  const parts = [finding.category, finding.severity, finding.description, finding.location ? `at ${finding.location}` : undefined]
+    .filter(Boolean)
+
+  const iocs = finding.IoCs ?? finding.iocs
+  if (Array.isArray(iocs) && iocs.length > 0) {
+    parts.push(`IoCs: ${iocs.join(', ')}`)
+  }
+
+  if (parts.length > 0) return parts.join(' | ')
+  return JSON.stringify(finding)
+}
+
 function parseFindings(json: string): string[] {
   try {
     const parsed = JSON.parse(json)
-    if (Array.isArray(parsed)) return parsed.map((f) => String(f))
+    if (Array.isArray(parsed)) {
+      return parsed.map((f) => {
+        if (typeof f === 'string') return f
+        if (typeof f === 'object' && f !== null) return formatFinding(f as FindingValue)
+        return String(f)
+      })
+    }
     if (typeof parsed === 'object' && parsed !== null) {
-      return Object.entries(parsed).map(([k, v]) => `${k}: ${v}`)
+      return [formatFinding(parsed as FindingValue)]
     }
     return [String(parsed)]
   } catch {
