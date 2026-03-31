@@ -120,6 +120,16 @@ export interface APIKey {
   last_used_at?: string
 }
 
+export interface PublicURLs {
+  pypi?: string
+  npm?: string
+  nuget?: string
+  docker?: string
+  maven?: string
+  rubygems?: string
+  gomod?: string
+}
+
 export interface APIKeyCreateResponse {
   id: number
   name: string

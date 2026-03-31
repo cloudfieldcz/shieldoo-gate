@@ -24,6 +24,19 @@ type Config struct {
 	Alerts     AlertsConfig     `mapstructure:"alerts"`
 	Auth       AuthConfig       `mapstructure:"auth"`
 	ProxyAuth  ProxyAuthConfig  `mapstructure:"proxy_auth"`
+	PublicURLs PublicURLsConfig `mapstructure:"public_urls"`
+}
+
+// PublicURLsConfig holds the public-facing URLs for each ecosystem proxy.
+// When set, the admin UI displays these instead of <host>:port placeholders.
+type PublicURLsConfig struct {
+	PyPI     string `mapstructure:"pypi"     json:"pypi,omitempty"`
+	NPM      string `mapstructure:"npm"      json:"npm,omitempty"`
+	NuGet    string `mapstructure:"nuget"    json:"nuget,omitempty"`
+	Docker   string `mapstructure:"docker"   json:"docker,omitempty"`
+	Maven    string `mapstructure:"maven"    json:"maven,omitempty"`
+	RubyGems string `mapstructure:"rubygems" json:"rubygems,omitempty"`
+	GoMod    string `mapstructure:"gomod"    json:"gomod,omitempty"`
 }
 
 // ProxyAuthConfig holds API key authentication configuration for proxy endpoints.

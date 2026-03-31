@@ -259,6 +259,7 @@ func main() {
 	// Init admin API server
 	apiServer := api.NewServer(db, cacheStore, scanEngine, policyEngine)
 	apiServer.SetDockerConfig(cfg.Upstreams.Docker)
+	apiServer.SetPublicURLs(cfg.PublicURLs)
 
 	// Init OIDC authentication (if enabled).
 	if cfg.Auth.Enabled {

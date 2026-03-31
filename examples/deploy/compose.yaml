@@ -72,6 +72,13 @@ services:
     environment:
       SGW_SCANNERS_GUARDDOG_BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
       SGW_DATABASE_POSTGRES_DSN: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
+      SGW_PUBLIC_URLS_PYPI: "https://pypi.${SGW_DOMAIN}"
+      SGW_PUBLIC_URLS_NPM: "https://npm.${SGW_DOMAIN}"
+      SGW_PUBLIC_URLS_NUGET: "https://nuget.${SGW_DOMAIN}"
+      SGW_PUBLIC_URLS_DOCKER: "https://cr.${SGW_DOMAIN}"
+      SGW_PUBLIC_URLS_MAVEN: "https://maven.${SGW_DOMAIN}"
+      SGW_PUBLIC_URLS_RUBYGEMS: "https://gems.${SGW_DOMAIN}"
+      SGW_PUBLIC_URLS_GOMOD: "https://go.${SGW_DOMAIN}"
     labels:
       # Shared middleware — forward headers for reverse proxy awareness
       - traefik.http.middlewares.sgw-headers.headers.customrequestheaders.X-Forwarded-Proto=https

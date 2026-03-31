@@ -32,6 +32,7 @@ type Server struct {
 	authHandlers     *auth.AuthHandlers
 	authEnabled      bool
 	proxyAuthEnabled bool
+	publicURLs       config.PublicURLsConfig
 }
 
 // NewServer creates a new Server with the given dependencies.
@@ -57,6 +58,11 @@ func (s *Server) SetAuth(oidcMw *auth.OIDCMiddleware, authHandlers *auth.AuthHan
 // are registered only when both OIDC auth and proxy auth are enabled.
 func (s *Server) SetProxyAuth(proxyAuthEnabled, authEnabled bool) {
 	s.proxyAuthEnabled = proxyAuthEnabled && authEnabled
+}
+
+// SetPublicURLs configures the public-facing URLs for each ecosystem proxy.
+func (s *Server) SetPublicURLs(cfg config.PublicURLsConfig) {
+	s.publicURLs = cfg
 }
 
 // SetDockerConfig sets the Docker upstream configuration for the registries endpoint.
@@ -133,6 +139,9 @@ func (s *Server) Routes() chi.Router {
 			r.Delete("/docker/repositories/{id}/tags/{tag}", s.handleDeleteDockerTag)
 			r.Post("/docker/sync/{id}", s.handleDockerSync)
 			r.Get("/docker/registries", s.handleListDockerRegistries)
+
+			// Public URLs for usage instructions
+			r.Get("/public-urls", s.handlePublicURLs)
 
 			// API key management (only when auth + proxy_auth are both enabled)
 			if s.proxyAuthEnabled {

@@ -384,6 +384,34 @@ ingress:
 helm install shieldoo-gate ./helm/shieldoo-gate/ -f values-ingress.yaml
 ```
 
+When running behind a reverse proxy (or Kubernetes Ingress) with dedicated hostnames per ecosystem, configure the `public_urls` section so the admin UI displays the correct URLs on the Usage/Profile page instead of generic `<host>:port` placeholders:
+
+```yaml
+# config.yaml (or via environment variables)
+public_urls:
+  pypi: "https://pypi.gate.example.com"
+  npm: "https://npm.gate.example.com"
+  nuget: "https://nuget.gate.example.com"
+  docker: "https://cr.gate.example.com"
+  maven: "https://maven.gate.example.com"
+  rubygems: "https://gems.gate.example.com"
+  gomod: "https://go.gate.example.com"
+```
+
+Or via environment variables in your Deployment/docker-compose override:
+
+```bash
+SGW_PUBLIC_URLS_PYPI=https://pypi.gate.example.com
+SGW_PUBLIC_URLS_NPM=https://npm.gate.example.com
+SGW_PUBLIC_URLS_NUGET=https://nuget.gate.example.com
+SGW_PUBLIC_URLS_DOCKER=https://cr.gate.example.com
+SGW_PUBLIC_URLS_MAVEN=https://maven.gate.example.com
+SGW_PUBLIC_URLS_RUBYGEMS=https://gems.gate.example.com
+SGW_PUBLIC_URLS_GOMOD=https://go.gate.example.com
+```
+
+The configured URLs are available to the UI via `GET /api/v1/public-urls`. When a URL is empty, the UI falls back to the default `<host>:port` format.
+
 ### Secret Management
 
 The chart supports two approaches for managing secrets:

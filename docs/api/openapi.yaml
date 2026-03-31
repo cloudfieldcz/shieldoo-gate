@@ -32,6 +32,8 @@ tags:
     description: API key management for proxy authentication
   - name: auth
     description: OIDC authentication flow
+  - name: config
+    description: Runtime configuration endpoints
   - name: metrics
     description: Prometheus metrics
 
@@ -575,6 +577,24 @@ paths:
             text/plain:
               schema:
                 type: string
+
+  /api/v1/public-urls:
+    get:
+      summary: Get configured public URLs for ecosystem proxies
+      operationId: getPublicURLs
+      tags: [config]
+      description: |
+        Returns the public-facing URLs configured in the `public_urls` config section.
+        The admin UI uses these to display correct proxy URLs on the Usage/Profile page.
+        Empty strings indicate no public URL is configured for that ecosystem (the UI
+        falls back to `<host>:port` format).
+      responses:
+        "200":
+          description: Public URLs for each ecosystem
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicURLs"
 
   /api/v1/api-keys:
     post:
@@ -1299,6 +1319,32 @@ components:
           format: email
         name:
           type: string
+
+    PublicURLs:
+      type: object
+      description: Public-facing URLs for each ecosystem proxy
+      properties:
+        pypi:
+          type: string
+          example: "https://pypi.gate.example.com"
+        npm:
+          type: string
+          example: "https://npm.gate.example.com"
+        nuget:
+          type: string
+          example: "https://nuget.gate.example.com"
+        docker:
+          type: string
+          example: "https://cr.gate.example.com"
+        maven:
+          type: string
+          example: "https://maven.gate.example.com"
+        rubygems:
+          type: string
+          example: "https://gems.gate.example.com"
+        gomod:
+          type: string
+          example: "https://go.gate.example.com"
 
     ErrorResponse:
       type: object

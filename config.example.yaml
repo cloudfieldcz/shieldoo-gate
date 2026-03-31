@@ -120,6 +120,18 @@ rescan:
   batch_size: 100                  # Max artifacts per cycle
   max_concurrent: 5                # Max parallel scans
 
+# Public-facing URLs for each ecosystem proxy, displayed in the admin UI
+# usage instructions. When empty, the UI shows generic <host>:port placeholders.
+# Can be overridden via env vars: SGW_PUBLIC_URLS_PYPI, SGW_PUBLIC_URLS_NPM, etc.
+public_urls:
+  pypi: ""                             # e.g. "https://pypi.gate.example.com"
+  npm: ""                              # e.g. "https://npm.gate.example.com"
+  nuget: ""                            # e.g. "https://nuget.gate.example.com"
+  docker: ""                           # e.g. "https://cr.gate.example.com"
+  maven: ""                            # e.g. "https://maven.gate.example.com"
+  rubygems: ""                         # e.g. "https://gems.gate.example.com"
+  gomod: ""                            # e.g. "https://go.gate.example.com"
+
 log:
   level: "info"
   format: "json"

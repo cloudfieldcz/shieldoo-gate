@@ -6,6 +6,7 @@ import type {
   PolicyOverride,
   StatsSummary,
   HealthStatus,
+  PublicURLs,
   PaginatedResponse,
   DockerRepository,
   DockerTag,
@@ -93,6 +94,10 @@ export const overridesApi = {
 
 export const healthApi = {
   check: () => api.get<HealthStatus>('/health').then((r) => r.data),
+}
+
+export const configApi = {
+  publicURLs: () => api.get<PublicURLs>('/public-urls').then((r) => r.data),
 }
 
 export const dockerApi = {

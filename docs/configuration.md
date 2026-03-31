@@ -211,6 +211,20 @@ alerts:
     batch_interval: "30s"                        # Accumulate events before sending digest
     on: ["BLOCKED", "QUARANTINED"]               # Event filter
 
+# ─── Public URLs ──────────────────────────────────────────────────
+# Public-facing URLs for each ecosystem proxy. Displayed in the admin
+# UI's Usage/Profile page instead of generic <host>:port placeholders.
+# Useful when running behind a reverse proxy with dedicated hostnames.
+# When empty (default), the UI falls back to <host>:port style.
+public_urls:
+  pypi: ""                         # e.g. "https://pypi.gate.example.com"
+  npm: ""                          # e.g. "https://npm.gate.example.com"
+  nuget: ""                        # e.g. "https://nuget.gate.example.com"
+  docker: ""                       # e.g. "https://cr.gate.example.com"
+  maven: ""                        # e.g. "https://maven.gate.example.com"
+  rubygems: ""                     # e.g. "https://gems.gate.example.com"
+  gomod: ""                        # e.g. "https://go.gate.example.com"
+
 # ─── Proxy Authentication (v1.1) ─────────────────────────────────
 # API key authentication for proxy endpoints (pip, npm, docker, etc.).
 # When disabled (default), proxy endpoints are open — protected by
@@ -273,6 +287,13 @@ Every config key can be overridden via environment variables using the `SGW_` pr
 | `auth.client_id` | `SGW_AUTH_CLIENT_ID` | `SGW_AUTH_CLIENT_ID=xxx.apps.googleusercontent.com` |
 | `auth.client_secret_env` | `SGW_AUTH_CLIENT_SECRET_ENV` | `SGW_AUTH_CLIENT_SECRET_ENV=SGW_OIDC_CLIENT_SECRET` |
 | `auth.redirect_url` | `SGW_AUTH_REDIRECT_URL` | `SGW_AUTH_REDIRECT_URL=https://gate.example.com:8080/auth/callback` |
+| `public_urls.pypi` | `SGW_PUBLIC_URLS_PYPI` | `SGW_PUBLIC_URLS_PYPI=https://pypi.gate.example.com` |
+| `public_urls.npm` | `SGW_PUBLIC_URLS_NPM` | `SGW_PUBLIC_URLS_NPM=https://npm.gate.example.com` |
+| `public_urls.nuget` | `SGW_PUBLIC_URLS_NUGET` | `SGW_PUBLIC_URLS_NUGET=https://nuget.gate.example.com` |
+| `public_urls.docker` | `SGW_PUBLIC_URLS_DOCKER` | `SGW_PUBLIC_URLS_DOCKER=https://cr.gate.example.com` |
+| `public_urls.maven` | `SGW_PUBLIC_URLS_MAVEN` | `SGW_PUBLIC_URLS_MAVEN=https://maven.gate.example.com` |
+| `public_urls.rubygems` | `SGW_PUBLIC_URLS_RUBYGEMS` | `SGW_PUBLIC_URLS_RUBYGEMS=https://gems.gate.example.com` |
+| `public_urls.gomod` | `SGW_PUBLIC_URLS_GOMOD` | `SGW_PUBLIC_URLS_GOMOD=https://go.gate.example.com` |
 | `proxy_auth.enabled` | `SGW_PROXY_AUTH_ENABLED` | `SGW_PROXY_AUTH_ENABLED=true` |
 | `proxy_auth.global_token_env` | `SGW_PROXY_AUTH_GLOBAL_TOKEN_ENV` | `SGW_PROXY_AUTH_GLOBAL_TOKEN_ENV=MY_TOKEN` |
 | `alerts.email.host` | `SGW_ALERTS_EMAIL_HOST` | `SGW_ALERTS_EMAIL_HOST=smtp.example.com` |
@@ -314,6 +335,7 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 | `RescanConfig` | `rescan` | `Enabled`, `Interval`, `BatchSize`, `MaxConcurrent` |
 | `LogConfig` | `log` | `Level`, `Format`, `File` |
 | `AuthConfig` | `auth` | `Enabled`, `IssuerURL`, `ClientID`, `ClientSecretEnv`, `RedirectURL`, `Scopes` |
+| `PublicURLsConfig` | `public_urls` | `PyPI`, `NPM`, `NuGet`, `Docker`, `Maven`, `RubyGems`, `GoMod` |
 | `ProxyAuthConfig` | `proxy_auth` | `Enabled`, `GlobalTokenEnv` |
 | `AlertsConfig` | `alerts` | `Webhook`, `Slack`, `Email` |
 | `WebhookAlertConfig` | `alerts.webhook` | `Enabled`, `URL`, `SecretEnv`, `AllowInsecure`, `On` |

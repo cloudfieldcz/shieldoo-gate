@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { userApi, apiKeysApi } from '../api/client'
+import { userApi, apiKeysApi, configApi } from '../api/client'
 import { Key, Plus, Copy, Check, Trash2, AlertTriangle } from 'lucide-react'
-import type { APIKey } from '../api/types'
+import type { APIKey, PublicURLs } from '../api/types'
 
 export default function Profile() {
   const queryClient = useQueryClient()
@@ -22,6 +22,12 @@ export default function Profile() {
       if ((error as { response?: { status: number } })?.response?.status === 404) return false
       return count < 2
     },
+  })
+
+  const { data: publicURLs } = useQuery({
+    queryKey: ['public-urls'],
+    queryFn: configApi.publicURLs,
+    staleTime: Infinity,
   })
 
   const apiKeysAvailable = !keysQuery.isError || (keysQuery.error as { response?: { status: number } })?.response?.status !== 404
@@ -65,7 +71,7 @@ export default function Profile() {
       )}
 
       {/* Usage instructions */}
-      {apiKeysAvailable && <UsageInstructions />}
+      {apiKeysAvailable && <UsageInstructions urls={publicURLs} />}
     </div>
   )
 }
@@ -318,7 +324,20 @@ function KeysTable({
 
 // --- Usage Instructions ---
 
-function UsageInstructions() {
+function UsageInstructions({ urls }: { urls?: PublicURLs }) {
+  const pypi = urls?.pypi || 'http://<host>:5000'
+  const npm = urls?.npm || '<host>:4873'
+  const docker = urls?.docker || '<host>:5002'
+  const nuget = urls?.nuget || 'http://<host>:5001'
+  const gomod = urls?.gomod || 'http://<host>:8087'
+  const rubygems = urls?.rubygems || 'http://<host>:8086'
+  const maven = urls?.maven || 'http://<host>:8085'
+
+  // Strip protocol for npm/docker where needed
+  const npmHost = npm.replace(/^https?:\/\//, '')
+  const dockerHost = docker.replace(/^https?:\/\//, '')
+  const scheme = pypi.startsWith('https') ? 'https' : 'http'
+
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-3">
       <h2 className="text-base font-semibold text-gray-900">Usage</h2>
@@ -330,22 +349,25 @@ function UsageInstructions() {
 {`export SGW_TOKEN="your-token-here"
 
 # PyPI
-pip install --index-url http://\${USER}:\${SGW_TOKEN}@<host>:5010/simple/ <package>
+pip install --index-url ${scheme}://\${USER}:\${SGW_TOKEN}@${pypi.replace(/^https?:\/\//, '')}/simple/ <package>
 
 # npm
-npm config set //<host>:4873/:_authToken \${SGW_TOKEN}
+npm config set //${npmHost}/:_authToken \${SGW_TOKEN}
 
 # Docker
-echo \${SGW_TOKEN} | docker login <host>:5002 -u \${USER} --password-stdin
+echo \${SGW_TOKEN} | docker login ${dockerHost} -u \${USER} --password-stdin
 
 # NuGet
-dotnet nuget add source http://<host>:5001/v3/index.json -n shieldoo -u \${USER} -p \${SGW_TOKEN}
+dotnet nuget add source ${nuget}/v3/index.json -n shieldoo -u \${USER} -p \${SGW_TOKEN}
 
 # Go modules
-GOPROXY=http://\${USER}:\${SGW_TOKEN}@<host>:8087 go get <module>
+GOPROXY=${gomod.replace(/^https?:\/\//, `${scheme}://\${USER}:\${SGW_TOKEN}@`)} go get <module>
+
+# Maven
+mvn -DrepositoryId=shieldoo -Durl=${maven}/repository/
 
 # RubyGems
-gem sources --add http://\${USER}:\${SGW_TOKEN}@<host>:8086/`}
+gem sources --add ${rubygems.replace(/^https?:\/\//, `${scheme}://\${USER}:\${SGW_TOKEN}@`)}/`}
       </pre>
     </div>
   )
