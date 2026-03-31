@@ -68,3 +68,4 @@ examples/dotnet-json/obj/
 helm/charts/
 
 config.yaml
+.deploy/
