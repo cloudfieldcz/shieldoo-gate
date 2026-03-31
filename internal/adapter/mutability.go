@@ -30,6 +30,22 @@ var headCache sync.Map
 
 const headCacheTTL = 60 * time.Second
 
+func init() {
+	go func() {
+		ticker := time.NewTicker(headCacheTTL)
+		defer ticker.Stop()
+		for range ticker.C {
+			now := time.Now()
+			headCache.Range(func(key, value any) bool {
+				if e := value.(*headCacheEntry); now.After(e.expireAt) {
+					headCache.Delete(key)
+				}
+				return true
+			})
+		}
+	}()
+}
+
 // headCheckTimeout is the maximum time for a single upstream HEAD/metadata check.
 const headCheckTimeout = 3 * time.Second
 

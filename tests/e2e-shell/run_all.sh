@@ -72,6 +72,36 @@ if [ "$ELAPSED" -ge "$MAX_WAIT" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Backend verification (pass 2/3: ensure production-like backends are used)
+# ---------------------------------------------------------------------------
+if [ "${SGW_CACHE_BACKEND:-}" = "s3" ] || [ "${SGW_CACHE_BACKEND:-}" = "azure_blob" ]; then
+    log_section "Backend Verification (${SGW_CACHE_BACKEND})"
+    GATE_LOG="/var/log/shieldoo-gate/gate.log"
+    if [ -f "$GATE_LOG" ]; then
+        if [ "${SGW_CACHE_BACKEND}" = "s3" ]; then
+            if grep -q "s3 cache store initialized" "$GATE_LOG"; then
+                log_pass "S3 cache backend active (MinIO)"
+            else
+                log_fail "S3 cache backend NOT detected in logs — may have fallen back to local"
+            fi
+        elif [ "${SGW_CACHE_BACKEND}" = "azure_blob" ]; then
+            if grep -q "azure blob cache store initialized" "$GATE_LOG"; then
+                log_pass "Azure Blob cache backend active (Azurite)"
+            else
+                log_fail "Azure Blob cache backend NOT detected in logs — may have fallen back to local"
+            fi
+        fi
+        if grep -q "postgres connection pool configured" "$GATE_LOG"; then
+            log_pass "PostgreSQL backend active"
+        else
+            log_fail "PostgreSQL backend NOT detected in logs — may have fallen back to SQLite"
+        fi
+    else
+        log_info "Gate log not available — skipping backend verification"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # Run all test suites
 # ---------------------------------------------------------------------------
 test_pypi

@@ -7,6 +7,10 @@ import (
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 )
 
+// repoColumns is the explicit column list for docker_repositories queries.
+// Keep in sync with the DockerRepository struct fields.
+const repoColumns = "id, registry, name, is_internal, created_at, last_synced_at, sync_enabled"
+
 // DockerRepository represents a row in docker_repositories.
 type DockerRepository struct {
 	ID           int64      `db:"id" json:"id"`
@@ -33,7 +37,7 @@ func EnsureRepository(db *config.GateDB, registry, name string, isInternal bool)
 
 	// Always SELECT — either we just inserted or the row already existed.
 	var repo DockerRepository
-	err := db.Get(&repo, "SELECT * FROM docker_repositories WHERE registry = ? AND name = ?", registry, name)
+	err := db.Get(&repo, "SELECT "+repoColumns+" FROM docker_repositories WHERE registry = ? AND name = ?", registry, name)
 	if err != nil {
 		return nil, fmt.Errorf("docker: querying repository: %w", err)
 	}
@@ -43,7 +47,7 @@ func EnsureRepository(db *config.GateDB, registry, name string, isInternal bool)
 // GetRepositoryByID returns a single repository by its ID.
 func GetRepositoryByID(db *config.GateDB, id int64) (*DockerRepository, error) {
 	var repo DockerRepository
-	err := db.Get(&repo, "SELECT * FROM docker_repositories WHERE id = ?", id)
+	err := db.Get(&repo, "SELECT "+repoColumns+" FROM docker_repositories WHERE id = ?", id)
 	if err != nil {
 		return nil, fmt.Errorf("docker: getting repository %d: %w", id, err)
 	}
@@ -54,7 +58,7 @@ func GetRepositoryByID(db *config.GateDB, id int64) (*DockerRepository, error) {
 func ListRepositories(db *config.GateDB, registry string) ([]DockerRepository, error) {
 	var repos []DockerRepository
 	if registry != "" {
-		return repos, db.Select(&repos, "SELECT * FROM docker_repositories WHERE registry = ? ORDER BY name", registry)
+		return repos, db.Select(&repos, "SELECT "+repoColumns+" FROM docker_repositories WHERE registry = ? ORDER BY name", registry)
 	}
-	return repos, db.Select(&repos, "SELECT * FROM docker_repositories ORDER BY registry, name")
+	return repos, db.Select(&repos, "SELECT "+repoColumns+" FROM docker_repositories ORDER BY registry, name")
 }

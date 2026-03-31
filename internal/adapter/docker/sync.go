@@ -430,12 +430,12 @@ func (s *SyncService) persistArtifact(
 func ListSyncableRepos(db *config.GateDB) ([]DockerRepository, error) {
 	var repos []DockerRepository
 	return repos, db.Select(&repos,
-		"SELECT * FROM docker_repositories WHERE sync_enabled = 1 AND is_internal = 0 ORDER BY last_synced_at ASC")
+		"SELECT "+repoColumns+" FROM docker_repositories WHERE sync_enabled = TRUE AND is_internal = FALSE ORDER BY last_synced_at ASC")
 }
 
 // DisableSync sets sync_enabled=false for a repository.
 func DisableSync(db *config.GateDB, repoID int64) {
-	_, err := db.Exec("UPDATE docker_repositories SET sync_enabled = 0 WHERE id = ?", repoID)
+	_, err := db.Exec("UPDATE docker_repositories SET sync_enabled = FALSE WHERE id = ?", repoID)
 	if err != nil {
 		log.Error().Err(err).Int64("repo_id", repoID).Msg("docker sync: failed to disable sync")
 	}

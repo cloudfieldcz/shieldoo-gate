@@ -6,8 +6,8 @@
 # 1-3 minutes per image on first run due to Trivy vulnerability DB download (~40MB).
 # Subsequent runs with cached Trivy DB are much faster (~10-30s per image).
 #
-# Test images (chosen for minimal size):
-#   Docker Hub:  hello-world (~13kB)
+# Test images (chosen for minimal size and no rate limits):
+#   ghcr.io:     ghcr.io/jitesoft/alpine (~3MB, no rate limit)
 #   gcr.io:      gcr.io/distroless/static (~2MB)
 
 # _check_docker_pull_result — helper for evaluating pull results with quarantine awareness.
@@ -151,22 +151,22 @@ test_docker_registry() {
 
     log_info "Docker Registry: starting scan pipeline tests (may take several minutes on first run)..."
 
-    # Pull hello-world (~13kB) — the smallest possible image
-    log_info "Docker Registry: pulling hello-world (this triggers Trivy DB download on first run)..."
-    manifest_output=$(_timed_crane manifest "${E2E_DOCKER_REGISTRY_HOST}/library/hello-world:latest" --insecure 2>&1)
-    manifest_exit=$?
+    # Pull ghcr.io/jitesoft/alpine (~3MB) — public, no rate limit, triggers Trivy DB download on first run
+    log_info "Docker Registry: pulling ghcr.io/jitesoft/alpine (this triggers Trivy DB download on first run)..."
+    manifest_output=""; manifest_exit=0
+    manifest_output=$(_timed_crane manifest "${E2E_DOCKER_REGISTRY_HOST}/ghcr.io/jitesoft/alpine:latest" --insecure 2>&1) || manifest_exit=$?
     _check_docker_pull_result \
-        "Docker Registry: hello-world pull + scan from Docker Hub" \
+        "Docker Registry: ghcr.io/jitesoft/alpine pull + scan via multi-upstream" \
         "$manifest_output" "$manifest_exit" "skip" || true
 
-    # If hello-world succeeded, Trivy DB is now cached — subsequent pulls will be faster.
+    # If alpine succeeded, Trivy DB is now cached — subsequent pulls will be faster.
     if [ "$manifest_exit" -eq 0 ]; then
         # X-Shieldoo-Scanned header on cached manifest (instant — already cached)
         local scanned_header
         scanned_header=$(curl -s -D - -o /dev/null \
             "${E2E_CURL_AUTH[@]}" \
             -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-            "${E2E_DOCKER_URL}/v2/library/hello-world/manifests/latest" 2>/dev/null \
+            "${E2E_DOCKER_URL}/v2/ghcr.io/jitesoft/alpine/manifests/latest" 2>/dev/null \
             | grep -i "X-Shieldoo-Scanned")
         if grep -qi "true" <<< "$scanned_header"; then
             log_pass "Docker Registry: X-Shieldoo-Scanned: true on cached manifest"
@@ -180,13 +180,13 @@ test_docker_registry() {
             '[.data[] | select(.event_type == "BLOCKED")] | length' 2>/dev/null || echo "0")
         assert_gte "Docker Registry: at least 2 BLOCKED audit entries" 2 "$blocked_events"
     else
-        log_skip "Docker Registry: skipping cached manifest tests (hello-world pull didn't complete)"
+        log_skip "Docker Registry: skipping cached manifest tests (alpine pull didn't complete)"
     fi
 
     # Pull gcr.io/distroless/static (~2MB) — proves multi-upstream routing
     log_info "Docker Registry: pulling gcr.io/distroless/static (multi-upstream routing test)..."
-    manifest_output=$(_timed_crane manifest "${E2E_DOCKER_REGISTRY_HOST}/gcr.io/distroless/static:latest" --insecure 2>&1)
-    manifest_exit=$?
+    manifest_output=""; manifest_exit=0
+    manifest_output=$(_timed_crane manifest "${E2E_DOCKER_REGISTRY_HOST}/gcr.io/distroless/static:latest" --insecure 2>&1) || manifest_exit=$?
     _check_docker_pull_result \
         "Docker Registry: gcr.io/distroless/static via multi-upstream routing" \
         "$manifest_output" "$manifest_exit" "skip" || true
@@ -197,7 +197,7 @@ test_docker_registry() {
 
     log_info "Docker Registry: testing push to internal namespace..."
     local push_output
-    if push_output=$(_timed_crane copy "hello-world:latest" "${E2E_DOCKER_REGISTRY_HOST}/myteam/testapp:v1.0" --insecure 2>&1); then
+    if push_output=$(_timed_crane copy "${E2E_DOCKER_REGISTRY_HOST}/ghcr.io/jitesoft/alpine:latest" "${E2E_DOCKER_REGISTRY_HOST}/myteam/testapp:v1.0" --insecure 2>&1); then
         log_pass "Docker Registry: push to internal namespace succeeded"
 
         # Pull back the pushed image
@@ -218,7 +218,7 @@ test_docker_registry() {
     # Push to upstream namespace must be rejected (instant — no scan)
     log_info "Docker Registry: testing push rejection for upstream namespaces..."
     local push_upstream_output
-    if push_upstream_output=$(_timed_crane copy "hello-world:latest" "${E2E_DOCKER_REGISTRY_HOST}/gcr.io/evil/image:v1.0" --insecure 2>&1); then
+    if push_upstream_output=$(_timed_crane copy "${E2E_DOCKER_REGISTRY_HOST}/ghcr.io/jitesoft/alpine:latest" "${E2E_DOCKER_REGISTRY_HOST}/gcr.io/evil/image:v1.0" --insecure 2>&1); then
         log_fail "Docker Registry: push to gcr.io namespace should have been rejected"
     else
         log_pass "Docker Registry: push to upstream namespace (gcr.io) correctly rejected"

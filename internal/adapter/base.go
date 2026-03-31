@@ -85,7 +85,13 @@ func (al *artifactLocker) Lock(artifactID string) func() {
 	val, _ := al.locks.LoadOrStore(artifactID, &sync.Mutex{})
 	mu := val.(*sync.Mutex)
 	mu.Lock()
-	return func() { mu.Unlock() }
+	return func() {
+		mu.Unlock()
+		// Best-effort cleanup: try to remove the entry. If another goroutine
+		// stored a new mutex concurrently via LoadOrStore, this deletes the
+		// stale entry and the new one remains (no data race — sync.Map is safe).
+		al.locks.CompareAndDelete(artifactID, val)
+	}
 }
 
 // validNameRe matches safe package name characters — no path traversal or shell metacharacters.
@@ -185,14 +191,21 @@ func GetArtifactStatus(db *config.GateDB, artifactID string) (*model.ArtifactSta
 }
 
 // InsertScanResults persists a slice of scanner.ScanResult rows for the given artifactID.
+// All rows are inserted in a single transaction to reduce round-trips.
 func InsertScanResults(db *config.GateDB, artifactID string, results []scanner.ScanResult) error {
+	tx, err := db.Beginx()
+	if err != nil {
+		return fmt.Errorf("adapter: beginning scan results transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
 	for _, r := range results {
 		findingsJSON, err := json.Marshal(r.Findings)
 		if err != nil {
 			return fmt.Errorf("adapter: marshalling findings for %s: %w", artifactID, err)
 		}
 		scannerVersion := ""
-		_, err = db.Exec(
+		_, err = tx.Exec(
 			`INSERT INTO scan_results (artifact_id, scanned_at, scanner_name, scanner_version, verdict, confidence, findings_json, duration_ms)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			artifactID,
@@ -207,6 +220,10 @@ func InsertScanResults(db *config.GateDB, artifactID string, results []scanner.S
 		if err != nil {
 			return fmt.Errorf("adapter: inserting scan result for %s/%s: %w", artifactID, r.ScannerID, err)
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("adapter: committing scan results for %s: %w", artifactID, err)
 	}
 	return nil
 }

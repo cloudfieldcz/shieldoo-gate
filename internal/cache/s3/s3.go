@@ -283,31 +283,33 @@ func (s *S3CacheStore) Get(ctx context.Context, artifactID string) (string, erro
 }
 
 // Delete removes the artifact object(s) from S3.
+// Uses pagination to handle artifacts with >1000 objects.
 func (s *S3CacheStore) Delete(ctx context.Context, artifactID string) error {
 	prefix, err := s.objectKeyPrefixFromID(artifactID)
 	if err != nil {
 		return err
 	}
 
-	// List all objects under the prefix and delete them.
-	listOut, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(s.bucket),
 		Prefix: aws.String(prefix),
 	})
-	if err != nil {
-		return fmt.Errorf("s3 cache: listing objects for delete %s: %w", artifactID, err)
-	}
 
-	for _, obj := range listOut.Contents {
-		_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
-			Bucket: aws.String(s.bucket),
-			Key:    obj.Key,
-		})
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			return fmt.Errorf("s3 cache: deleting s3://%s/%s: %w", s.bucket, aws.ToString(obj.Key), err)
+			return fmt.Errorf("s3 cache: listing objects for delete %s: %w", artifactID, err)
+		}
+		for _, obj := range page.Contents {
+			_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+				Bucket: aws.String(s.bucket),
+				Key:    obj.Key,
+			})
+			if err != nil {
+				return fmt.Errorf("s3 cache: deleting s3://%s/%s: %w", s.bucket, aws.ToString(obj.Key), err)
+			}
 		}
 	}
-
 	return nil
 }
 

@@ -47,6 +47,21 @@ cache:
   local:
     path: "/var/cache/shieldoo-gate"
     max_size_gb: 50
+  # S3 keys present so Viper can bind SGW_CACHE_S3_* env overrides for pass 2.
+  s3:
+    bucket: ""
+    region: ""
+    endpoint: ""
+    prefix: ""
+    force_path_style: false
+    access_key_env: ""
+    secret_key_env: ""
+  # Azure Blob keys present so Viper can bind SGW_CACHE_AZURE_BLOB_* env overrides for pass 3.
+  azure_blob:
+    account_name: ""
+    container_name: ""
+    connection_string_env: ""
+    prefix: ""
   ttl:
     pypi: "168h"
     npm: "168h"
@@ -58,6 +73,12 @@ database:
   backend: "sqlite"
   sqlite:
     path: "/var/lib/shieldoo-gate/gate.db"
+  # Postgres keys present so Viper can bind SGW_DATABASE_POSTGRES_* env overrides.
+  postgres:
+    dsn: ""
+    max_open_conns: 25
+    max_idle_conns: 5
+    conn_max_lifetime: "5m"
 
 scanners:
   parallel: true

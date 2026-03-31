@@ -1,0 +1,63 @@
+# docker-compose.e2e.azurite.yml — Override for E2E pass 3 (auth + PostgreSQL + Azurite)
+#
+# Usage: docker compose -f docker-compose.e2e.yml -f docker-compose.e2e.azurite.yml up
+#
+# SECURITY: All credentials below are TEST-ONLY for ephemeral E2E containers.
+# NEVER reuse these in production.
+#
+# Azurite is the official Microsoft Azure Storage emulator.
+# Connection string uses the well-known Azurite dev credentials.
+# Azurite auto-creates containers on first write, so no init container needed.
+
+services:
+  postgres:
+    image: postgres:17.4-alpine
+    environment:
+      POSTGRES_DB: shieldoo_e2e
+      POSTGRES_USER: shieldoo
+      POSTGRES_PASSWORD: shieldoo_e2e_pass
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shieldoo -d shieldoo_e2e"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    networks:
+      - internal-net
+    restart: "no"
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.34.0
+    # Only start Blob service (--blobHost), skip Queue and Table.
+    command: azurite-blob --blobHost 0.0.0.0 --blobPort 10000
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "10000"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    networks:
+      - internal-net
+    restart: "no"
+
+  shieldoo-gate:
+    depends_on:
+      scanner-bridge:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      azurite:
+        condition: service_healthy
+    environment:
+      # Database → PostgreSQL
+      SGW_DATABASE_BACKEND: "postgres"
+      SGW_DATABASE_POSTGRES_DSN: "postgres://shieldoo:shieldoo_e2e_pass@postgres:5432/shieldoo_e2e?sslmode=disable&connect_timeout=5"
+      # Cache → Azure Blob (Azurite)
+      SGW_CACHE_BACKEND: "azure_blob"
+      SGW_CACHE_AZURE_BLOB_ACCOUNT_NAME: "devstoreaccount1"
+      SGW_CACHE_AZURE_BLOB_CONTAINER_NAME: "shieldoo-cache"
+      SGW_CACHE_AZURE_BLOB_CONNECTION_STRING_ENV: "AZURITE_CONN_STR"
+      # Well-known Azurite connection string (public, not a real secret)
+      AZURITE_CONN_STR: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1"
+
+  test-runner:
+    environment:
+      SGW_CACHE_BACKEND: "azure_blob"

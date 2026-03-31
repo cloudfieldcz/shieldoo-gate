@@ -85,6 +85,7 @@ Shieldoo Gate Protocol Adapter
 | — | User profile & API key management UI | Done |
 | — | Tag mutability detection | Done |
 | — | Dynamic sandbox (gVisor) | Done |
+| — | E2E PostgreSQL + MinIO testing | Done |
 
 ## Getting Started
 

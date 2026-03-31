@@ -48,7 +48,7 @@ func (e *Engine) hasDBOverride(ctx context.Context, artifact scanner.Artifact) b
 	var count int
 	err := e.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM policy_overrides
-		 WHERE ecosystem = ? AND name = ? AND revoked = 0
+		 WHERE ecosystem = ? AND name = ? AND revoked = FALSE
 		   AND (expires_at IS NULL OR expires_at > ?)
 		   AND (scope = 'package' OR (scope = 'version' AND version = ?))`,
 		string(artifact.Ecosystem), artifact.Name, now, artifact.Version,

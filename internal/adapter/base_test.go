@@ -206,3 +206,65 @@ func TestInsertScanResults_InsertsRows(t *testing.T) {
 	require.NoError(t, db.Get(&count, `SELECT COUNT(*) FROM scan_results WHERE artifact_id = ?`, art.ID()))
 	assert.Equal(t, 1, count)
 }
+
+func TestInsertScanResults_MultipleResults_Transactional(t *testing.T) {
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	art := model.Artifact{
+		Ecosystem:      "pypi",
+		Name:           "flask",
+		Version:        "2.3.0",
+		UpstreamURL:    "https://example.com/flask-2.3.0.tar.gz",
+		SHA256:         "def456",
+		SizeBytes:      54321,
+		CachedAt:       now,
+		LastAccessedAt: now,
+		StoragePath:    "/cache/pypi/flask/2.3.0/flask-2.3.0.tar.gz",
+	}
+	status := model.ArtifactStatus{
+		ArtifactID: art.ID(),
+		Status:     model.StatusClean,
+	}
+	require.NoError(t, adapter.InsertArtifact(db, art, status))
+
+	results := []scanner.ScanResult{
+		{
+			Verdict:    scanner.VerdictClean,
+			Confidence: 0.90,
+			ScannerID:  "trivy",
+			ScannedAt:  now,
+			Duration:   2 * time.Second,
+		},
+		{
+			Verdict:    scanner.VerdictClean,
+			Confidence: 0.85,
+			ScannerID:  "guarddog",
+			ScannedAt:  now,
+			Duration:   3 * time.Second,
+			Findings:   []scanner.Finding{{Category: "test-rule", Severity: scanner.SeverityLow, Description: "test finding"}},
+		},
+	}
+	require.NoError(t, adapter.InsertScanResults(db, art.ID(), results))
+
+	var count int
+	require.NoError(t, db.Get(&count, `SELECT COUNT(*) FROM scan_results WHERE artifact_id = ?`, art.ID()))
+	assert.Equal(t, 2, count)
+
+	// Verify findings JSON was stored correctly for the second result.
+	var findingsJSON string
+	require.NoError(t, db.Get(&findingsJSON,
+		`SELECT findings_json FROM scan_results WHERE artifact_id = ? AND scanner_name = 'guarddog'`, art.ID()))
+	assert.Contains(t, findingsJSON, "test-rule")
+}
+
+func TestInsertScanResults_EmptySlice_NoError(t *testing.T) {
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+
+	// Empty results should succeed (commit an empty transaction).
+	require.NoError(t, adapter.InsertScanResults(db, "pypi:foo:1.0.0", nil))
+}

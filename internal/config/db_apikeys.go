@@ -8,16 +8,13 @@ import (
 
 // CreateAPIKey inserts a new API key record and returns the generated ID.
 func (db *GateDB) CreateAPIKey(keyHash, name, ownerEmail string) (int64, error) {
-	res, err := db.Exec(
-		"INSERT INTO api_keys (key_hash, name, owner_email) VALUES (?, ?, ?)",
+	var id int64
+	err := db.QueryRow(
+		"INSERT INTO api_keys (key_hash, name, owner_email) VALUES (?, ?, ?) RETURNING id",
 		keyHash, name, ownerEmail,
-	)
+	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("db: create api key: %w", err)
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return 0, fmt.Errorf("db: create api key: last insert id: %w", err)
 	}
 	return id, nil
 }
@@ -26,7 +23,7 @@ func (db *GateDB) CreateAPIKey(keyHash, name, ownerEmail string) (int64, error) 
 // Returns nil if not found or disabled.
 func (db *GateDB) GetAPIKeyByHash(keyHash string) (*model.APIKey, error) {
 	var key model.APIKey
-	err := db.Get(&key, "SELECT id, key_hash, name, owner_email, enabled, created_at, last_used_at FROM api_keys WHERE key_hash = ? AND enabled = 1", keyHash)
+	err := db.Get(&key, "SELECT id, key_hash, name, owner_email, enabled, created_at, last_used_at FROM api_keys WHERE key_hash = ? AND enabled = TRUE", keyHash)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +62,7 @@ func (db *GateDB) GetAPIKey(id int64) (*model.APIKey, error) {
 
 // RevokeAPIKey permanently disables an API key by setting enabled=false.
 func (db *GateDB) RevokeAPIKey(id int64) error {
-	res, err := db.Exec("UPDATE api_keys SET enabled = 0 WHERE id = ?", id)
+	res, err := db.Exec("UPDATE api_keys SET enabled = FALSE WHERE id = ?", id)
 	if err != nil {
 		return fmt.Errorf("db: revoke api key: %w", err)
 	}

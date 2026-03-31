@@ -67,9 +67,26 @@ func (db *GateDB) QueryRowContext(ctx context.Context, query string, args ...any
 	return db.DB.QueryRowContext(ctx, db.Rebind(query), args...)
 }
 
+func (db *GateDB) QueryRowxContext(ctx context.Context, query string, args ...any) *sqlx.Row {
+	return db.DB.QueryRowxContext(ctx, db.Rebind(query), args...)
+}
+
+func (db *GateDB) QueryxContext(ctx context.Context, query string, args ...any) (*sqlx.Rows, error) {
+	return db.DB.QueryxContext(ctx, db.Rebind(query), args...)
+}
+
 // Beginx starts a transaction and returns a GateTx with auto-rebind.
 func (db *GateDB) Beginx() (*GateTx, error) {
 	tx, err := db.DB.Beginx()
+	if err != nil {
+		return nil, err
+	}
+	return &GateTx{Tx: tx}, nil
+}
+
+// BeginTxx starts a transaction with context and options, returning a GateTx with auto-rebind.
+func (db *GateDB) BeginTxx(ctx context.Context, opts *sql.TxOptions) (*GateTx, error) {
+	tx, err := db.DB.BeginTxx(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -103,6 +120,22 @@ func (tx *GateTx) Query(query string, args ...any) (*sql.Rows, error) {
 
 func (tx *GateTx) QueryRow(query string, args ...any) *sql.Row {
 	return tx.Tx.QueryRow(tx.Rebind(query), args...)
+}
+
+func (tx *GateTx) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return tx.Tx.QueryRowContext(ctx, tx.Rebind(query), args...)
+}
+
+func (tx *GateTx) QueryRowxContext(ctx context.Context, query string, args ...any) *sqlx.Row {
+	return tx.Tx.QueryRowxContext(ctx, tx.Rebind(query), args...)
+}
+
+func (tx *GateTx) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return tx.Tx.QueryContext(ctx, tx.Rebind(query), args...)
+}
+
+func (tx *GateTx) QueryxContext(ctx context.Context, query string, args ...any) (*sqlx.Rows, error) {
+	return tx.Tx.QueryxContext(ctx, tx.Rebind(query), args...)
 }
 
 // readMigrations reads SQL migration files from the given embed.FS and subdirectory.

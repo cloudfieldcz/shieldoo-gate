@@ -1,9 +1,11 @@
 package config
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 
+	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -236,6 +238,36 @@ func TestReadMigrations_Postgres_ReturnsAllMigrations(t *testing.T) {
 	migrations, err := readMigrations(postgresMigrationFS, "migrations/postgres")
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, len(migrations), 5, "expected at least 5 PostgreSQL migrations")
+}
+
+func TestGateDB_BeginTxx_ReturnsGateTx(t *testing.T) {
+	db := setupTestDB(t)
+	tx, err := db.BeginTxx(context.Background(), nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+
+	_, err = tx.ExecContext(context.Background(),
+		"INSERT INTO api_keys (key_hash, name, owner_email) VALUES (?, ?, ?)",
+		"test_hash", "test", "test@example.com")
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+}
+
+func TestGateTx_QueryRowxContext_Rebinds(t *testing.T) {
+	db := setupTestDB(t)
+	_, err := db.CreateAPIKey("qrxc_hash", "qrxc-key", "test@example.com")
+	require.NoError(t, err)
+
+	tx, err := db.BeginTxx(context.Background(), nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+
+	var key model.APIKey
+	err = tx.QueryRowxContext(context.Background(),
+		"SELECT id, key_hash, name, owner_email, enabled, created_at, last_used_at FROM api_keys WHERE key_hash = ?",
+		"qrxc_hash").StructScan(&key)
+	require.NoError(t, err)
+	assert.Equal(t, "qrxc-key", key.Name)
 }
 
 func TestReadMigrations_SQLiteAndPostgres_SameCount(t *testing.T) {

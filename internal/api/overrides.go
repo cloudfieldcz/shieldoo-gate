@@ -44,7 +44,7 @@ func (s *Server) handleListOverrides(w http.ResponseWriter, r *http.Request) {
 	var total int
 	countQuery := `SELECT COUNT(*) FROM policy_overrides`
 	if activeOnly {
-		countQuery += ` WHERE revoked = 0`
+		countQuery += ` WHERE revoked = FALSE`
 	}
 	if err := s.db.QueryRowContext(r.Context(), countQuery).Scan(&total); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to count overrides")
@@ -55,7 +55,7 @@ func (s *Server) handleListOverrides(w http.ResponseWriter, r *http.Request) {
 	          FROM policy_overrides`
 	var args []any
 	if activeOnly {
-		query += ` WHERE revoked = 0`
+		query += ` WHERE revoked = FALSE`
 	}
 	query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
 	args = append(args, perPage, offset)
@@ -116,16 +116,15 @@ func (s *Server) handleCreateOverride(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	result, err := tx.ExecContext(r.Context(),
+	var overrideID int64
+	err = tx.QueryRowxContext(r.Context(),
 		`INSERT INTO policy_overrides (ecosystem, name, version, scope, reason, created_by, created_at, revoked)
-		 VALUES (?, ?, ?, ?, ?, 'api', ?, 0)`,
-		req.Ecosystem, req.Name, version, req.Scope, req.Reason, now)
+		 VALUES (?, ?, ?, ?, ?, 'api', ?, FALSE) RETURNING id`,
+		req.Ecosystem, req.Name, version, req.Scope, req.Reason, now).Scan(&overrideID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create override")
 		return
 	}
-
-	overrideID, _ := result.LastInsertId()
 
 	// If a matching artifact is quarantined, release it
 	artifactID := fmt.Sprintf("%s:%s:%s", req.Ecosystem, req.Name, req.Version)
@@ -201,7 +200,7 @@ func (s *Server) handleRevokeOverride(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, err = tx.ExecContext(r.Context(),
-		`UPDATE policy_overrides SET revoked = 1, revoked_at = ? WHERE id = ?`,
+		`UPDATE policy_overrides SET revoked = TRUE, revoked_at = ? WHERE id = ?`,
 		now, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to revoke override")
@@ -287,16 +286,15 @@ func (s *Server) handleCreateArtifactOverride(w http.ResponseWriter, r *http.Req
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	result, err := tx.ExecContext(r.Context(),
+	var overrideID int64
+	err = tx.QueryRowxContext(r.Context(),
 		`INSERT INTO policy_overrides (ecosystem, name, version, scope, reason, created_by, created_at, revoked)
-		 VALUES (?, ?, ?, ?, ?, 'api', ?, 0)`,
-		parts[0], parts[1], version, body.Scope, body.Reason, now)
+		 VALUES (?, ?, ?, ?, ?, 'api', ?, FALSE) RETURNING id`,
+		parts[0], parts[1], version, body.Scope, body.Reason, now).Scan(&overrideID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create override")
 		return
 	}
-
-	overrideID, _ := result.LastInsertId()
 
 	// Release artifact from quarantine if applicable
 	_, _ = tx.ExecContext(r.Context(),

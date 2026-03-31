@@ -16,15 +16,30 @@ test-e2e:
 
 test-e2e-containerized:
 	docker compose -f tests/e2e-shell/docker-compose.e2e.yml build
-	@echo "=== E2E Run 1: No authentication ==="
+	@echo "=== E2E Run 1: No authentication (SQLite + local cache) ==="
 	docker compose -f tests/e2e-shell/docker-compose.e2e.yml up \
 		--abort-on-container-exit --exit-code-from test-runner
-	docker compose -f tests/e2e-shell/docker-compose.e2e.yml down
-	@echo "=== E2E Run 2: Proxy authentication enabled ==="
+	docker compose -f tests/e2e-shell/docker-compose.e2e.yml down -v --remove-orphans
+	@echo "=== E2E Run 2: Auth + PostgreSQL + MinIO (S3) ==="
 	SGW_PROXY_AUTH_ENABLED=true SGW_PROXY_TOKEN=$$(openssl rand -hex 16) \
-		docker compose -f tests/e2e-shell/docker-compose.e2e.yml up \
-		--abort-on-container-exit --exit-code-from test-runner
-	docker compose -f tests/e2e-shell/docker-compose.e2e.yml down -v
+		docker compose \
+		-f tests/e2e-shell/docker-compose.e2e.yml \
+		-f tests/e2e-shell/docker-compose.e2e.auth.yml \
+		up --abort-on-container-exit --exit-code-from test-runner
+	docker compose \
+		-f tests/e2e-shell/docker-compose.e2e.yml \
+		-f tests/e2e-shell/docker-compose.e2e.auth.yml \
+		down -v --remove-orphans
+	@echo "=== E2E Run 3: Auth + PostgreSQL + Azurite (Azure Blob) ==="
+	SGW_PROXY_AUTH_ENABLED=true SGW_PROXY_TOKEN=$$(openssl rand -hex 16) \
+		docker compose \
+		-f tests/e2e-shell/docker-compose.e2e.yml \
+		-f tests/e2e-shell/docker-compose.e2e.azurite.yml \
+		up --abort-on-container-exit --exit-code-from test-runner
+	docker compose \
+		-f tests/e2e-shell/docker-compose.e2e.yml \
+		-f tests/e2e-shell/docker-compose.e2e.azurite.yml \
+		down -v --remove-orphans
 
 lint:
 	go vet ./...
