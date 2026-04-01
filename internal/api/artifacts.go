@@ -439,10 +439,10 @@ func (s *Server) handleReleaseArtifact(w http.ResponseWriter, r *http.Request) {
 	id := artifactID(r)
 	now := time.Now().UTC()
 
-	// Parse artifact ID: "ecosystem:name:version"
-	parts := strings.SplitN(id, ":", 3)
-	if len(parts) != 3 {
-		writeError(w, http.StatusBadRequest, "invalid artifact ID format, expected ecosystem:name:version")
+	// Parse artifact ID: "ecosystem:name:version" or "ecosystem:name:version:filename"
+	parts := strings.SplitN(id, ":", 4)
+	if len(parts) < 3 {
+		writeError(w, http.StatusBadRequest, "invalid artifact ID format, expected ecosystem:name:version[:filename]")
 		return
 	}
 
