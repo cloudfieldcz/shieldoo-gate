@@ -59,8 +59,13 @@ export default function ArtifactTable({ artifacts, onRowClick, selectedId }: Art
                   {a.ecosystem}
                 </span>
               </td>
-              <td className="px-4 py-3 text-sm font-medium text-gray-900 max-w-xs truncate">
-                {a.name}
+              <td className="px-4 py-3 text-sm max-w-xs">
+                <div className="font-medium text-gray-900 truncate">{a.name}</div>
+                {a.id.split(':').length >= 4 && (
+                  <div className="text-xs text-gray-400 font-mono truncate" title={a.id.split(':').slice(3).join(':')}>
+                    {a.id.split(':').slice(3).join(':')}
+                  </div>
+                )}
               </td>
               <td className="px-4 py-3 text-sm text-gray-600 font-mono">{a.version}</td>
               <td className="px-4 py-3 text-sm">

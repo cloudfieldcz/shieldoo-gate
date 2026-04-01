@@ -220,6 +220,14 @@ export default function Artifacts() {
                   <span className="text-gray-500">Version</span>
                   <span className="font-mono text-gray-800">{selected.version}</span>
                 </div>
+                {selected.id.split(':').length >= 4 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-500">Filename</span>
+                    <span className="font-mono text-xs text-gray-600 truncate max-w-[180px]" title={selected.id.split(':').slice(3).join(':')}>
+                      {selected.id.split(':').slice(3).join(':')}
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-500">Size</span>
                   <span className="text-gray-800">{formatBytes(selected.size_bytes)}</span>
