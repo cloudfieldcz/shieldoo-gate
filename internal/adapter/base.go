@@ -70,6 +70,20 @@ func DispatchAlert(entry model.AuditEntry) {
 	}
 }
 
+// PipelineTimeout is the maximum duration for the download+scan+cache pipeline.
+// This timeout is applied to a detached context (context.Background) so that
+// operations complete even when the HTTP client disconnects. This is critical
+// for cloud storage backends (Azure Blob, S3, GCS) where cache writes are
+// network I/O that takes seconds and would be canceled by a dead request context.
+const PipelineTimeout = 5 * time.Minute
+
+// PipelineContext creates a context detached from the HTTP request lifecycle.
+// Use this for download, scan, and cache write operations that must complete
+// regardless of whether the client is still connected.
+func PipelineContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), PipelineTimeout)
+}
+
 // ArtifactLocker provides per-artifact-ID locking so that only one
 // download/scan pipeline runs for a given artifact at a time.
 // Subsequent requests for the same artifact wait for the first to complete.

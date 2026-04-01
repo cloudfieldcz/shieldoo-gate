@@ -236,8 +236,12 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 	unlock := adapter.ArtifactLocker.Lock(artifactID)
 	defer unlock()
 
+	// Detach from the HTTP request context — see PyPI adapter for rationale.
+	pctx, pcancel := adapter.PipelineContext()
+	defer pcancel()
+
 	// Re-check cache after acquiring lock.
-	if cachedPath, err := a.cache.Get(ctx, artifactID); err == nil {
+	if cachedPath, err := a.cache.Get(pctx, artifactID); err == nil {
 		status, err := adapter.GetArtifactStatus(a.db, artifactID)
 		if err != nil {
 			log.Error().Err(err).Str("artifact", artifactID).Msg("failed to check artifact status, refusing to serve")
@@ -257,7 +261,7 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 	}
 
 	// 3. Download.
-	tmpPath, size, sha, err := downloadToTemp(ctx, upstreamURL, a.httpClient)
+	tmpPath, size, sha, err := downloadToTemp(pctx, upstreamURL, a.httpClient)
 	if err != nil {
 		http.Error(w, "failed to fetch upstream package", http.StatusBadGateway)
 		return
@@ -277,10 +281,10 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 	}
 
 	// 4. Scan.
-	scanResults, _ := a.scanEngine.ScanAll(ctx, scanArtifact)
+	scanResults, _ := a.scanEngine.ScanAll(pctx, scanArtifact)
 
 	// 5. Policy.
-	policyResult := a.policyEngine.Evaluate(ctx, scanArtifact, scanResults)
+	policyResult := a.policyEngine.Evaluate(pctx, scanArtifact, scanResults)
 
 	// 6. Act.
 	switch policyResult.Action {
@@ -320,7 +324,7 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 	}
 
 	// 7. Allow.
-	_ = a.cache.Put(ctx, scanArtifact, tmpPath)
+	_ = a.cache.Put(pctx, scanArtifact, tmpPath)
 	_ = a.persistArtifact(artifactID, scanArtifact, model.StatusClean, "", nil, scanResults)
 	_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
 		EventType:  model.EventServed,

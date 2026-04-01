@@ -420,15 +420,17 @@ func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request
 	}
 
 	// Scan BEFORE returning success (Security Invariant #2).
-	ctx := r.Context()
-	scanResults, scanErr := a.scanEngine.ScanAll(ctx, scanArtifact)
+	// Detach from the HTTP request context so client disconnect doesn't cancel the pipeline.
+	pctx, pcancel := adapter.PipelineContext()
+	defer pcancel()
+	scanResults, scanErr := a.scanEngine.ScanAll(pctx, scanArtifact)
 	if scanErr != nil {
 		log.Error().Err(scanErr).Str("artifact", artifactID).Msg("docker push: scan engine error, failing open")
 		scanResults = nil
 	}
 
 	// Policy evaluation.
-	policyResult := a.policyEng.Evaluate(ctx, scanArtifact, scanResults)
+	policyResult := a.policyEng.Evaluate(pctx, scanArtifact, scanResults)
 	log.Info().
 		Str("artifact", artifactID).
 		Str("action", string(policyResult.Action)).
@@ -616,8 +618,12 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 	unlock := adapter.ArtifactLocker.Lock(artifactID)
 	defer unlock()
 
+	// Detach from the HTTP request context — see PyPI adapter for rationale.
+	pctx, pcancel := adapter.PipelineContext()
+	defer pcancel()
+
 	// 3. Re-check cache after acquiring lock — another request may have completed the pipeline.
-	if cachedPath, err := a.cache.Get(ctx, artifactID); err == nil {
+	if cachedPath, err := a.cache.Get(pctx, artifactID); err == nil {
 		status, err := adapter.GetArtifactStatus(a.db, artifactID)
 		if err != nil {
 			log.Error().Err(err).Str("artifact", artifactID).Msg("docker: failed to check artifact status after lock, refusing to serve")
@@ -645,7 +651,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 	}
 
 	// 4. Download manifest from upstream (capped at 10 MB).
-	manifestBytes, manifestContentType, err := a.fetchManifest(ctx, r, upstreamURL, registry, imagePath, ref)
+	manifestBytes, manifestContentType, err := a.fetchManifest(pctx, r, upstreamURL, registry, imagePath, ref)
 	if err != nil {
 		log.Error().Err(err).Str("artifact", artifactID).Msg("docker: failed to fetch manifest from upstream")
 		http.Error(w, "failed to fetch manifest from upstream", http.StatusBadGateway)
@@ -667,10 +673,10 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 	}
 
 	craneOpts := []crane.Option{
-		crane.WithContext(ctx),
+		crane.WithContext(pctx),
 		crane.WithAuthFromKeychain(authn.DefaultKeychain),
 	}
-	tarPath, tarSize, tarSHA, err := pullImageToTar(ctx, imageRef, craneOpts...)
+	tarPath, tarSize, tarSHA, err := pullImageToTar(pctx, imageRef, craneOpts...)
 	if err != nil {
 		log.Error().Err(err).Str("artifact", artifactID).Str("image_ref", imageRef).Msg("docker: failed to pull image for scanning")
 		http.Error(w, "failed to pull image for scanning", http.StatusBadGateway)
@@ -697,7 +703,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 
 	// 7. Scan via scan engine.
 	log.Info().Str("artifact", artifactID).Msg("docker: starting scan pipeline")
-	scanResults, err := a.scanEngine.ScanAll(ctx, scanArtifact)
+	scanResults, err := a.scanEngine.ScanAll(pctx, scanArtifact)
 	if err != nil {
 		log.Error().Err(err).Str("artifact", artifactID).Msg("docker: scan engine error, failing open")
 		scanResults = nil
@@ -719,7 +725,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 	}
 
 	// 8. Policy evaluation.
-	policyResult := a.policyEng.Evaluate(ctx, scanArtifact, scanResults)
+	policyResult := a.policyEng.Evaluate(pctx, scanArtifact, scanResults)
 	log.Info().
 		Str("artifact", artifactID).
 		Str("action", string(policyResult.Action)).
@@ -782,7 +788,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 			SizeBytes:   int64(len(manifestBytes)),
 			UpstreamURL: scanArtifact.UpstreamURL,
 		}
-		_ = a.cache.Put(ctx, cacheArtifact, manifestTmp)
+		_ = a.cache.Put(pctx, cacheArtifact, manifestTmp)
 		_ = a.persistArtifact(artifactID, scanArtifact, manifestSHA, int64(len(manifestBytes)), model.StatusClean, "", nil, scanResults)
 	}
 

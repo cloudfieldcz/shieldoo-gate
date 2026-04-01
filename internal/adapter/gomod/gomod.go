@@ -338,8 +338,12 @@ func (a *GoModAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 	unlock := adapter.ArtifactLocker.Lock(artifactID)
 	defer unlock()
 
+	// Detach from the HTTP request context — see PyPI adapter for rationale.
+	pctx, pcancel := adapter.PipelineContext()
+	defer pcancel()
+
 	// Re-check cache after acquiring lock.
-	if cachedPath, err := a.cache.Get(ctx, artifactID); err == nil {
+	if cachedPath, err := a.cache.Get(pctx, artifactID); err == nil {
 		status, err := adapter.GetArtifactStatus(a.db, artifactID)
 		if err != nil {
 			log.Error().Err(err).Str("artifact", artifactID).Msg("gomod: failed to check artifact status, refusing to serve")
@@ -366,7 +370,7 @@ func (a *GoModAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	tmpPath, size, sha, err := downloadToTemp(ctx, upstreamURL, a.httpClient)
+	tmpPath, size, sha, err := downloadToTemp(pctx, upstreamURL, a.httpClient)
 	if err != nil {
 		log.Error().Err(err).Str("artifact", artifactID).Msg("gomod: failed to download from upstream")
 		http.Error(w, "failed to fetch upstream artifact", http.StatusBadGateway)
@@ -388,7 +392,7 @@ func (a *GoModAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 
 	// 5. Scan.
 	log.Info().Str("artifact", artifactID).Msg("gomod: starting scan pipeline")
-	scanResults, err := a.scanEngine.ScanAll(ctx, scanArtifact)
+	scanResults, err := a.scanEngine.ScanAll(pctx, scanArtifact)
 	if err != nil {
 		log.Error().Err(err).Str("artifact", artifactID).Msg("gomod: scan engine error, failing open")
 		scanResults = nil
@@ -410,7 +414,7 @@ func (a *GoModAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 	}
 
 	// 6. Policy evaluation.
-	policyResult := a.policyEngine.Evaluate(ctx, scanArtifact, scanResults)
+	policyResult := a.policyEngine.Evaluate(pctx, scanArtifact, scanResults)
 	log.Info().
 		Str("artifact", artifactID).
 		Str("action", string(policyResult.Action)).
@@ -455,7 +459,7 @@ func (a *GoModAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 	}
 
 	// 8. Allow — cache artifact and serve.
-	_ = a.cache.Put(ctx, scanArtifact, tmpPath)
+	_ = a.cache.Put(pctx, scanArtifact, tmpPath)
 	_ = a.persistArtifact(artifactID, scanArtifact, model.StatusClean, "", nil, scanResults)
 
 	_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
