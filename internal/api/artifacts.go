@@ -3,6 +3,7 @@ package api
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -437,6 +438,13 @@ func (s *Server) handleReleaseArtifact(w http.ResponseWriter, r *http.Request) {
 	id := artifactID(r)
 	now := time.Now().UTC()
 
+	// Parse artifact ID: "ecosystem:name:version"
+	parts := strings.SplitN(id, ":", 3)
+	if len(parts) != 3 {
+		writeError(w, http.StatusBadRequest, "invalid artifact ID format, expected ecosystem:name:version")
+		return
+	}
+
 	var count int
 	if err := s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM artifacts WHERE id = ?`, id).Scan(&count); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to check artifact existence")
@@ -454,6 +462,23 @@ func (s *Server) handleReleaseArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	// Create policy override (unique index prevents duplicates for active overrides)
+	userEmail := userEmailFromRequest(r)
+	var overrideID int64
+	_, _ = tx.ExecContext(r.Context(),
+		`INSERT INTO policy_overrides (ecosystem, name, version, scope, reason, created_by, created_at, revoked)
+		 VALUES (?, ?, ?, 'version', 'manual release', ?, ?, FALSE)
+		 ON CONFLICT DO NOTHING`,
+		parts[0], parts[1], parts[2], userEmail, now)
+	err = tx.QueryRowxContext(r.Context(),
+		`SELECT id FROM policy_overrides
+		 WHERE ecosystem = ? AND name = ? AND version = ? AND scope = 'version' AND revoked = FALSE`,
+		parts[0], parts[1], parts[2]).Scan(&overrideID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resolve override")
+		return
+	}
+
 	_, err = tx.ExecContext(r.Context(),
 		`INSERT INTO artifact_status (artifact_id, status, released_at)
 		 VALUES (?, 'CLEAN', ?)
@@ -469,11 +494,10 @@ func (s *Server) handleReleaseArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userEmail := userEmailFromRequest(r)
 	_, err = tx.ExecContext(r.Context(),
 		`INSERT INTO audit_log (ts, event_type, artifact_id, reason, user_email)
-		 VALUES (?, 'RELEASED', ?, 'manual release via API', ?)`,
-		now, id, userEmail)
+		 VALUES (?, 'RELEASED', ?, ?, ?)`,
+		now, id, fmt.Sprintf("manual release, override #%d", overrideID), userEmail)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to write audit log")
 		return
@@ -486,13 +510,14 @@ func (s *Server) handleReleaseArtifact(w http.ResponseWriter, r *http.Request) {
 	adapter.DispatchAlert(model.AuditEntry{
 		EventType:  model.EventReleased,
 		ArtifactID: id,
-		Reason:     "manual release via API",
+		Reason:     fmt.Sprintf("manual release, override #%d", overrideID),
 		UserEmail:  userEmail,
 	})
 
-	writeJSON(w, http.StatusOK, map[string]string{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"status":      "CLEAN",
 		"artifact_id": id,
+		"override_id": overrideID,
 	})
 }
 

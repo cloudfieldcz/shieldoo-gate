@@ -290,7 +290,7 @@ The React admin UI is served on the admin port (default 8080) as a single-page a
 | Route | Description |
 |---|---|
 | `/dashboard` | Overview with statistics and recent activity |
-| `/artifacts` | Browse cached artifacts, view scan results, trigger rescan, quarantine/release |
+| `/artifacts` | Browse cached artifacts, view scan results, trigger rescan, quarantine/release (release also creates a policy override) |
 | `/overrides` | Manage policy overrides (create, revoke) |
 | `/audit-log` | View append-only audit log with filtering |
 | `/settings` | Configuration viewer |

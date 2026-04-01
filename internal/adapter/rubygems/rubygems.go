@@ -405,6 +405,8 @@ func (a *RubyGemsAdapter) downloadScanServe(w http.ResponseWriter, r *http.Reque
 	// 7. Act on policy result.
 	switch policyResult.Action {
 	case policy.ActionBlock:
+		now := time.Now().UTC()
+		_ = a.persistArtifact(artifactID, scanArtifact, model.StatusQuarantined, policyResult.Reason, &now, scanResults)
 		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
 			EventType:  model.EventBlocked,
 			ArtifactID: artifactID,

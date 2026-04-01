@@ -258,16 +258,26 @@ paths:
     parameters:
       - $ref: "#/components/parameters/artifactId"
     post:
-      summary: Release a quarantined artifact back to CLEAN status
+      summary: Release a quarantined artifact back to CLEAN status and create a policy override
       operationId: releaseArtifact
       tags: [artifacts]
       responses:
         "200":
-          description: Artifact released
+          description: Artifact released with policy override created (or reused if one already exists)
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/StatusUpdate"
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: CLEAN
+                  artifact_id:
+                    type: string
+                    example: "pypi:requests:2.32.5"
+                  override_id:
+                    type: integer
+                    example: 1
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -308,6 +318,19 @@ paths:
           description: Filter by active status (revoked=false if true, revoked=true if false)
           schema:
             type: boolean
+        - name: ecosystem
+          in: query
+          required: false
+          description: Filter by ecosystem (exact match)
+          schema:
+            type: string
+            enum: [docker, pypi, npm, nuget, maven, rubygems, go]
+        - name: name
+          in: query
+          required: false
+          description: Filter by package name (substring match, case-sensitive)
+          schema:
+            type: string
       responses:
         "200":
           description: Paginated list of policy overrides
@@ -907,29 +930,63 @@ components:
           type: integer
           format: int64
 
-    StatsSummary:
+    ArtifactStats:
       type: object
-      required: [total_artifacts, total_blocked, total_quarantined, total_served, by_period]
+      required: [total, clean, suspicious, quarantined, pending_scan]
       properties:
-        total_artifacts:
+        total:
           type: integer
           format: int64
           description: Total number of cached artifacts
-        total_blocked:
+        clean:
           type: integer
           format: int64
-          description: Number of BLOCKED events in the last 24 hours
-        total_quarantined:
+          description: Artifacts with CLEAN status
+        suspicious:
           type: integer
           format: int64
-          description: Number of currently quarantined artifacts
-        total_served:
+          description: Artifacts with SUSPICIOUS status
+        quarantined:
           type: integer
           format: int64
-          description: Total number of SERVED events (all time)
+          description: Artifacts with QUARANTINED status
+        pending_scan:
+          type: integer
+          format: int64
+          description: Artifacts with PENDING_SCAN status
+
+    RequestStats:
+      type: object
+      required: [served_24h, blocked_24h, served_all, blocked_all]
+      properties:
+        served_24h:
+          type: integer
+          format: int64
+          description: Number of SERVED requests in the last 24 hours
+        blocked_24h:
+          type: integer
+          format: int64
+          description: Number of BLOCKED requests in the last 24 hours
+        served_all:
+          type: integer
+          format: int64
+          description: Total number of SERVED requests (all time)
+        blocked_all:
+          type: integer
+          format: int64
+          description: Total number of BLOCKED requests (all time)
+
+    StatsSummary:
+      type: object
+      required: [artifacts, requests, by_period]
+      properties:
+        artifacts:
+          $ref: "#/components/schemas/ArtifactStats"
+        requests:
+          $ref: "#/components/schemas/RequestStats"
         by_period:
           type: object
-          description: Daily buckets for the last 7 days keyed by date (YYYY-MM-DD)
+          description: Daily request count buckets for the last 7 days keyed by date (YYYY-MM-DD)
           additionalProperties:
             type: object
             properties:

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { statsApi, healthApi } from '../api/client'
-import { AlertTriangle, Package, ShieldX, Archive, Activity } from 'lucide-react'
+import { AlertTriangle, Package, ShieldX, Archive, Activity, ShieldCheck, Clock, Ban } from 'lucide-react'
 import {
   ResponsiveContainer,
   AreaChart,
@@ -87,32 +87,72 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Stat cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        <StatCard
-          label="Total Artifacts"
-          value={statsQuery.isLoading ? '...' : (stats?.total_artifacts ?? 0)}
-          icon={Package}
-          color="bg-blue-500"
-        />
-        <StatCard
-          label="Blocked (24h)"
-          value={statsQuery.isLoading ? '...' : (stats?.total_blocked ?? 0)}
-          icon={ShieldX}
-          color="bg-red-500"
-        />
-        <StatCard
-          label="Quarantined"
-          value={statsQuery.isLoading ? '...' : (stats?.total_quarantined ?? 0)}
-          icon={AlertTriangle}
-          color="bg-yellow-500"
-        />
-        <StatCard
-          label="Total Served"
-          value={statsQuery.isLoading ? '...' : (stats?.total_served ?? 0)}
-          icon={Archive}
-          color="bg-green-500"
-        />
+      {/* Artifacts section */}
+      <div>
+        <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Artifacts</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+          <StatCard
+            label="Total"
+            value={statsQuery.isLoading ? '...' : (stats?.artifacts.total ?? 0)}
+            icon={Package}
+            color="bg-blue-500"
+          />
+          <StatCard
+            label="Clean"
+            value={statsQuery.isLoading ? '...' : (stats?.artifacts.clean ?? 0)}
+            icon={ShieldCheck}
+            color="bg-green-500"
+          />
+          <StatCard
+            label="Suspicious"
+            value={statsQuery.isLoading ? '...' : (stats?.artifacts.suspicious ?? 0)}
+            icon={AlertTriangle}
+            color="bg-orange-500"
+          />
+          <StatCard
+            label="Quarantined"
+            value={statsQuery.isLoading ? '...' : (stats?.artifacts.quarantined ?? 0)}
+            icon={ShieldX}
+            color="bg-red-500"
+          />
+          <StatCard
+            label="Pending Scan"
+            value={statsQuery.isLoading ? '...' : (stats?.artifacts.pending_scan ?? 0)}
+            icon={Clock}
+            color="bg-gray-400"
+          />
+        </div>
+      </div>
+
+      {/* Requests section */}
+      <div>
+        <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Requests</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+          <StatCard
+            label="Served (24h)"
+            value={statsQuery.isLoading ? '...' : (stats?.requests.served_24h ?? 0)}
+            icon={Archive}
+            color="bg-blue-500"
+          />
+          <StatCard
+            label="Blocked (24h)"
+            value={statsQuery.isLoading ? '...' : (stats?.requests.blocked_24h ?? 0)}
+            icon={Ban}
+            color="bg-red-500"
+          />
+          <StatCard
+            label="Served (all time)"
+            value={statsQuery.isLoading ? '...' : (stats?.requests.served_all ?? 0)}
+            icon={Archive}
+            color="bg-blue-300"
+          />
+          <StatCard
+            label="Blocked (all time)"
+            value={statsQuery.isLoading ? '...' : (stats?.requests.blocked_all ?? 0)}
+            icon={Ban}
+            color="bg-red-300"
+          />
+        </div>
       </div>
 
       {/* Traffic chart */}

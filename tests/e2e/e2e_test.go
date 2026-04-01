@@ -151,8 +151,9 @@ func TestE2E_Admin_StatsSummary(t *testing.T) {
 
 	var body map[string]interface{}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	// Verify the response contains at least one expected key
-	assert.Contains(t, body, "total_artifacts")
+	// Verify the response contains the structured sections
+	assert.Contains(t, body, "artifacts")
+	assert.Contains(t, body, "requests")
 }
 
 func TestE2E_Metrics_Endpoint(t *testing.T) {

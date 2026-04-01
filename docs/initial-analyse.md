@@ -851,7 +851,7 @@ GET    /api/v1/artifacts/{id}                   artifact detail + scan history
 GET    /api/v1/artifacts/{id}/scan-results      scan result history
 POST   /api/v1/artifacts/{id}/rescan            trigger manual rescan
 POST   /api/v1/artifacts/{id}/quarantine        manual quarantine
-POST   /api/v1/artifacts/{id}/release           release from quarantine
+POST   /api/v1/artifacts/{id}/release           release from quarantine + create policy override
 
 # Audit log
 GET    /api/v1/audit                            paginated audit log (filter by event_type)

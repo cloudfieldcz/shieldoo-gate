@@ -13,13 +13,13 @@ test_api() {
     assert_eq "API: /health returns {\"status\":\"ok\"}" "ok" "$health_status"
 
     # ------------------------------------------------------------------
-    # 2. Stats summary: total_artifacts > 0, total_served > 0
+    # 2. Stats summary: artifacts.total > 0, requests.served_all > 0
     # ------------------------------------------------------------------
     local total_artifacts total_served
-    total_artifacts=$(api_jq "/api/v1/stats/summary" '.total_artifacts')
-    total_served=$(api_jq "/api/v1/stats/summary" '.total_served')
-    assert_gte "API: stats total_artifacts > 0" 1 "$total_artifacts"
-    assert_gte "API: stats total_served > 0" 1 "$total_served"
+    total_artifacts=$(api_jq "/api/v1/stats/summary" '.artifacts.total')
+    total_served=$(api_jq "/api/v1/stats/summary" '.requests.served_all')
+    assert_gte "API: stats artifacts.total > 0" 1 "$total_artifacts"
+    assert_gte "API: stats requests.served_all > 0" 1 "$total_served"
 
     # ------------------------------------------------------------------
     # 3. Stats by_period has 7 daily buckets
@@ -37,12 +37,12 @@ test_api() {
     assert_gte "API: today's stats bucket (${today}) has served > 0" 1 "$today_served"
 
     # ------------------------------------------------------------------
-    # 5. Stats total_artifacts matches /artifacts total
+    # 5. Stats artifacts.total matches /artifacts total
     # ------------------------------------------------------------------
     local artifacts_total stats_total
     artifacts_total=$(api_jq "/api/v1/artifacts" '.total')
-    stats_total=$(api_jq "/api/v1/stats/summary" '.total_artifacts')
-    assert_eq "API: stats total_artifacts matches /artifacts total" \
+    stats_total=$(api_jq "/api/v1/stats/summary" '.artifacts.total')
+    assert_eq "API: stats artifacts.total matches /artifacts total" \
         "$stats_total" "$artifacts_total"
 
     # ------------------------------------------------------------------

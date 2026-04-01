@@ -133,6 +133,20 @@ func TestHandleQuarantineAndRelease_Flow(t *testing.T) {
 	var releaseCount int
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE event_type = 'RELEASED' AND artifact_id = 'pypi:evil:0.1.0'`).Scan(&releaseCount))
 	assert.Equal(t, 1, releaseCount)
+
+	// Verify policy override was created
+	var overrideCount int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM policy_overrides WHERE ecosystem = 'pypi' AND name = 'evil' AND version = '0.1.0' AND revoked = FALSE`).Scan(&overrideCount))
+	assert.Equal(t, 1, overrideCount, "release should create a policy override")
+
+	// Release again — should reuse existing override, not create a duplicate
+	req3 := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts/pypi:evil:0.1.0/release", nil)
+	rec3 := httptest.NewRecorder()
+	router.ServeHTTP(rec3, req3)
+	assert.Equal(t, http.StatusOK, rec3.Code)
+
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM policy_overrides WHERE ecosystem = 'pypi' AND name = 'evil' AND version = '0.1.0' AND revoked = FALSE`).Scan(&overrideCount))
+	assert.Equal(t, 1, overrideCount, "second release should reuse existing override, not create duplicate")
 }
 
 func TestHandleRescanArtifact_Exists_Returns202(t *testing.T) {

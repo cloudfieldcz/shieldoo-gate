@@ -53,9 +53,6 @@ export const artifactsApi = {
 
   release: (id: string) =>
     api.post(`/artifacts/${encodeURIComponent(id)}/release`).then((r) => r.data),
-
-  override: (id: string, data?: { reason?: string; scope?: string }) =>
-    api.post(`/artifacts/${encodeURIComponent(id)}/override`, data ?? {}).then((r) => r.data),
 }
 
 export const statsApi = {
@@ -78,10 +75,10 @@ export const feedApi = {
 }
 
 export const overridesApi = {
-  list: (page = 1, perPage = 50, active?: boolean) =>
+  list: (page = 1, perPage = 50, active?: boolean, ecosystem?: string, name?: string) =>
     api
       .get<PaginatedResponse<PolicyOverride>>('/overrides', {
-        params: { page, per_page: perPage, active: active ? 'true' : undefined },
+        params: { page, per_page: perPage, active: active ? 'true' : undefined, ecosystem, name },
       })
       .then((r) => r.data),
 

@@ -40,25 +40,39 @@ func (s *Server) handleListOverrides(w http.ResponseWriter, r *http.Request) {
 	page, perPage := parsePagination(r.URL.Query())
 	offset := (page - 1) * perPage
 	activeOnly := r.URL.Query().Get("active") == "true"
+	ecosystemFilter := r.URL.Query().Get("ecosystem")
+	nameFilter := r.URL.Query().Get("name")
+
+	// Build WHERE clauses
+	var conditions []string
+	var countArgs []any
+	if activeOnly {
+		conditions = append(conditions, `revoked = FALSE`)
+	}
+	if ecosystemFilter != "" {
+		conditions = append(conditions, `ecosystem = ?`)
+		countArgs = append(countArgs, ecosystemFilter)
+	}
+	if nameFilter != "" {
+		conditions = append(conditions, `name LIKE ?`)
+		countArgs = append(countArgs, "%"+nameFilter+"%")
+	}
+
+	where := ""
+	if len(conditions) > 0 {
+		where = ` WHERE ` + strings.Join(conditions, ` AND `)
+	}
 
 	var total int
-	countQuery := `SELECT COUNT(*) FROM policy_overrides`
-	if activeOnly {
-		countQuery += ` WHERE revoked = FALSE`
-	}
-	if err := s.db.QueryRowContext(r.Context(), countQuery).Scan(&total); err != nil {
+	countQuery := `SELECT COUNT(*) FROM policy_overrides` + where
+	if err := s.db.QueryRowContext(r.Context(), countQuery, countArgs...).Scan(&total); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to count overrides")
 		return
 	}
 
 	query := `SELECT id, ecosystem, name, version, scope, reason, created_by, created_at, expires_at, revoked, revoked_at
-	          FROM policy_overrides`
-	var args []any
-	if activeOnly {
-		query += ` WHERE revoked = FALSE`
-	}
-	query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
-	args = append(args, perPage, offset)
+	          FROM policy_overrides` + where + ` ORDER BY ecosystem ASC, name ASC LIMIT ? OFFSET ?`
+	args := append(countArgs, perPage, offset)
 
 	rows, err := s.db.QueryxContext(r.Context(), query, args...)
 	if err != nil {
@@ -116,13 +130,19 @@ func (s *Server) handleCreateOverride(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	// Create override (unique index prevents duplicates for active overrides)
 	var overrideID int64
-	err = tx.QueryRowxContext(r.Context(),
+	_, _ = tx.ExecContext(r.Context(),
 		`INSERT INTO policy_overrides (ecosystem, name, version, scope, reason, created_by, created_at, revoked)
-		 VALUES (?, ?, ?, ?, ?, 'api', ?, FALSE) RETURNING id`,
-		req.Ecosystem, req.Name, version, req.Scope, req.Reason, now).Scan(&overrideID)
+		 VALUES (?, ?, ?, ?, ?, 'api', ?, FALSE)
+		 ON CONFLICT DO NOTHING`,
+		req.Ecosystem, req.Name, version, req.Scope, req.Reason, now)
+	err = tx.QueryRowxContext(r.Context(),
+		`SELECT id FROM policy_overrides
+		 WHERE ecosystem = ? AND name = ? AND version = ? AND scope = ? AND revoked = FALSE`,
+		req.Ecosystem, req.Name, version, req.Scope).Scan(&overrideID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create override")
+		writeError(w, http.StatusInternalServerError, "failed to resolve override")
 		return
 	}
 
@@ -286,13 +306,19 @@ func (s *Server) handleCreateArtifactOverride(w http.ResponseWriter, r *http.Req
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	// Create override (unique index prevents duplicates for active overrides)
 	var overrideID int64
-	err = tx.QueryRowxContext(r.Context(),
+	_, _ = tx.ExecContext(r.Context(),
 		`INSERT INTO policy_overrides (ecosystem, name, version, scope, reason, created_by, created_at, revoked)
-		 VALUES (?, ?, ?, ?, ?, 'api', ?, FALSE) RETURNING id`,
-		parts[0], parts[1], version, body.Scope, body.Reason, now).Scan(&overrideID)
+		 VALUES (?, ?, ?, ?, ?, 'api', ?, FALSE)
+		 ON CONFLICT DO NOTHING`,
+		parts[0], parts[1], version, body.Scope, body.Reason, now)
+	err = tx.QueryRowxContext(r.Context(),
+		`SELECT id FROM policy_overrides
+		 WHERE ecosystem = ? AND name = ? AND version = ? AND scope = ? AND revoked = FALSE`,
+		parts[0], parts[1], version, body.Scope).Scan(&overrideID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create override")
+		writeError(w, http.StatusInternalServerError, "failed to resolve override")
 		return
 	}
 

@@ -1,9 +1,18 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { overridesApi } from '../api/client'
 import type { PolicyOverride } from '../api/types'
 import { Trash2, ChevronLeft, ChevronRight } from 'lucide-react'
 
+const ECOSYSTEMS = [
+  { value: 'docker', label: 'Docker' },
+  { value: 'pypi', label: 'PyPI' },
+  { value: 'npm', label: 'npm' },
+  { value: 'nuget', label: 'NuGet' },
+  { value: 'maven', label: 'Maven' },
+  { value: 'rubygems', label: 'RubyGems' },
+  { value: 'go', label: 'Go Modules' },
+]
 const PER_PAGE = 20
 
 function scopeLabel(scope: string) {
@@ -18,10 +27,24 @@ export default function Overrides() {
   const qc = useQueryClient()
   const [page, setPage] = useState(1)
   const [activeOnly, setActiveOnly] = useState(true)
+  const [ecosystem, setEcosystem] = useState('')
+  const [name, setName] = useState('')
+  const [debouncedName, setDebouncedName] = useState('')
+
+  // Debounce name search (300ms)
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedName(name), 300)
+    return () => clearTimeout(timer)
+  }, [name])
+
+  // Reset page when filters change
+  useEffect(() => {
+    setPage(1)
+  }, [ecosystem, debouncedName, activeOnly])
 
   const listQuery = useQuery({
-    queryKey: ['overrides', page, activeOnly],
-    queryFn: () => overridesApi.list(page, PER_PAGE, activeOnly || undefined),
+    queryKey: ['overrides', page, activeOnly, ecosystem, debouncedName],
+    queryFn: () => overridesApi.list(page, PER_PAGE, activeOnly || undefined, ecosystem || undefined, debouncedName || undefined),
     retry: 1,
   })
 
@@ -44,12 +67,33 @@ export default function Overrides() {
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <select
+          className="border border-gray-300 rounded-md px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          value={ecosystem}
+          onChange={(e) => setEcosystem(e.target.value)}
+        >
+          <option value="">All Ecosystems</option>
+          {ECOSYSTEMS.map((eco) => (
+            <option key={eco.value} value={eco.value}>
+              {eco.label}
+            </option>
+          ))}
+        </select>
+
+        <input
+          type="text"
+          placeholder="Search name..."
+          className="border border-gray-300 rounded-md px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 w-48"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+
         <label className="flex items-center gap-2 text-sm text-gray-700">
           <input
             type="checkbox"
             checked={activeOnly}
-            onChange={(e) => { setActiveOnly(e.target.checked); setPage(1) }}
+            onChange={(e) => setActiveOnly(e.target.checked)}
             className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
           />
           Active only

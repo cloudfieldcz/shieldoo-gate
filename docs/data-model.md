@@ -18,8 +18,11 @@ Shieldoo Gate uses **SQLite** (default, WAL mode, foreign keys enabled) or **Pos
 - `008_tag_digest_history.sql` — Tag digest history table for mutability detection
 - `009_api_keys.sql` — API keys table for proxy authentication
 - `010_api_keys_owner_index.sql` — Add index on api_keys(owner_email)
+- `011_idx_artifacts_cached_at.sql` — Add index on artifacts(cached_at)
+- `012_idx_artifacts_filters.sql` — Add indexes for artifact list filtering
+- `013_unique_active_override.sql` — Partial unique index on active overrides (prevents duplicates)
 
-**PostgreSQL** (`internal/config/migrations/postgres/`) — same 10 migrations with PostgreSQL syntax.
+**PostgreSQL** (`internal/config/migrations/postgres/`) — same 13 migrations with PostgreSQL syntax.
 
 SQLite PRAGMAs applied at startup:
 ```sql
@@ -269,7 +272,9 @@ User-created exceptions that allow artifacts through the policy engine despite s
 
 Key method: `Matches(ecosystem, name, version string) bool` — checks if the override applies to a given artifact, accounting for scope, revocation, and expiration. Note: the policy engine uses a direct SQL query for override matching (`engine.go:hasDBOverride()`), not this Go method.
 
-**Indexes:** `idx_policy_overrides_lookup ON (ecosystem, name, version, revoked)`
+**Indexes:**
+- `idx_policy_overrides_lookup ON (ecosystem, name, version, revoked)` — fast override lookup
+- `idx_policy_overrides_unique_active ON (ecosystem, name, version, scope) WHERE revoked = FALSE` — partial unique index preventing duplicate active overrides for the same artifact+scope. All override creation endpoints use `INSERT ... ON CONFLICT DO NOTHING` + `SELECT` to ensure idempotent behavior.
 
 ### `docker_repositories`
 

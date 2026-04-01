@@ -16,14 +16,29 @@ type periodStats struct {
 	Scanned     int64 `json:"scanned"`
 }
 
+// artifactStats holds counts of artifacts by their current status.
+type artifactStats struct {
+	Total       int64 `json:"total"`
+	Clean       int64 `json:"clean"`
+	Suspicious  int64 `json:"suspicious"`
+	Quarantined int64 `json:"quarantined"`
+	PendingScan int64 `json:"pending_scan"`
+}
+
+// requestStats holds request-level counters from the audit log.
+type requestStats struct {
+	Served24h  int64 `json:"served_24h"`
+	Blocked24h int64 `json:"blocked_24h"`
+	ServedAll  int64 `json:"served_all"`
+	BlockedAll int64 `json:"blocked_all"`
+}
+
 // summaryResponse is the JSON body for GET /api/v1/stats/summary.
 // Fields match the frontend StatsSummary type.
 type summaryResponse struct {
-	TotalArtifacts  int64                        `json:"total_artifacts"`
-	TotalBlocked    int64                        `json:"total_blocked"`
-	TotalQuarantined int64                       `json:"total_quarantined"`
-	TotalServed     int64                        `json:"total_served"`
-	ByPeriod        map[string]map[string]int64  `json:"by_period"`
+	Artifacts artifactStats                `json:"artifacts"`
+	Requests  requestStats                 `json:"requests"`
+	ByPeriod  map[string]map[string]int64  `json:"by_period"`
 }
 
 func (s *Server) queryPeriodStats(r *http.Request, since time.Time) (periodStats, error) {
@@ -68,15 +83,41 @@ func (s *Server) handleStatsSummary(w http.ResponseWriter, r *http.Request) {
 	var totalArtifacts int64
 	_ = s.db.GetContext(ctx, &totalArtifacts, `SELECT COUNT(*) FROM artifacts`)
 
-	// Total quarantined.
-	var totalQuarantined int64
-	_ = s.db.GetContext(ctx, &totalQuarantined,
-		`SELECT COUNT(*) FROM artifact_status WHERE status = 'QUARANTINED'`)
+	// Artifact status breakdown.
+	type statusRow struct {
+		Status string `db:"status"`
+		Cnt    int64  `db:"cnt"`
+	}
+	var statusRows []statusRow
+	_ = s.db.SelectContext(ctx, &statusRows,
+		`SELECT status, COUNT(*) AS cnt FROM artifact_status GROUP BY status`)
 
-	// Audit log totals (all time).
+	var arts artifactStats
+	arts.Total = totalArtifacts
+	for _, sr := range statusRows {
+		switch sr.Status {
+		case "CLEAN":
+			arts.Clean = sr.Cnt
+		case "SUSPICIOUS":
+			arts.Suspicious = sr.Cnt
+		case "QUARANTINED":
+			arts.Quarantined = sr.Cnt
+		case "PENDING_SCAN":
+			arts.PendingScan = sr.Cnt
+		}
+	}
+
+	// Audit log totals (all time + last 24h).
 	now := time.Now().UTC()
 	allTime, _ := s.queryPeriodStats(r, time.Time{})
 	h24, _ := s.queryPeriodStats(r, now.Add(-24*time.Hour))
+
+	reqs := requestStats{
+		Served24h:  h24.Served,
+		Blocked24h: h24.Blocked,
+		ServedAll:  allTime.Served,
+		BlockedAll: allTime.Blocked,
+	}
 
 	// Build by_period: daily buckets for last 7 days.
 	byPeriod := make(map[string]map[string]int64)
@@ -114,11 +155,9 @@ func (s *Server) handleStatsSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, summaryResponse{
-		TotalArtifacts:   totalArtifacts,
-		TotalBlocked:     h24.Blocked,
-		TotalQuarantined: totalQuarantined,
-		TotalServed:      allTime.Served,
-		ByPeriod:         byPeriod,
+		Artifacts: arts,
+		Requests:  reqs,
+		ByPeriod:  byPeriod,
 	})
 }
 

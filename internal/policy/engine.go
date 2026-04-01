@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
 )
@@ -44,9 +46,15 @@ func (e *Engine) hasDBOverride(ctx context.Context, artifact scanner.Artifact) b
 		return false
 	}
 
+	// Use a fresh context — the HTTP request context may already be canceled
+	// by the time policy evaluation runs (e.g. client disconnected during scan).
+	// Override checks must succeed regardless of client state.
+	dbCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	now := time.Now().UTC()
 	var count int
-	err := e.db.QueryRowContext(ctx,
+	err := e.db.QueryRowContext(dbCtx,
 		`SELECT COUNT(*) FROM policy_overrides
 		 WHERE ecosystem = ? AND name = ? AND revoked = FALSE
 		   AND (expires_at IS NULL OR expires_at > ?)
@@ -54,7 +62,11 @@ func (e *Engine) hasDBOverride(ctx context.Context, artifact scanner.Artifact) b
 		string(artifact.Ecosystem), artifact.Name, now, artifact.Version,
 	).Scan(&count)
 	if err != nil {
-		// Fail open — DB errors should not block artifacts
+		log.Error().Err(err).
+			Str("ecosystem", string(artifact.Ecosystem)).
+			Str("name", artifact.Name).
+			Str("version", artifact.Version).
+			Msg("hasDBOverride: query error")
 		return false
 	}
 	return count > 0

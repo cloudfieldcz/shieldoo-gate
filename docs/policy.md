@@ -101,7 +101,7 @@ The threat feed checker is exempt from this threshold — it bypasses confidence
 
 Both BLOCK and QUARANTINE result in the artifact being marked as `QUARANTINED` in the database. The difference is in the audit event type and the reason logged. WARN is currently only used by the tag mutability subsystem (not by the verdict-based engine).
 
-## Policy Overrides (False Positive Management)
+## Policy Overrides
 
 Policy overrides allow administrators to create exceptions for artifacts that were incorrectly flagged by scanners.
 
@@ -133,11 +133,19 @@ Created ──▶ Active ──▶ Revoked (soft-delete)
 | `POST` | `/api/v1/overrides` | Create override (specify ecosystem, name, version, scope, reason) |
 | `DELETE` | `/api/v1/overrides/{id}` | Revoke override (soft-delete) |
 | `POST` | `/api/v1/artifacts/{id}/override` | Create override from artifact (convenience shortcut) |
+| `POST` | `/api/v1/artifacts/{id}/release` | Release artifact from quarantine — also creates a version-scoped override |
+
+The release endpoint is the primary UI action for quarantined artifacts. It sets the artifact status to `CLEAN` and creates a policy override so the artifact is not re-quarantined on the next scan.
+
+### Deduplication
+
+A partial unique index on `policy_overrides(ecosystem, name, version, scope) WHERE revoked = FALSE` prevents duplicate active overrides. All override creation endpoints (including release) use `INSERT ... ON CONFLICT DO NOTHING` + `SELECT` for idempotent behavior — calling release or override multiple times on the same artifact reuses the existing active override.
 
 ### Audit Trail
 
 Override operations are logged in the audit log:
-- `OVERRIDE_CREATED` — when a new override is created
+- `OVERRIDE_CREATED` — when a new override is created via the override endpoints
+- `RELEASED` — when an artifact is released (which also creates an override)
 - `OVERRIDE_REVOKED` — when an override is revoked
 
 ## Example Scenarios

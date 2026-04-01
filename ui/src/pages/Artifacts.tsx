@@ -5,9 +5,17 @@ import type { ArtifactWithStatus } from '../api/types'
 import ArtifactTable from '../components/ArtifactTable'
 import StatusBadge from '../components/StatusBadge'
 import ScanResultCard from '../components/ScanResultCard'
-import { X, RefreshCw, ShieldX, ShieldCheck, ShieldAlert, ChevronLeft, ChevronRight } from 'lucide-react'
+import { X, RefreshCw, ShieldX, ShieldCheck, ChevronLeft, ChevronRight } from 'lucide-react'
 
-const ECOSYSTEMS = ['', 'docker', 'pypi', 'npm', 'nuget']
+const ECOSYSTEMS = [
+  { value: 'docker', label: 'Docker' },
+  { value: 'pypi', label: 'PyPI' },
+  { value: 'npm', label: 'npm' },
+  { value: 'nuget', label: 'NuGet' },
+  { value: 'maven', label: 'Maven' },
+  { value: 'rubygems', label: 'RubyGems' },
+  { value: 'go', label: 'Go Modules' },
+]
 const STATUSES = ['', 'CLEAN', 'SUSPICIOUS', 'QUARANTINED', 'PENDING_SCAN']
 const PER_PAGE = 20
 
@@ -86,14 +94,6 @@ export default function Artifacts() {
     },
   })
 
-  const overrideMutation = useMutation({
-    mutationFn: (id: string) => artifactsApi.override(id, { reason: 'false positive', scope: 'version' }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['artifacts'] })
-      void qc.invalidateQueries({ queryKey: ['artifact-detail', selected?.id] })
-    },
-  })
-
   const artifacts = listQuery.data?.data ?? []
   const total = listQuery.data?.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE))
@@ -115,8 +115,10 @@ export default function Artifacts() {
           onChange={(e) => setEcosystem(e.target.value)}
         >
           <option value="">All Ecosystems</option>
-          {ECOSYSTEMS.filter(Boolean).map((e) => (
-            <option key={e} value={e}>{e}</option>
+          {ECOSYSTEMS.map((ecosystemOption) => (
+            <option key={ecosystemOption.value} value={ecosystemOption.value}>
+              {ecosystemOption.label}
+            </option>
           ))}
         </select>
 
@@ -273,16 +275,6 @@ export default function Artifacts() {
                   </button>
                 )}
 
-                {(selected.status.status === 'QUARANTINED' || selected.status.status === 'SUSPICIOUS') && (
-                  <button
-                    onClick={() => overrideMutation.mutate(selected.id)}
-                    disabled={overrideMutation.isPending}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-amber-300 text-amber-700 hover:bg-amber-50 disabled:opacity-50"
-                  >
-                    <ShieldAlert className="w-3.5 h-3.5" />
-                    False Positive
-                  </button>
-                )}
               </div>
 
               {/* Scan results */}

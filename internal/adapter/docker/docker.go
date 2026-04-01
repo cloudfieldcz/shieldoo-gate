@@ -437,6 +437,8 @@ func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request
 
 	switch policyResult.Action {
 	case policy.ActionBlock:
+		now := time.Now().UTC()
+		_ = a.persistArtifact(artifactID, scanArtifact, hex.EncodeToString(h[:]), int64(len(body)), model.StatusQuarantined, policyResult.Reason, &now, scanResults)
 		adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
 			Error:    "blocked",
 			Artifact: artifactID,
@@ -727,6 +729,8 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 	// 9. Act on policy result.
 	switch policyResult.Action {
 	case policy.ActionBlock:
+		now := time.Now().UTC()
+		_ = a.persistArtifact(artifactID, scanArtifact, manifestSHA, int64(len(manifestBytes)), model.StatusQuarantined, policyResult.Reason, &now, scanResults)
 		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
 			EventType:  model.EventBlocked,
 			ArtifactID: artifactID,

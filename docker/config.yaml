@@ -118,14 +118,14 @@ rescan:
   max_concurrent: 5
 
 log:
-  level: "info"
+  level: "debug"
   format: "json"
 
 # OIDC authentication for admin API (opt-in, disabled by default).
 # When disabled, the admin API is fully open — suitable for development/testing.
 # In production, set enabled: true and configure your OIDC provider.
 auth:
-  enabled: true
+  enabled: false
   issuer_url: ""                     # OIDC provider URL, e.g. "https://accounts.google.com"
   client_id: ""                      # OAuth2 client ID from your OIDC provider
   client_secret_env: "SGW_OIDC_CLIENT_SECRET"  # Env var holding the client secret
@@ -137,7 +137,7 @@ auth:
 # When enabled, all proxy requests require a valid API key via HTTP Basic Auth.
 # Keys are either per-user PATs (generated via admin API) or a global shared token.
 proxy_auth:
-  enabled: true
+  enabled: false
   global_token_env: "SGW_PROXY_TOKEN"  # Env var holding the global shared token (optional)
 
 alerts:

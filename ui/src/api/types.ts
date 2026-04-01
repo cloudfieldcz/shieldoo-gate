@@ -55,11 +55,24 @@ export interface PolicyOverride {
   revoked_at?: string
 }
 
+export interface ArtifactStatsSection {
+  total: number
+  clean: number
+  suspicious: number
+  quarantined: number
+  pending_scan: number
+}
+
+export interface RequestStatsSection {
+  served_24h: number
+  blocked_24h: number
+  served_all: number
+  blocked_all: number
+}
+
 export interface StatsSummary {
-  total_artifacts: number
-  total_blocked: number
-  total_quarantined: number
-  total_served: number
+  artifacts: ArtifactStatsSection
+  requests: RequestStatsSection
   by_period: Record<string, Record<string, number>>
 }
 
