@@ -4,6 +4,14 @@ FROM python:3.12.11-slim
 ARG SGW_TOKEN=""
 ARG SGW_USER=docker-build
 
+# System dependencies for cffi and pygit2
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libffi-dev \
+    libgit2-dev \
+    pkg-config \
+  && rm -rf /var/lib/apt/lists/*
+
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:0.7.12 /uv /usr/local/bin/uv
 
