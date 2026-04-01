@@ -5,6 +5,8 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      args:
+        SGW_TOKEN: ${SGW_TOKEN:-}
     platform: linux/amd64
     depends_on:
       scanner-bridge:
@@ -34,6 +36,8 @@ services:
     build:
       context: ../scanner-bridge
       dockerfile: Dockerfile
+      args:
+        SGW_TOKEN: ${SGW_TOKEN:-}
     platform: linux/amd64
     volumes:
       - bridge-socket:/tmp

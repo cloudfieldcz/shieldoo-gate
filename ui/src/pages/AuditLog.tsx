@@ -88,7 +88,7 @@ export default function AuditLog() {
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
-                  {['Timestamp', 'Event Type', 'Artifact ID', 'Client IP', 'Reason'].map((col) => (
+                  {['Timestamp', 'Event Type', 'Artifact ID', 'Actor', 'Reason'].map((col) => (
                     <th
                       key={col}
                       className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider"
@@ -116,8 +116,14 @@ export default function AuditLog() {
                     <td className="px-4 py-3 text-sm font-mono text-gray-700 max-w-xs truncate">
                       {entry.artifact_id ?? <span className="text-gray-300">—</span>}
                     </td>
-                    <td className="px-4 py-3 text-sm text-gray-600 font-mono">
-                      {entry.client_ip ?? <span className="text-gray-300">—</span>}
+                    <td className="px-4 py-3 text-sm text-gray-600">
+                      {entry.user_email ? (
+                        <span>{entry.user_email}</span>
+                      ) : entry.client_ip ? (
+                        <span className="font-mono">{entry.client_ip}</span>
+                      ) : (
+                        <span className="italic text-gray-400">system</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-600 max-w-xs truncate">
                       {entry.reason ?? <span className="text-gray-300">—</span>}

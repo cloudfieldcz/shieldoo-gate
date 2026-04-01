@@ -39,6 +39,7 @@ export interface AuditEntry {
   client_ip?: string
   user_agent?: string
   reason?: string
+  user_email?: string
 }
 
 export interface PolicyOverride {

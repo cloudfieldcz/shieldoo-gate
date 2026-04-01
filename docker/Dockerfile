@@ -2,22 +2,34 @@
 FROM node:20.19.0-alpine3.21 AS ui-builder
 
 ARG APP_VERSION=dev
+ARG SGW_TOKEN=""
+ARG SGW_USER=docker-build
 ENV VITE_APP_VERSION=${APP_VERSION}
 
 WORKDIR /ui
 COPY ui/package.json ui/package-lock.json ./
-RUN npm ci
+RUN if [ -n "$SGW_TOKEN" ]; then \
+      npm config set registry https://npm.shieldoo-gate.cloudfield.cz/ && \
+      npm config set //npm.shieldoo-gate.cloudfield.cz/:_auth "$(printf '%s:%s' "${SGW_USER}" "${SGW_TOKEN}" | base64 | tr -d '\n')"; \
+    fi && \
+    npm ci
 COPY ui/ ./
 RUN npm run build
 
 # Stage 2: Build Go binary
 FROM golang:1.25-alpine AS go-builder
 
+ARG SGW_TOKEN=""
+ARG SGW_USER=docker-build
+
 RUN apk add --no-cache gcc musl-dev sqlite-dev
 
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+RUN if [ -n "$SGW_TOKEN" ]; then \
+      export GOPROXY="https://${SGW_USER}:${SGW_TOKEN}@go.shieldoo-gate.cloudfield.cz,direct"; \
+    fi && \
+    go mod download
 
 COPY . .
 # Copy built UI assets into the source tree so they are embedded if needed

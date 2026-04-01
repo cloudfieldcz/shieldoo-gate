@@ -5,6 +5,12 @@
 BINARY := shieldoo-gate
 CMD_DIR := ./cmd/shieldoo-gate
 
+# Dogfooding: pull Go deps through Shieldoo Gate when SGW_TOKEN is set
+ifdef SGW_TOKEN
+  SGW_USER ?= $(shell whoami)
+  export GOPROXY := https://$(SGW_USER):$(SGW_TOKEN)@go.shieldoo-gate.cloudfield.cz,direct
+endif
+
 build:
 	go build -o bin/$(BINARY) $(CMD_DIR)
 

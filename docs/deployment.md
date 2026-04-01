@@ -188,6 +188,60 @@ The test-runner waits for shieldoo-gate to pass its healthcheck, then runs `run_
 make test-e2e
 ```
 
+## Dogfooding (Self-Protection)
+
+Shieldoo Gate can protect its own build dependencies. When `SGW_TOKEN` is set, the Makefile and all Dockerfiles automatically route dependency downloads through the proxy.
+
+### Makefile (Go)
+
+```bash
+# Set SGW_TOKEN to route go mod download through Shieldoo Gate
+export SGW_TOKEN=your-api-key
+make build   # GOPROXY is set automatically
+make test
+```
+
+`SGW_USER` defaults to `$(whoami)`. Override with `SGW_USER=ci make build`.
+
+### Docker Compose
+
+`SGW_TOKEN` is propagated to both services via build args in `docker-compose.yml`. Just set the env variable before building:
+
+```bash
+export SGW_TOKEN=your-api-key
+docker compose -f docker/docker-compose.yml build
+docker compose -f docker/docker-compose.yml up -d
+```
+
+### Docker Build (standalone)
+
+Pass `SGW_TOKEN` as a build arg to protect npm, Go, and Python dependencies:
+
+```bash
+# Main image (npm + Go)
+docker build --build-arg SGW_TOKEN="$SGW_TOKEN" -f docker/Dockerfile .
+
+# Scanner bridge (Python/PyPI)
+docker build --build-arg SGW_TOKEN="$SGW_TOKEN" -f scanner-bridge/Dockerfile scanner-bridge/
+```
+
+`SGW_USER` defaults to `docker-build`. Override with `--build-arg SGW_USER=ci`.
+
+### GitHub Actions
+
+The release pipeline (`release.yml`) passes `SGW_TOKEN` from repository secrets. Add the secret in Settings > Secrets and variables > Actions.
+
+### Summary
+
+Without `SGW_TOKEN`, all builds use default upstream registries (no change in behavior).
+
+| Build method | How to enable |
+|---|---|
+| `make build` / `make test` | `export SGW_TOKEN=...` |
+| `docker compose build` | `export SGW_TOKEN=...` |
+| `docker build` | `--build-arg SGW_TOKEN=...` |
+| GitHub Actions release | Add `SGW_TOKEN` repository secret |
+
 ## Client Configuration
 
 ### pip / uv (PyPI)
