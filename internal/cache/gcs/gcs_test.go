@@ -16,11 +16,30 @@ import (
 var _ cache.CacheStore = (*GCSCacheStore)(nil)
 
 func TestParseArtifactID_Valid(t *testing.T) {
-	eco, name, version, err := parseArtifactID("pypi:requests:2.31.0")
+	eco, name, version, filename, err := parseArtifactID("pypi:requests:2.31.0")
 	require.NoError(t, err)
 	assert.Equal(t, "pypi", eco)
 	assert.Equal(t, "requests", name)
 	assert.Equal(t, "2.31.0", version)
+	assert.Equal(t, "", filename)
+}
+
+func TestParseArtifactID_FourSegments(t *testing.T) {
+	eco, name, version, filename, err := parseArtifactID("pypi:cffi:2.0.0:cffi-2.0.0-cp312-manylinux.whl")
+	require.NoError(t, err)
+	assert.Equal(t, "pypi", eco)
+	assert.Equal(t, "cffi", name)
+	assert.Equal(t, "2.0.0", version)
+	assert.Equal(t, "cffi-2.0.0-cp312-manylinux.whl", filename)
+}
+
+func TestParseArtifactID_ThreeSegments_BackwardCompat(t *testing.T) {
+	eco, name, version, filename, err := parseArtifactID("npm:lodash:4.17.21")
+	require.NoError(t, err)
+	assert.Equal(t, "npm", eco)
+	assert.Equal(t, "lodash", name)
+	assert.Equal(t, "4.17.21", version)
+	assert.Equal(t, "", filename)
 }
 
 func TestParseArtifactID_Invalid(t *testing.T) {
@@ -34,7 +53,7 @@ func TestParseArtifactID_Invalid(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, _, err := parseArtifactID(tc.id)
+			_, _, _, _, err := parseArtifactID(tc.id)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), "invalid artifact ID")
 		})
@@ -43,20 +62,32 @@ func TestParseArtifactID_Invalid(t *testing.T) {
 
 func TestObjectKey_WithPrefix(t *testing.T) {
 	store := &GCSCacheStore{prefix: "cache"}
-	key := store.objectKey("pypi", "requests", "2.31.0", "abc123")
+	key := store.objectKey("pypi", "requests", "2.31.0", "", "abc123")
 	assert.Equal(t, "cache/pypi/requests/2.31.0/abc123", key)
 }
 
 func TestObjectKey_WithoutPrefix(t *testing.T) {
 	store := &GCSCacheStore{prefix: ""}
-	key := store.objectKey("npm", "lodash", "4.17.21", "def456")
+	key := store.objectKey("npm", "lodash", "4.17.21", "", "def456")
 	assert.Equal(t, "npm/lodash/4.17.21/def456", key)
 }
 
 func TestObjectKey_PrefixTrailingSlashStripped(t *testing.T) {
 	store := &GCSCacheStore{prefix: "artifacts"}
-	key := store.objectKey("docker", "library__nginx", "latest", "sha123")
+	key := store.objectKey("docker", "library__nginx", "latest", "", "sha123")
 	assert.Equal(t, "artifacts/docker/library__nginx/latest/sha123", key)
+}
+
+func TestObjectKey_WithFilename(t *testing.T) {
+	store := &GCSCacheStore{prefix: "cache"}
+	key := store.objectKey("pypi", "cffi", "2.0.0", "cffi-2.0.0-cp312-manylinux.whl", "abc123")
+	assert.Equal(t, "cache/pypi/cffi/2.0.0/cffi-2.0.0-cp312-manylinux.whl/abc123", key)
+}
+
+func TestObjectKey_WithFilenameNoPrefix(t *testing.T) {
+	store := &GCSCacheStore{prefix: ""}
+	key := store.objectKey("pypi", "cffi", "2.0.0", "cffi-2.0.0-cp312-manylinux.whl", "def456")
+	assert.Equal(t, "pypi/cffi/2.0.0/cffi-2.0.0-cp312-manylinux.whl/def456", key)
 }
 
 func TestObjectKeyPrefixFromID_Valid(t *testing.T) {

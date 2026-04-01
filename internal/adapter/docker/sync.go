@@ -420,7 +420,7 @@ func (s *SyncService) persistArtifact(
 		QuarantineReason: quarantineReason,
 		QuarantinedAt:    quarantinedAt,
 	}
-	if err := adapter.InsertArtifact(s.db, art, artStatus); err != nil {
+	if err := adapter.InsertArtifact(s.db, artifactID, art, artStatus); err != nil {
 		return err
 	}
 	return adapter.InsertScanResults(s.db, artifactID, scanResults)

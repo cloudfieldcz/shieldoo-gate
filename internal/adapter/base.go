@@ -243,14 +243,13 @@ func InsertScanResults(db *config.GateDB, artifactID string, results []scanner.S
 }
 
 // InsertArtifact transactionally inserts the artifact row and its initial status row.
-func InsertArtifact(db *config.GateDB, artifact model.Artifact, status model.ArtifactStatus) error {
+func InsertArtifact(db *config.GateDB, artifactID string, artifact model.Artifact, status model.ArtifactStatus) error {
 	tx, err := db.Beginx()
 	if err != nil {
 		return fmt.Errorf("adapter: beginning transaction: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	artifactID := artifact.ID()
 	_, err = tx.Exec(
 		`INSERT INTO artifacts (id, ecosystem, name, version, upstream_url, sha256, size_bytes, cached_at, last_accessed_at, storage_path)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

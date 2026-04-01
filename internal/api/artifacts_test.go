@@ -370,6 +370,45 @@ func TestHandleListArtifacts_NameTooLong_Returns400(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+func TestHandleGetArtifact_FourSegmentID_ReturnsRawDBID(t *testing.T) {
+	srv, db := newTestServer(t)
+
+	// Simulate a PyPI artifact with a 4-segment DB id (ecosystem:name:version:filename).
+	insertTestArtifact(t, db, "pypi:requests:2.31.0:requests-2.31.0-py3-none-any.whl", "pypi", "requests", "2.31.0")
+
+	router := srv.Routes()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/artifacts/pypi:requests:2.31.0:requests-2.31.0-py3-none-any.whl", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	assert.Equal(t, "pypi:requests:2.31.0:requests-2.31.0-py3-none-any.whl", body["id"],
+		"API response id must match the raw DB id, not a 3-segment computed ID")
+}
+
+func TestHandleListArtifacts_FourSegmentID_ReturnsRawDBID(t *testing.T) {
+	srv, db := newTestServer(t)
+
+	insertTestArtifact(t, db, "pypi:requests:2.31.0:requests-2.31.0-py3-none-any.whl", "pypi", "requests", "2.31.0")
+
+	router := srv.Routes()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/artifacts", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	items := body["data"].([]any)
+	require.Len(t, items, 1)
+	assert.Equal(t, "pypi:requests:2.31.0:requests-2.31.0-py3-none-any.whl", items[0].(map[string]any)["id"],
+		"list API response id must match the raw DB id, not a 3-segment computed ID")
+}
+
 func TestHandleListArtifacts_OrderByName_ReturnsAlphabetical(t *testing.T) {
 	srv, db := newTestServer(t)
 

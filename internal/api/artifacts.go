@@ -19,6 +19,7 @@ import (
 
 // artifactDBRow is used for scanning DB rows that join artifacts + artifact_status.
 type artifactDBRow struct {
+	DBID             string     `db:"id"`
 	model.Artifact
 	Status           string     `db:"status"`
 	QuarantineReason string     `db:"quarantine_reason"`
@@ -63,7 +64,7 @@ func artifactID(r *http.Request) string {
 
 func toArtifactResponse(row artifactDBRow) artifactResponse {
 	return artifactResponse{
-		ID:             row.Artifact.ID(),
+		ID:             row.DBID,
 		Ecosystem:      row.Ecosystem,
 		Name:           row.Name,
 		Version:        row.Version,
@@ -172,7 +173,7 @@ func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Query matching rows.
-	selectQuery := `SELECT a.ecosystem, a.name, a.version, a.upstream_url, a.sha256,
+	selectQuery := `SELECT a.id, a.ecosystem, a.name, a.version, a.upstream_url, a.sha256,
 		        a.size_bytes, a.cached_at, a.last_accessed_at, a.storage_path,
 		        COALESCE(s.status, 'PENDING_SCAN') AS status,
 		        COALESCE(s.quarantine_reason, '') AS quarantine_reason,
@@ -219,7 +220,7 @@ func (s *Server) handleGetArtifact(w http.ResponseWriter, r *http.Request) {
 
 	var row artifactDBRow
 	err := s.db.QueryRowxContext(r.Context(),
-		`SELECT a.ecosystem, a.name, a.version, a.upstream_url, a.sha256,
+		`SELECT a.id, a.ecosystem, a.name, a.version, a.upstream_url, a.sha256,
 		        a.size_bytes, a.cached_at, a.last_accessed_at, a.storage_path,
 		        COALESCE(s.status, 'PENDING_SCAN') AS status,
 		        COALESCE(s.quarantine_reason, '') AS quarantine_reason,

@@ -172,8 +172,8 @@ func stripPlatform(versionPart string) string {
 }
 
 // rubygemsArtifactID returns the canonical artifact ID for DB/cache lookups.
-func rubygemsArtifactID(name, version string) string {
-	return fmt.Sprintf("%s:%s:%s", string(scanner.EcosystemRubyGems), name, version)
+func rubygemsArtifactID(name, version, filename string) string {
+	return fmt.Sprintf("%s:%s:%s:%s", string(scanner.EcosystemRubyGems), name, version, filename)
 }
 
 // handleGemDownload handles GET /gems/{filename} — the main scan pipeline.
@@ -279,7 +279,7 @@ func (a *RubyGemsAdapter) handlePassThrough(w http.ResponseWriter, r *http.Reque
 // downloadScanServe implements the full download -> scan -> policy -> serve pipeline.
 func (a *RubyGemsAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, name, version, filename string) {
 	ctx := r.Context()
-	artifactID := rubygemsArtifactID(name, version)
+	artifactID := rubygemsArtifactID(name, version, filename)
 
 	// 1. Check if already in cache with a known status.
 	cachedPath, cacheErr := a.cache.Get(ctx, artifactID)
@@ -486,7 +486,7 @@ func (a *RubyGemsAdapter) persistArtifact(
 		QuarantineReason: quarantineReason,
 		QuarantinedAt:    quarantinedAt,
 	}
-	if err := adapter.InsertArtifact(a.db, art, artStatus); err != nil {
+	if err := adapter.InsertArtifact(a.db, artifactID, art, artStatus); err != nil {
 		return err
 	}
 	return adapter.InsertScanResults(a.db, artifactID, scanResults)

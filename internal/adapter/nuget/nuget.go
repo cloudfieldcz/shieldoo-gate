@@ -431,7 +431,7 @@ func (a *NuGetAdapter) persistArtifact(
 		QuarantineReason: quarantineReason,
 		QuarantinedAt:    quarantinedAt,
 	}
-	if err := adapter.InsertArtifact(a.db, art, artStatus); err != nil {
+	if err := adapter.InsertArtifact(a.db, artifactID, art, artStatus); err != nil {
 		return err
 	}
 	return adapter.InsertScanResults(a.db, artifactID, scanResults)

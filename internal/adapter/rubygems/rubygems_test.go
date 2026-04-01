@@ -81,13 +81,18 @@ func TestRubyGemsAdapter_ParseGemFilename_Invalid(t *testing.T) {
 }
 
 func TestRubyGemsAdapter_ArtifactID_Format(t *testing.T) {
-	id := rubygemsArtifactID("rails", "7.1.3")
-	assert.Equal(t, "rubygems:rails:7.1.3", id)
+	id := rubygemsArtifactID("rails", "7.1.3", "rails-7.1.3.gem")
+	assert.Equal(t, "rubygems:rails:7.1.3:rails-7.1.3.gem", id)
 }
 
 func TestRubyGemsAdapter_ArtifactID_Hyphenated(t *testing.T) {
-	id := rubygemsArtifactID("aws-sdk-core", "3.0.0")
-	assert.Equal(t, "rubygems:aws-sdk-core:3.0.0", id)
+	id := rubygemsArtifactID("aws-sdk-core", "3.0.0", "aws-sdk-core-3.0.0.gem")
+	assert.Equal(t, "rubygems:aws-sdk-core:3.0.0:aws-sdk-core-3.0.0.gem", id)
+}
+
+func TestRubyGemsAdapter_ArtifactID_WithPlatform(t *testing.T) {
+	id := rubygemsArtifactID("nokogiri", "1.16.0", "nokogiri-1.16.0-x86_64-linux.gem")
+	assert.Equal(t, "rubygems:nokogiri:1.16.0:nokogiri-1.16.0-x86_64-linux.gem", id)
 }
 
 func TestRubyGemsAdapter_Ecosystem(t *testing.T) {

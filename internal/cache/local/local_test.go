@@ -143,3 +143,116 @@ func TestLocalCacheStore_Stats(t *testing.T) {
 	assert.Equal(t, int64(0), stats.TotalBytes)
 	assert.NotNil(t, stats.ByEcosystem)
 }
+
+func TestLocalCacheStore_PutGet_FourSegmentID(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+	src := writeTempFile(t, "linux wheel content")
+
+	artifact := scanner.Artifact{
+		ID:        "pypi:cffi:2.0.0:cffi-2.0.0-cp312-cp312-manylinux_2_17_x86_64.whl",
+		Ecosystem: scanner.EcosystemPyPI,
+		Name:      "cffi",
+		Version:   "2.0.0",
+		LocalPath: src,
+	}
+
+	err := store.Put(ctx, artifact, src)
+	require.NoError(t, err)
+
+	gotPath, err := store.Get(ctx, artifact.ID)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(gotPath)
+	require.NoError(t, err)
+	assert.Equal(t, "linux wheel content", string(data))
+}
+
+func TestLocalCacheStore_DifferentPlatforms_SeparateEntries(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+
+	linuxSrc := writeTempFile(t, "linux wheel")
+	macSrc := writeTempFile(t, "macos wheel")
+
+	linuxArtifact := scanner.Artifact{
+		ID:        "pypi:cffi:2.0.0:cffi-2.0.0-cp312-cp312-manylinux_2_17_x86_64.whl",
+		Ecosystem: scanner.EcosystemPyPI, Name: "cffi", Version: "2.0.0",
+	}
+	macArtifact := scanner.Artifact{
+		ID:        "pypi:cffi:2.0.0:cffi-2.0.0-cp312-cp312-macosx_11_0_arm64.whl",
+		Ecosystem: scanner.EcosystemPyPI, Name: "cffi", Version: "2.0.0",
+	}
+
+	require.NoError(t, store.Put(ctx, linuxArtifact, linuxSrc))
+	require.NoError(t, store.Put(ctx, macArtifact, macSrc))
+
+	linuxPath, err := store.Get(ctx, linuxArtifact.ID)
+	require.NoError(t, err)
+	macPath, err := store.Get(ctx, macArtifact.ID)
+	require.NoError(t, err)
+
+	linuxData, _ := os.ReadFile(linuxPath)
+	macData, _ := os.ReadFile(macPath)
+
+	assert.Equal(t, "linux wheel", string(linuxData))
+	assert.Equal(t, "macos wheel", string(macData))
+	assert.NotEqual(t, linuxPath, macPath)
+}
+
+func TestLocalCacheStore_Delete_FourSegment_OnlyDeletesTarget(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+
+	linuxSrc := writeTempFile(t, "linux wheel")
+	macSrc := writeTempFile(t, "macos wheel")
+
+	linuxArtifact := scanner.Artifact{
+		ID:        "pypi:cffi:2.0.0:cffi-2.0.0-cp312-cp312-manylinux_2_17_x86_64.whl",
+		Ecosystem: scanner.EcosystemPyPI, Name: "cffi", Version: "2.0.0",
+	}
+	macArtifact := scanner.Artifact{
+		ID:        "pypi:cffi:2.0.0:cffi-2.0.0-cp312-cp312-macosx_11_0_arm64.whl",
+		Ecosystem: scanner.EcosystemPyPI, Name: "cffi", Version: "2.0.0",
+	}
+
+	require.NoError(t, store.Put(ctx, linuxArtifact, linuxSrc))
+	require.NoError(t, store.Put(ctx, macArtifact, macSrc))
+
+	require.NoError(t, store.Delete(ctx, linuxArtifact.ID))
+
+	_, err := store.Get(ctx, linuxArtifact.ID)
+	assert.ErrorIs(t, err, cache.ErrNotFound)
+
+	_, err = store.Get(ctx, macArtifact.ID)
+	assert.NoError(t, err)
+}
+
+func TestLocalCacheStore_List_FourSegment_ReturnsFullID(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+
+	linuxSrc := writeTempFile(t, "linux wheel")
+	macSrc := writeTempFile(t, "macos wheel")
+	npmSrc := writeTempFile(t, "npm tarball")
+
+	require.NoError(t, store.Put(ctx, scanner.Artifact{
+		ID:        "pypi:cffi:2.0.0:cffi-2.0.0-cp312-cp312-manylinux_2_17_x86_64.whl",
+		Ecosystem: scanner.EcosystemPyPI, Name: "cffi", Version: "2.0.0",
+	}, linuxSrc))
+	require.NoError(t, store.Put(ctx, scanner.Artifact{
+		ID:        "pypi:cffi:2.0.0:cffi-2.0.0-cp312-cp312-macosx_11_0_arm64.whl",
+		Ecosystem: scanner.EcosystemPyPI, Name: "cffi", Version: "2.0.0",
+	}, macSrc))
+	require.NoError(t, store.Put(ctx, scanner.Artifact{
+		ID: "npm:lodash:4.17.21", Ecosystem: scanner.EcosystemNPM, Name: "lodash", Version: "4.17.21",
+	}, npmSrc))
+
+	ids, err := store.List(ctx, cache.CacheFilter{})
+	require.NoError(t, err)
+
+	assert.Len(t, ids, 3)
+	assert.Contains(t, ids, "pypi:cffi:2.0.0:cffi-2.0.0-cp312-cp312-manylinux_2_17_x86_64.whl")
+	assert.Contains(t, ids, "pypi:cffi:2.0.0:cffi-2.0.0-cp312-cp312-macosx_11_0_arm64.whl")
+	assert.Contains(t, ids, "npm:lodash:4.17.21")
+}

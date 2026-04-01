@@ -35,13 +35,17 @@ func NewLocalCacheStore(basePath string, maxSizeGB int64) (*LocalCacheStore, err
 	return &LocalCacheStore{basePath: basePath, maxSizeGB: maxSizeGB}, nil
 }
 
-// parseArtifactID splits "eco:name:version" into its three components.
-func parseArtifactID(artifactID string) (eco, name, version string, err error) {
-	parts := strings.SplitN(artifactID, ":", 3)
-	if len(parts) != 3 {
-		return "", "", "", fmt.Errorf("local cache: invalid artifact ID %q: expected eco:name:version", artifactID)
+// parseArtifactID splits "eco:name:version[:filename]" into its components.
+// filename is empty string for 3-segment IDs.
+func parseArtifactID(artifactID string) (eco, name, version, filename string, err error) {
+	parts := strings.SplitN(artifactID, ":", 4)
+	if len(parts) < 3 {
+		return "", "", "", "", fmt.Errorf("local cache: invalid artifact ID %q: expected eco:name:version[:filename]", artifactID)
 	}
-	return parts[0], parts[1], parts[2], nil
+	if len(parts) == 4 {
+		return parts[0], parts[1], parts[2], parts[3], nil
+	}
+	return parts[0], parts[1], parts[2], "", nil
 }
 
 // validateName returns an error if a name component is unsafe.
@@ -55,8 +59,12 @@ func validateName(s string) error {
 	return nil
 }
 
-// artifactPath returns the directory path for the given eco/name/version.
-func (s *LocalCacheStore) artifactPath(eco, name, version string) string {
+// artifactDir returns the directory path for the given eco/name/version[/filename].
+// When filename is non-empty, it adds an extra directory level for platform variants.
+func (s *LocalCacheStore) artifactDir(eco, name, version, filename string) string {
+	if filename != "" {
+		return filepath.Join(s.basePath, eco, name, version, filename)
+	}
 	return filepath.Join(s.basePath, eco, name, version)
 }
 
@@ -97,12 +105,12 @@ func copyFile(src, dst string) error {
 // Get returns the local filesystem path of a cached artifact.
 // It returns cache.ErrNotFound if no file exists for the given artifactID.
 func (s *LocalCacheStore) Get(_ context.Context, artifactID string) (string, error) {
-	eco, name, version, err := parseArtifactID(artifactID)
+	eco, name, version, filename, err := parseArtifactID(artifactID)
 	if err != nil {
 		return "", err
 	}
 
-	dir := s.artifactPath(eco, name, version)
+	dir := s.artifactDir(eco, name, version, filename)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -126,13 +134,22 @@ func (s *LocalCacheStore) Put(_ context.Context, artifact scanner.Artifact, loca
 	name := artifact.Name
 	version := artifact.Version
 
-	for _, component := range []string{eco, name, version} {
+	_, _, _, filenameFromID, err := parseArtifactID(artifact.ID)
+	if err != nil {
+		return err
+	}
+
+	components := []string{eco, name, version}
+	if filenameFromID != "" {
+		components = append(components, filenameFromID)
+	}
+	for _, component := range components {
 		if err := validateName(component); err != nil {
 			return err
 		}
 	}
 
-	dir := s.artifactPath(eco, name, version)
+	dir := s.artifactDir(eco, name, version, filenameFromID)
 	filename := filepath.Base(localPath)
 	if filename == "." || filename == "" {
 		filename = name + "-" + version
@@ -142,13 +159,14 @@ func (s *LocalCacheStore) Put(_ context.Context, artifact scanner.Artifact, loca
 	return copyFile(localPath, dst)
 }
 
-// Delete removes the version directory and all its contents.
+// Delete removes the artifact directory and all its contents.
+// For 4-segment IDs, only the filename subdirectory is removed, not the entire version directory.
 func (s *LocalCacheStore) Delete(_ context.Context, artifactID string) error {
-	eco, name, version, err := parseArtifactID(artifactID)
+	eco, name, version, filename, err := parseArtifactID(artifactID)
 	if err != nil {
 		return err
 	}
-	dir := s.artifactPath(eco, name, version)
+	dir := s.artifactDir(eco, name, version, filename)
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("local cache: removing %s: %w", dir, err)
 	}
@@ -157,6 +175,7 @@ func (s *LocalCacheStore) Delete(_ context.Context, artifactID string) error {
 
 // List returns artifactIDs matching the optional filter.
 func (s *LocalCacheStore) List(_ context.Context, filter cache.CacheFilter) ([]string, error) {
+	seen := make(map[string]bool)
 	var ids []string
 
 	err := filepath.Walk(s.basePath, func(path string, info os.FileInfo, err error) error {
@@ -176,7 +195,7 @@ func (s *LocalCacheStore) List(_ context.Context, filter cache.CacheFilter) ([]s
 		if len(parts) < 3 {
 			return nil
 		}
-		eco, name, version := parts[0], parts[1], parts[2]
+		eco, name := parts[0], parts[1]
 
 		if filter.Ecosystem != "" && filter.Ecosystem != eco {
 			return nil
@@ -185,14 +204,19 @@ func (s *LocalCacheStore) List(_ context.Context, filter cache.CacheFilter) ([]s
 			return nil
 		}
 
-		id := eco + ":" + name + ":" + version
-		// Deduplicate: only add if not already present (multiple files in same version dir).
-		for _, existing := range ids {
-			if existing == id {
-				return nil
-			}
+		var id string
+		if len(parts) >= 5 {
+			// 4-segment layout: eco/name/version/filename/cachefile
+			id = eco + ":" + name + ":" + parts[2] + ":" + parts[3]
+		} else {
+			// 3-segment layout: eco/name/version/cachefile
+			id = eco + ":" + name + ":" + parts[2]
 		}
-		ids = append(ids, id)
+
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
 		return nil
 	})
 

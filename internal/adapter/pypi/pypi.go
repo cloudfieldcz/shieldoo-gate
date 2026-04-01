@@ -126,6 +126,26 @@ func (a *PyPIAdapter) handleSimplePackage(w http.ResponseWriter, r *http.Request
 // pypiFilesHost is the CDN that serves actual PyPI package files.
 const pypiFilesHost = "https://files.pythonhosted.org"
 
+var validFilenameRe = regexp.MustCompile(`^[a-zA-Z0-9._\-]+$`)
+
+const maxFilenameLen = 256
+
+// PyPIArtifactID constructs a 4-segment artifact ID for PyPI.
+func PyPIArtifactID(name, version, filename string) string {
+	return fmt.Sprintf("%s:%s:%s:%s", string(scanner.EcosystemPyPI), name, version, filename)
+}
+
+// validateFilename checks the filename is safe for use in artifact IDs and cache paths.
+func validateFilename(filename string) error {
+	if len(filename) > maxFilenameLen {
+		return fmt.Errorf("pypi: filename too long (%d > %d): %q", len(filename), maxFilenameLen, filename)
+	}
+	if !validFilenameRe.MatchString(filename) {
+		return fmt.Errorf("pypi: filename contains invalid characters: %q", filename)
+	}
+	return nil
+}
+
 // handlePackageDownload runs the full download → scan → policy → serve pipeline.
 func (a *PyPIAdapter) handlePackageDownload(w http.ResponseWriter, r *http.Request) {
 	filePath := chi.URLParam(r, "*")
@@ -153,7 +173,17 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 
 	// Parse package name + version from filename (best-effort; PEP 427 wheel or sdist).
 	pkgName, pkgVersion := parseFilename(filename)
-	artifactID := fmt.Sprintf("%s:%s:%s", string(scanner.EcosystemPyPI), pkgName, pkgVersion)
+
+	// Validate filename for safe use in artifact ID and cache paths.
+	if err := validateFilename(filename); err != nil {
+		adapter.WriteJSONError(w, http.StatusBadRequest, adapter.ErrorResponse{
+			Error:  "invalid filename",
+			Reason: err.Error(),
+		})
+		return
+	}
+
+	artifactID := PyPIArtifactID(pkgName, pkgVersion, filename)
 
 	// 1. Check if already in cache with a known status.
 	cachedPath, cacheErr := a.cache.Get(ctx, artifactID)
@@ -364,7 +394,7 @@ func (a *PyPIAdapter) persistArtifact(
 		QuarantineReason: quarantineReason,
 		QuarantinedAt:    quarantinedAt,
 	}
-	if err := adapter.InsertArtifact(a.db, art, artStatus); err != nil {
+	if err := adapter.InsertArtifact(a.db, artifactID, art, artStatus); err != nil {
 		return err
 	}
 	return adapter.InsertScanResults(a.db, artifactID, scanResults)

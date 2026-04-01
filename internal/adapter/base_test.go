@@ -147,7 +147,7 @@ func TestInsertArtifact_ThenGetStatus(t *testing.T) {
 		Status:     model.StatusClean,
 	}
 
-	require.NoError(t, adapter.InsertArtifact(db, art, status))
+	require.NoError(t, adapter.InsertArtifact(db, art.ID(), art, status))
 
 	got, err := adapter.GetArtifactStatus(db, art.ID())
 	require.NoError(t, err)
@@ -190,7 +190,7 @@ func TestInsertScanResults_InsertsRows(t *testing.T) {
 		ArtifactID: art.ID(),
 		Status:     model.StatusClean,
 	}
-	require.NoError(t, adapter.InsertArtifact(db, art, status))
+	require.NoError(t, adapter.InsertArtifact(db, art.ID(), art, status))
 
 	results := []scanner.ScanResult{
 		{
@@ -228,7 +228,7 @@ func TestInsertScanResults_MultipleResults_Transactional(t *testing.T) {
 		ArtifactID: art.ID(),
 		Status:     model.StatusClean,
 	}
-	require.NoError(t, adapter.InsertArtifact(db, art, status))
+	require.NoError(t, adapter.InsertArtifact(db, art.ID(), art, status))
 
 	results := []scanner.ScanResult{
 		{
@@ -258,6 +258,38 @@ func TestInsertScanResults_MultipleResults_Transactional(t *testing.T) {
 	require.NoError(t, db.Get(&findingsJSON,
 		`SELECT findings_json FROM scan_results WHERE artifact_id = ? AND scanner_name = 'guarddog'`, art.ID()))
 	assert.Contains(t, findingsJSON, "test-rule")
+}
+
+func TestInsertArtifact_WithExplicitID(t *testing.T) {
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	art := model.Artifact{
+		Ecosystem:      "pypi",
+		Name:           "cffi",
+		Version:        "2.0.0",
+		Filename:       "cffi-2.0.0-cp312-cp312-manylinux_2_17_x86_64.whl",
+		UpstreamURL:    "https://example.com/cffi-2.0.0-cp312-cp312-manylinux_2_17_x86_64.whl",
+		SHA256:         "abc123",
+		SizeBytes:      12345,
+		CachedAt:       now,
+		LastAccessedAt: now,
+		StoragePath:    "/cache/pypi/cffi/2.0.0/cffi-2.0.0-cp312-cp312-manylinux_2_17_x86_64.whl",
+	}
+	explicitID := "pypi:cffi:2.0.0:cffi-2.0.0-cp312-cp312-manylinux_2_17_x86_64.whl"
+	status := model.ArtifactStatus{
+		ArtifactID: explicitID,
+		Status:     model.StatusClean,
+	}
+
+	require.NoError(t, adapter.InsertArtifact(db, explicitID, art, status))
+
+	got, err := adapter.GetArtifactStatus(db, explicitID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, model.StatusClean, got.Status)
 }
 
 func TestInsertScanResults_EmptySlice_NoError(t *testing.T) {

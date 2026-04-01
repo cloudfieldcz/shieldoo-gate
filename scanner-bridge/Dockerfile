@@ -20,16 +20,13 @@ WORKDIR /app
 COPY requirements.txt .
 RUN if [ -n "$SGW_TOKEN" ]; then \
       uv pip install --system --no-cache --require-hashes \
-        --python-platform manylinux_2_17_x86_64 \
         --index-url "https://${SGW_USER}:${SGW_TOKEN}@pypi.shieldoo-gate.cloudfield.cz/simple/" \
         -r requirements.txt; \
     else \
-      uv pip install --system --no-cache --require-hashes \
-        --python-platform manylinux_2_17_x86_64 \
-        -r requirements.txt; \
+      uv pip install --system --no-cache --require-hashes -r requirements.txt; \
     fi
-# Verify cffi native extension is present (catches wrong-platform wheel from cache)
-RUN python -c "import _cffi_backend"
+# Verify native extensions are present (catches wrong-platform wheel)
+RUN python -c "import _cffi_backend; import pygit2"
 
 COPY proto/ proto/
 RUN python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. proto/scanner.proto

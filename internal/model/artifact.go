@@ -18,6 +18,7 @@ type Artifact struct {
 	Ecosystem      string    `db:"ecosystem" json:"ecosystem"`
 	Name           string    `db:"name" json:"name"`
 	Version        string    `db:"version" json:"version"`
+	Filename       string    `db:"-" json:"filename,omitempty"`
 	UpstreamURL    string    `db:"upstream_url" json:"upstream_url"`
 	SHA256         string    `db:"sha256" json:"sha256"`
 	SizeBytes      int64     `db:"size_bytes" json:"size_bytes"`
@@ -27,6 +28,9 @@ type Artifact struct {
 }
 
 func (a Artifact) ID() string {
+	if a.Filename != "" {
+		return fmt.Sprintf("%s:%s:%s:%s", a.Ecosystem, a.Name, a.Version, a.Filename)
+	}
 	return fmt.Sprintf("%s:%s:%s", a.Ecosystem, a.Name, a.Version)
 }
 

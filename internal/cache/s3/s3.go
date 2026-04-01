@@ -120,8 +120,14 @@ func NewS3CacheStore(cfg config.S3CacheConfig) (*S3CacheStore, error) {
 
 // objectKey builds the S3 object key for an artifact.
 // Format: {prefix}/{ecosystem}/{name}/{version}/{sha256}
-func (s *S3CacheStore) objectKey(eco, name, version, sha string) string {
-	parts := []string{eco, name, version, sha}
+// When filename is non-empty (4-segment ID): {prefix}/{ecosystem}/{name}/{version}/{filename}/{sha256}
+func (s *S3CacheStore) objectKey(eco, name, version, filename, sha string) string {
+	var parts []string
+	if filename != "" {
+		parts = []string{eco, name, version, filename, sha}
+	} else {
+		parts = []string{eco, name, version, sha}
+	}
 	key := strings.Join(parts, "/")
 	if s.prefix != "" {
 		key = s.prefix + "/" + key
@@ -129,27 +135,37 @@ func (s *S3CacheStore) objectKey(eco, name, version, sha string) string {
 	return key
 }
 
-// objectKeyFromID builds a key prefix from an artifact ID (eco:name:version).
+// objectKeyFromID builds a key prefix from an artifact ID (eco:name:version[:filename]).
 // Used for Get/Delete/List where we don't know the sha256 yet.
 func (s *S3CacheStore) objectKeyPrefixFromID(artifactID string) (string, error) {
-	eco, name, version, err := parseArtifactID(artifactID)
+	eco, name, version, filename, err := parseArtifactID(artifactID)
 	if err != nil {
 		return "", err
 	}
-	prefix := strings.Join([]string{eco, name, version}, "/")
+	var parts []string
+	if filename != "" {
+		parts = []string{eco, name, version, filename}
+	} else {
+		parts = []string{eco, name, version}
+	}
+	prefix := strings.Join(parts, "/")
 	if s.prefix != "" {
 		prefix = s.prefix + "/" + prefix
 	}
 	return prefix + "/", nil
 }
 
-// parseArtifactID splits "eco:name:version" into its three components.
-func parseArtifactID(artifactID string) (eco, name, version string, err error) {
-	parts := strings.SplitN(artifactID, ":", 3)
-	if len(parts) != 3 {
-		return "", "", "", fmt.Errorf("s3 cache: invalid artifact ID %q: expected eco:name:version", artifactID)
+// parseArtifactID splits "eco:name:version[:filename]" into its components.
+// filename is empty string for 3-segment IDs.
+func parseArtifactID(artifactID string) (eco, name, version, filename string, err error) {
+	parts := strings.SplitN(artifactID, ":", 4)
+	if len(parts) < 3 {
+		return "", "", "", "", fmt.Errorf("s3 cache: invalid artifact ID %q: expected eco:name:version[:filename]", artifactID)
 	}
-	return parts[0], parts[1], parts[2], nil
+	if len(parts) == 4 {
+		return parts[0], parts[1], parts[2], parts[3], nil
+	}
+	return parts[0], parts[1], parts[2], "", nil
 }
 
 // Put uploads a local file to S3 and verifies SHA256 integrity after upload.
@@ -158,6 +174,11 @@ func (s *S3CacheStore) Put(ctx context.Context, artifact scanner.Artifact, local
 	name := artifact.Name
 	version := artifact.Version
 	sha := artifact.SHA256
+
+	_, _, _, filenameFromID, err := parseArtifactID(artifact.ID)
+	if err != nil {
+		return fmt.Errorf("s3 cache: parsing artifact ID %s: %w", artifact.ID, err)
+	}
 
 	if sha == "" {
 		// Compute SHA256 of the file if not provided.
@@ -168,7 +189,7 @@ func (s *S3CacheStore) Put(ctx context.Context, artifact scanner.Artifact, local
 		sha = computed
 	}
 
-	key := s.objectKey(eco, name, version, sha)
+	key := s.objectKey(eco, name, version, filenameFromID, sha)
 
 	f, err := os.Open(localPath)
 	if err != nil {
@@ -344,19 +365,26 @@ func (s *S3CacheStore) List(ctx context.Context, filter cache.CacheFilter) ([]st
 		for _, obj := range page.Contents {
 			key := aws.ToString(obj.Key)
 
-			// Strip prefix to get eco/name/version/sha256.
+			// Strip prefix to get eco/name/version[/filename]/sha256.
 			rel := key
 			if s.prefix != "" {
 				rel = strings.TrimPrefix(key, s.prefix+"/")
 			}
 
 			parts := strings.Split(rel, "/")
-			if len(parts) < 4 {
+			var id string
+			if len(parts) == 5 {
+				// 4-segment layout: eco/name/version/filename/sha256
+				eco, name, version, filename := parts[0], parts[1], parts[2], parts[3]
+				id = eco + ":" + name + ":" + version + ":" + filename
+			} else if len(parts) == 4 {
+				// 3-segment layout: eco/name/version/sha256
+				eco, name, version := parts[0], parts[1], parts[2]
+				id = eco + ":" + name + ":" + version
+			} else {
 				continue
 			}
-			eco, name, version := parts[0], parts[1], parts[2]
 
-			id := eco + ":" + name + ":" + version
 			if !seen[id] {
 				seen[id] = true
 				ids = append(ids, id)
