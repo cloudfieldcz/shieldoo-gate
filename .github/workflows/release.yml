@@ -66,6 +66,6 @@ jobs:
           build-args: |
             APP_VERSION=${{ steps.version.outputs.version }}
             SGW_TOKEN=${{ secrets.SGW_TOKEN }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
           platforms: linux/amd64
