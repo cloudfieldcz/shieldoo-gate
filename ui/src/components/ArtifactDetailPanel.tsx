@@ -5,10 +5,19 @@ import StatusBadge from './StatusBadge'
 import ScanResultCard from './ScanResultCard'
 import { X, RefreshCw, ShieldX, ShieldCheck } from 'lucide-react'
 
-interface ArtifactDetailPanelProps {
+interface ArtifactDetailByIdProps {
   artifactId: string
+  search?: never
   onClose: () => void
 }
+
+interface ArtifactDetailBySearchProps {
+  artifactId?: never
+  search: { ecosystem: string; name: string; version: string }
+  onClose: () => void
+}
+
+type ArtifactDetailPanelProps = ArtifactDetailByIdProps | ArtifactDetailBySearchProps
 
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`
@@ -16,13 +25,24 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export default function ArtifactDetailPanel({ artifactId, onClose }: ArtifactDetailPanelProps) {
+export default function ArtifactDetailPanel({ artifactId, search, onClose }: ArtifactDetailPanelProps) {
   const qc = useQueryClient()
   const [showScanHistory, setShowScanHistory] = useState(false)
 
+  // When search props are provided, resolve the real artifact ID via list API.
+  const searchQuery = useQuery({
+    queryKey: ['artifact-search', search?.ecosystem, search?.name, search?.version],
+    queryFn: () => artifactsApi.list(1, 1, search!.ecosystem, undefined, search!.name, search!.version),
+    enabled: !!search,
+    retry: 1,
+  })
+
+  const resolvedId = artifactId ?? searchQuery.data?.data?.[0]?.id ?? null
+
   const detailQuery = useQuery({
-    queryKey: ['artifact-detail', artifactId],
-    queryFn: () => artifactsApi.get(artifactId),
+    queryKey: ['artifact-detail', resolvedId],
+    queryFn: () => artifactsApi.get(resolvedId!),
+    enabled: !!resolvedId,
     retry: 1,
   })
 
@@ -30,7 +50,7 @@ export default function ArtifactDetailPanel({ artifactId, onClose }: ArtifactDet
     mutationFn: (id: string) => artifactsApi.rescan(id),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['artifacts'] })
-      void qc.invalidateQueries({ queryKey: ['artifact-detail', artifactId] })
+      void qc.invalidateQueries({ queryKey: ['artifact-detail', resolvedId] })
     },
   })
 
@@ -38,7 +58,7 @@ export default function ArtifactDetailPanel({ artifactId, onClose }: ArtifactDet
     mutationFn: (id: string) => artifactsApi.quarantine(id),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['artifacts'] })
-      void qc.invalidateQueries({ queryKey: ['artifact-detail', artifactId] })
+      void qc.invalidateQueries({ queryKey: ['artifact-detail', resolvedId] })
     },
   })
 
@@ -46,14 +66,17 @@ export default function ArtifactDetailPanel({ artifactId, onClose }: ArtifactDet
     mutationFn: (id: string) => artifactsApi.release(id),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['artifacts'] })
-      void qc.invalidateQueries({ queryKey: ['artifact-detail', artifactId] })
+      void qc.invalidateQueries({ queryKey: ['artifact-detail', resolvedId] })
     },
   })
 
   const detail = detailQuery.data
   const status = detail?.status?.status
+  const isLoading = (search && searchQuery.isLoading) || (resolvedId && detailQuery.isLoading)
+  const isError = (search && searchQuery.isError) || detailQuery.isError
+  const noMatch = search && searchQuery.isSuccess && !resolvedId
 
-  if (detailQuery.isLoading) {
+  if (isLoading) {
     return (
       <div className="w-96 flex-shrink-0 bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
@@ -67,19 +90,24 @@ export default function ArtifactDetailPanel({ artifactId, onClose }: ArtifactDet
     )
   }
 
-  if (detailQuery.isError || !detail) {
+  if (isError || noMatch || (!isLoading && !detail)) {
+    const label = artifactId ?? `${search?.ecosystem}/${search?.name}@${search?.version}`
     return (
       <div className="w-96 flex-shrink-0 bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-          <h2 className="text-sm font-semibold text-gray-900 truncate max-w-xs">{artifactId}</h2>
+          <h2 className="text-sm font-semibold text-gray-900 truncate max-w-xs">{label}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
             <X className="w-4 h-4" />
           </button>
         </div>
-        <div className="p-4 text-sm text-red-500">Failed to load artifact details.</div>
+        <div className="p-4 text-sm text-red-500">
+          {noMatch ? 'No matching artifact found.' : 'Failed to load artifact details.'}
+        </div>
       </div>
     )
   }
+
+  if (!detail) return null
 
   return (
     <div className="w-96 flex-shrink-0 bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
@@ -161,7 +189,7 @@ export default function ArtifactDetailPanel({ artifactId, onClose }: ArtifactDet
         {/* Action buttons */}
         <div className="flex flex-wrap gap-2 pt-2 border-t border-gray-100">
           <button
-            onClick={() => rescanMutation.mutate(artifactId)}
+            onClick={() => rescanMutation.mutate(resolvedId!)}
             disabled={rescanMutation.isPending}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
           >
@@ -171,7 +199,7 @@ export default function ArtifactDetailPanel({ artifactId, onClose }: ArtifactDet
 
           {status !== 'QUARANTINED' && (
             <button
-              onClick={() => quarantineMutation.mutate(artifactId)}
+              onClick={() => quarantineMutation.mutate(resolvedId!)}
               disabled={quarantineMutation.isPending}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-red-300 text-red-700 hover:bg-red-50 disabled:opacity-50"
             >
@@ -182,7 +210,7 @@ export default function ArtifactDetailPanel({ artifactId, onClose }: ArtifactDet
 
           {status === 'QUARANTINED' && (
             <button
-              onClick={() => releaseMutation.mutate(artifactId)}
+              onClick={() => releaseMutation.mutate(resolvedId!)}
               disabled={releaseMutation.isPending}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-green-300 text-green-700 hover:bg-green-50 disabled:opacity-50"
             >

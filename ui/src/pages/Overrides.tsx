@@ -24,11 +24,6 @@ function formatDate(iso: string) {
   return new Date(iso).toLocaleString()
 }
 
-function buildArtifactIdFromOverride(o: PolicyOverride): string | null {
-  if (!o.version) return null
-  return `${o.ecosystem}:${o.name}:${o.version}`
-}
-
 export default function Overrides() {
   const qc = useQueryClient()
   const [page, setPage] = useState(1)
@@ -36,7 +31,7 @@ export default function Overrides() {
   const [ecosystem, setEcosystem] = useState('')
   const [name, setName] = useState('')
   const [debouncedName, setDebouncedName] = useState('')
-  const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null)
+  const [selectedOverride, setSelectedOverride] = useState<{ ecosystem: string; name: string; version: string } | null>(null)
 
   // Debounce name search (300ms)
   useEffect(() => {
@@ -111,9 +106,9 @@ export default function Overrides() {
       </div>
 
       {/* Main content: table + detail panel */}
-      <div className={`flex gap-4 ${selectedArtifactId ? 'items-start' : ''}`}>
+      <div className={`flex gap-4 ${selectedOverride ? 'items-start' : ''}`}>
         {/* Table */}
-        <div className={`bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden ${selectedArtifactId ? 'flex-1 min-w-0' : 'w-full'}`}>
+        <div className={`bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden ${selectedOverride ? 'flex-1 min-w-0' : 'w-full'}`}>
           {listQuery.isError ? (
             <div className="p-8 text-center text-red-500 text-sm">
               Failed to load overrides. Is the API server running?
@@ -132,17 +127,20 @@ export default function Overrides() {
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {overrides.map((o: PolicyOverride) => {
-                  const artId = buildArtifactIdFromOverride(o)
+                  const canLink = !!o.version
+                  const isSelected = selectedOverride?.ecosystem === o.ecosystem
+                    && selectedOverride?.name === o.name
+                    && selectedOverride?.version === o.version
                   return (
                     <tr key={o.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3 text-sm">
-                        {artId ? (
+                        {canLink ? (
                           <button
-                            onClick={() => setSelectedArtifactId(
-                              selectedArtifactId === artId ? null : artId
+                            onClick={() => setSelectedOverride(
+                              isSelected ? null : { ecosystem: o.ecosystem, name: o.name, version: o.version }
                             )}
                             className={`font-mono text-left hover:underline ${
-                              selectedArtifactId === artId
+                              isSelected
                                 ? 'text-blue-800 font-semibold'
                                 : 'text-blue-600 hover:text-blue-800'
                             }`}
@@ -222,10 +220,10 @@ export default function Overrides() {
         </div>
 
         {/* Detail panel */}
-        {selectedArtifactId && (
+        {selectedOverride && (
           <ArtifactDetailPanel
-            artifactId={selectedArtifactId}
-            onClose={() => setSelectedArtifactId(null)}
+            search={selectedOverride}
+            onClose={() => setSelectedOverride(null)}
           />
         )}
       </div>
