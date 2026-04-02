@@ -87,6 +87,11 @@ func (a *NPMAdapter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (a *NPMAdapter) buildRouter() http.Handler {
 	r := chi.NewRouter()
 
+	// npm clients (v7+) percent-encode the "/" in scoped package names,
+	// sending e.g. /@alloc%2fquick-lru instead of /@alloc/quick-lru.
+	// Decode %2f before routing so Chi can match the scoped routes.
+	r.Use(decodeScopedPath)
+
 	// Scoped package support: @scope/name
 	r.Get("/{package}", a.handlePackageMetadata)
 	r.Get("/{package}/{version}", a.handleVersionMetadata)
@@ -98,6 +103,24 @@ func (a *NPMAdapter) buildRouter() http.Handler {
 	r.Get("/@{scope}/{package}/-/{tarball}", a.handleScopedTarballDownload)
 
 	return r
+}
+
+// decodeScopedPath is middleware that decodes percent-encoded slashes in
+// scoped npm package paths (e.g. /@scope%2fpkg → /@scope/pkg).
+func decodeScopedPath(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.RawPath, "%2f") || strings.Contains(r.URL.RawPath, "%2F") {
+			decoded, err := url.PathUnescape(r.URL.RawPath)
+			if err == nil && decoded != r.URL.Path {
+				r2 := r.Clone(r.Context())
+				r2.URL.Path = decoded
+				r2.URL.RawPath = ""
+				next.ServeHTTP(w, r2)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // handlePackageMetadata proxies the package metadata JSON, rewriting tarball
