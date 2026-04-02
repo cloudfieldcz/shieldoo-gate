@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import { overridesApi } from '../api/client'
 import type { PolicyOverride } from '../api/types'
 import { Trash2, ChevronLeft, ChevronRight } from 'lucide-react'
@@ -125,10 +126,13 @@ export default function Overrides() {
               {overrides.map((o: PolicyOverride) => (
                 <tr key={o.id} className="hover:bg-gray-50">
                   <td className="px-4 py-3 text-sm">
-                    <span className="font-mono text-gray-800">{o.ecosystem}/{o.name}</span>
-                    {o.version && (
-                      <span className="font-mono text-gray-500 ml-1">@{o.version}</span>
-                    )}
+                    <Link
+                      to={`/artifacts?ecosystem=${encodeURIComponent(o.ecosystem)}&name=${encodeURIComponent(o.name)}${o.version ? `&version=${encodeURIComponent(o.version)}` : ''}`}
+                      className="font-mono text-blue-600 hover:text-blue-800 hover:underline"
+                    >
+                      {o.ecosystem}/{o.name}
+                      {o.version && <span className="text-blue-500 ml-1">@{o.version}</span>}
+                    </Link>
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-600">{scopeLabel(o.scope)}</td>
                   <td className="px-4 py-3 text-sm text-gray-600 max-w-xs truncate">{o.reason || '—'}</td>

@@ -54,8 +54,8 @@ func (s *Server) handleListOverrides(w http.ResponseWriter, r *http.Request) {
 		countArgs = append(countArgs, ecosystemFilter)
 	}
 	if nameFilter != "" {
-		conditions = append(conditions, `name LIKE ?`)
-		countArgs = append(countArgs, "%"+nameFilter+"%")
+		conditions = append(conditions, `name LIKE ? ESCAPE '\'`)
+		countArgs = append(countArgs, "%"+escapeLike(nameFilter)+"%")
 	}
 
 	where := ""

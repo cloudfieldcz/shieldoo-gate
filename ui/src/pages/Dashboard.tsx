@@ -26,13 +26,13 @@ function StatCard({
   color: string
 }) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-5 flex items-center gap-4 shadow-sm">
-      <div className={`p-3 rounded-lg ${color}`}>
-        <Icon className="w-6 h-6 text-white" />
+    <div className="bg-white rounded-xl border border-gray-200 px-3 py-2.5 flex items-center gap-3 shadow-sm">
+      <div className={`p-2 rounded-lg ${color}`}>
+        <Icon className="w-4 h-4 text-white" />
       </div>
       <div>
-        <p className="text-sm text-gray-500">{label}</p>
-        <p className="text-2xl font-bold text-gray-900">{value}</p>
+        <p className="text-xs text-gray-500">{label}</p>
+        <p className="text-lg font-bold text-gray-900">{value}</p>
       </div>
     </div>
   )
@@ -62,7 +62,7 @@ export default function Dashboard() {
   const chartData = stats?.by_period ? buildChartData(stats.by_period) : []
 
   return (
-    <div className="p-8 space-y-6">
+    <div className="p-8 space-y-4">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
         <p className="text-sm text-gray-500 mt-1">System overview and traffic metrics</p>
@@ -93,7 +93,7 @@ export default function Dashboard() {
       {/* Artifacts section */}
       <div>
         <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Artifacts</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3">
           <StatCard
             label="Total"
             value={statsQuery.isLoading ? '...' : (stats?.artifacts.total ?? 0)}
@@ -130,7 +130,7 @@ export default function Dashboard() {
       {/* Requests section */}
       <div>
         <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Requests</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-2 xl:grid-cols-4 gap-3">
           <StatCard
             label="Served (24h)"
             value={statsQuery.isLoading ? '...' : (stats?.requests.served_24h ?? 0)}
@@ -159,21 +159,21 @@ export default function Dashboard() {
       </div>
 
       {/* Traffic chart */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-        <div className="flex items-center gap-2 mb-4">
-          <Activity className="w-5 h-5 text-gray-500" />
-          <h2 className="text-base font-semibold text-gray-900">Traffic Over Time</h2>
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Activity className="w-4 h-4 text-gray-500" />
+          <h2 className="text-sm font-semibold text-gray-900">Traffic Over Time</h2>
         </div>
         {statsQuery.isLoading ? (
-          <div className="h-64 flex items-center justify-center text-gray-400 text-sm">
+          <div className="h-48 flex items-center justify-center text-gray-400 text-sm">
             Loading chart data...
           </div>
         ) : chartData.length === 0 ? (
-          <div className="h-64 flex items-center justify-center text-gray-400 text-sm">
+          <div className="h-48 flex items-center justify-center text-gray-400 text-sm">
             No traffic data available.
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height={260}>
+          <ResponsiveContainer width="100%" height={180}>
             <AreaChart data={chartData}>
               <defs>
                 <linearGradient id="colorServed" x1="0" y1="0" x2="0" y2="1">

@@ -35,6 +35,16 @@ type artifactStatusResponse struct {
 	ReleasedAt       *time.Time `json:"released_at,omitempty"`
 }
 
+// overrideInfoResponse is the JSON shape for active policy overrides.
+type overrideInfoResponse struct {
+	ID        int64      `json:"id" db:"id"`
+	Scope     string     `json:"scope" db:"scope"`
+	Reason    string     `json:"reason" db:"reason"`
+	CreatedBy string     `json:"created_by" db:"created_by"`
+	CreatedAt time.Time  `json:"created_at" db:"created_at"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty" db:"expires_at"`
+}
+
 // artifactResponse is the JSON shape returned by list/get endpoints.
 type artifactResponse struct {
 	ID             string                 `json:"id"`
@@ -48,6 +58,7 @@ type artifactResponse struct {
 	LastAccessedAt time.Time              `json:"last_accessed_at"`
 	StoragePath    string                 `json:"storage_path"`
 	Status         artifactStatusResponse `json:"status"`
+	HasOverride    bool                   `json:"has_override"`
 }
 
 // artifactID extracts and URL-decodes the {id} route parameter.
@@ -206,6 +217,34 @@ func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Batch-check which artifacts have active overrides.
+	if len(items) > 0 {
+		now := time.Now().UTC()
+		overrideSet := make(map[string]bool)
+		oRows, oErr := s.db.QueryxContext(r.Context(),
+			`SELECT DISTINCT ecosystem, name, version
+			 FROM policy_overrides
+			 WHERE revoked = FALSE
+			   AND (expires_at IS NULL OR expires_at > ?)`, now)
+		if oErr == nil {
+			defer oRows.Close()
+			for oRows.Next() {
+				var eco, nm, ver string
+				if err := oRows.Scan(&eco, &nm, &ver); err == nil {
+					overrideSet[eco+":"+nm+":"+ver] = true
+					if ver == "" {
+						overrideSet[eco+":"+nm+":"] = true // package-scope
+					}
+				}
+			}
+		}
+		for i := range items {
+			key := items[i].Ecosystem + ":" + items[i].Name + ":" + items[i].Version
+			pkgKey := items[i].Ecosystem + ":" + items[i].Name + ":"
+			items[i].HasOverride = overrideSet[key] || overrideSet[pkgKey]
+		}
+	}
+
 	writeJSON(w, http.StatusOK, paginatedResponse{
 		Data:    items,
 		Page:    page,
@@ -260,14 +299,41 @@ func (s *Server) handleGetArtifact(w http.ResponseWriter, r *http.Request) {
 		scanResults = append(scanResults, sr)
 	}
 
+	// Fetch active policy overrides for this artifact.
+	overrideRows, err := s.db.QueryxContext(r.Context(),
+		`SELECT id, scope, reason, created_by, created_at, expires_at
+		 FROM policy_overrides
+		 WHERE ecosystem = ? AND name = ? AND revoked = FALSE
+		   AND (expires_at IS NULL OR expires_at > ?)
+		   AND (scope = 'package' OR version = ?)
+		 ORDER BY created_at DESC
+		 LIMIT 100`, row.Ecosystem, row.Name, time.Now().UTC(), row.Version)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to query overrides")
+		return
+	}
+	defer overrideRows.Close()
+
+	activeOverrides := make([]overrideInfoResponse, 0)
+	for overrideRows.Next() {
+		var o overrideInfoResponse
+		if err := overrideRows.StructScan(&o); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to scan override row")
+			return
+		}
+		activeOverrides = append(activeOverrides, o)
+	}
+
 	resp := toArtifactResponse(row)
 	type detailResponse struct {
 		artifactResponse
-		ScanResults []model.ScanResult `json:"scan_results"`
+		ScanResults     []model.ScanResult    `json:"scan_results"`
+		ActiveOverrides []overrideInfoResponse `json:"active_overrides"`
 	}
 	writeJSON(w, http.StatusOK, detailResponse{
 		artifactResponse: resp,
 		ScanResults:      scanResults,
+		ActiveOverrides:  activeOverrides,
 	})
 }
 

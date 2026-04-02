@@ -9,6 +9,7 @@ export interface Artifact {
   cached_at: string
   last_accessed_at: string
   storage_path: string
+  has_override?: boolean
 }
 
 export interface ArtifactStatus {
@@ -94,8 +95,17 @@ export interface PaginatedResponse<T> {
   total: number
 }
 
+export interface OverrideInfo {
+  id: number
+  scope: 'version' | 'package'
+  reason: string
+  created_by: string
+  created_at: string
+  expires_at?: string
+}
+
 export type ArtifactWithStatus = Artifact & { status: ArtifactStatus }
-export type ArtifactDetail = Artifact & { status: ArtifactStatus; scan_results: ScanResult[] }
+export type ArtifactDetail = Artifact & { status: ArtifactStatus; scan_results: ScanResult[]; active_overrides: OverrideInfo[] }
 
 export interface DockerRepository {
   id: number

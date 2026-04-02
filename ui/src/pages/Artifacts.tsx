@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { artifactsApi } from '../api/client'
 import type { ArtifactWithStatus } from '../api/types'
@@ -27,14 +28,16 @@ function formatBytes(bytes: number) {
 
 export default function Artifacts() {
   const qc = useQueryClient()
+  const [searchParams] = useSearchParams()
   const [page, setPage] = useState(1)
-  const [ecosystem, setEcosystem] = useState('')
+  const [ecosystem, setEcosystem] = useState(searchParams.get('ecosystem') ?? '')
   const [status, setStatus] = useState('')
-  const [name, setName] = useState('')
-  const [version, setVersion] = useState('')
-  const [debouncedName, setDebouncedName] = useState('')
-  const [debouncedVersion, setDebouncedVersion] = useState('')
+  const [name, setName] = useState(searchParams.get('name') ?? '')
+  const [version, setVersion] = useState(searchParams.get('version') ?? '')
+  const [debouncedName, setDebouncedName] = useState(searchParams.get('name') ?? '')
+  const [debouncedVersion, setDebouncedVersion] = useState(searchParams.get('version') ?? '')
   const [selected, setSelected] = useState<ArtifactWithStatus | null>(null)
+  const [showScanHistory, setShowScanHistory] = useState(false)
 
   // Debounce name search (300ms)
   useEffect(() => {
@@ -53,6 +56,11 @@ export default function Artifacts() {
     setPage(1)
     setSelected(null)
   }, [ecosystem, status, debouncedName, debouncedVersion])
+
+  // Reset scan history toggle when artifact selection changes
+  useEffect(() => {
+    setShowScanHistory(false)
+  }, [selected?.id])
 
   const listQuery = useQuery({
     queryKey: ['artifacts', page, ecosystem, status, debouncedName, debouncedVersion],
@@ -250,6 +258,31 @@ export default function Artifacts() {
                 </div>
               </div>
 
+              {/* Active overrides */}
+              {detail?.active_overrides?.length ? (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                  <h3 className="text-xs font-semibold text-amber-800 uppercase tracking-wider mb-2">
+                    Active Override{detail.active_overrides.length > 1 ? 's' : ''}
+                  </h3>
+                  {detail.active_overrides.map((o) => (
+                    <div key={o.id} className="text-sm text-amber-900 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="inline-block bg-amber-100 text-amber-800 text-xs font-medium px-2 py-0.5 rounded">
+                          {o.scope === 'package' ? 'All versions' : 'Exact version'}
+                        </span>
+                        {o.created_by && (
+                          <span className="text-xs text-amber-600">by {o.created_by}</span>
+                        )}
+                      </div>
+                      {o.reason && <p className="text-xs text-amber-700">{o.reason}</p>}
+                      {o.expires_at && (
+                        <p className="text-xs text-amber-600">Expires: {new Date(o.expires_at).toLocaleString()}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
               {/* Action buttons */}
               <div className="flex flex-wrap gap-2 pt-2 border-t border-gray-100">
                 <button
@@ -288,16 +321,50 @@ export default function Artifacts() {
               {/* Scan results */}
               <div className="pt-2 border-t border-gray-100">
                 <h3 className="text-xs font-semibold text-gray-700 uppercase tracking-wider mb-3">
-                  Scan History
+                  Latest Scans
                 </h3>
                 {detailQuery.isLoading ? (
                   <p className="text-sm text-gray-400">Loading scan results...</p>
                 ) : detail?.scan_results?.length ? (
-                  <div className="space-y-3">
-                    {detail.scan_results.map((r) => (
-                      <ScanResultCard key={r.id} result={r} />
-                    ))}
-                  </div>
+                  (() => {
+                    // Group by scanner: show latest result per scanner, rest is history
+                    const latestByScanner = new Map<string, typeof detail.scan_results[0]>()
+                    const olderResults: typeof detail.scan_results = []
+                    for (const r of detail.scan_results) {
+                      if (!latestByScanner.has(r.scanner_name)) {
+                        latestByScanner.set(r.scanner_name, r)
+                      } else {
+                        olderResults.push(r)
+                      }
+                    }
+                    const latestResults = Array.from(latestByScanner.values())
+                    return (
+                      <div className="space-y-3">
+                        {latestResults.map((r) => (
+                          <ScanResultCard key={r.id} result={r} />
+                        ))}
+                        {olderResults.length > 0 && (
+                          <>
+                            <button
+                              onClick={() => setShowScanHistory(!showScanHistory)}
+                              className="text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                            >
+                              {showScanHistory
+                                ? 'Hide history'
+                                : `Show history (${olderResults.length} older scan${olderResults.length > 1 ? 's' : ''})`}
+                            </button>
+                            {showScanHistory && (
+                              <div className="space-y-3">
+                                {olderResults.map((r) => (
+                                  <ScanResultCard key={r.id} result={r} />
+                                ))}
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )
+                  })()
                 ) : (
                   <p className="text-sm text-gray-400">No scan results yet.</p>
                 )}

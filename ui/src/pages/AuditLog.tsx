@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import { auditApi } from '../api/client'
+import { buildArtifactLink } from '../utils/artifactId'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 
 const EVENT_TYPES = [
@@ -113,8 +115,21 @@ export default function AuditLog() {
                         {entry.event_type}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-sm font-mono text-gray-700 max-w-xs truncate">
-                      {entry.artifact_id ?? <span className="text-gray-300">—</span>}
+                    <td className="px-4 py-3 text-sm font-mono max-w-xs truncate">
+                      {entry.artifact_id ? (
+                        (() => {
+                          const link = buildArtifactLink(entry.artifact_id)
+                          return link ? (
+                            <Link to={link} className="text-blue-600 hover:text-blue-800 hover:underline" title={entry.artifact_id}>
+                              {entry.artifact_id}
+                            </Link>
+                          ) : (
+                            <span className="text-gray-700">{entry.artifact_id}</span>
+                          )
+                        })()
+                      ) : (
+                        <span className="text-gray-300">—</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-600">
                       {entry.user_email ? (

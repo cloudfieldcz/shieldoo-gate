@@ -1,5 +1,6 @@
 import type { ArtifactWithStatus } from '../api/types'
 import StatusBadge from './StatusBadge'
+import { ShieldAlert } from 'lucide-react'
 
 interface ArtifactTableProps {
   artifacts: ArtifactWithStatus[]
@@ -69,7 +70,14 @@ export default function ArtifactTable({ artifacts, onRowClick, selectedId }: Art
               </td>
               <td className="px-4 py-3 text-sm text-gray-600 font-mono">{a.version}</td>
               <td className="px-4 py-3 text-sm">
-                <StatusBadge status={a.status.status} />
+                <div className="flex items-center gap-1.5">
+                  <StatusBadge status={a.status.status} />
+                  {a.has_override && (
+                    <span title="Active policy override">
+                      <ShieldAlert className="w-3.5 h-3.5 text-amber-500" />
+                    </span>
+                  )}
+                </div>
               </td>
               <td className="px-4 py-3 text-sm text-gray-500">{formatBytes(a.size_bytes)}</td>
               <td className="px-4 py-3 text-sm text-gray-500">{formatDate(a.cached_at)}</td>
