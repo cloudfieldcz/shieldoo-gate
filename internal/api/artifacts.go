@@ -162,8 +162,9 @@ func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if name != "" {
-		conditions = append(conditions, `a.name LIKE ? ESCAPE '\'`)
-		args = append(args, "%"+escapeLike(name)+"%")
+		conditions = append(conditions, `(a.name LIKE ? ESCAPE '\' OR a.id LIKE ? ESCAPE '\')`)
+		escaped := "%" + escapeLike(name) + "%"
+		args = append(args, escaped, escaped)
 	}
 	if version != "" {
 		conditions = append(conditions, `a.version LIKE ? ESCAPE '\'`)
