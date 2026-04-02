@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { overridesApi } from '../api/client'
 import type { PolicyOverride } from '../api/types'
+import { buildOverrideArtifactLink } from '../utils/artifactId'
 import { Trash2, ChevronLeft, ChevronRight } from 'lucide-react'
 
 const ECOSYSTEMS = [
@@ -127,7 +128,7 @@ export default function Overrides() {
                 <tr key={o.id} className="hover:bg-gray-50">
                   <td className="px-4 py-3 text-sm">
                     <Link
-                      to={`/artifacts?ecosystem=${encodeURIComponent(o.ecosystem)}&name=${encodeURIComponent(o.name)}${o.version ? `&version=${encodeURIComponent(o.version)}` : ''}`}
+                      to={buildOverrideArtifactLink(o.ecosystem, o.name, o.version || undefined)}
                       className="font-mono text-blue-600 hover:text-blue-800 hover:underline"
                     >
                       {o.ecosystem}/{o.name}
