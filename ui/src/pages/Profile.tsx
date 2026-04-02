@@ -349,8 +349,14 @@ function UsageInstructions({ urls }: { urls?: PublicURLs }) {
       <pre className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-xs font-mono text-gray-800 overflow-x-auto whitespace-pre">
 {`export SGW_TOKEN="your-token-here"
 
-# PyPI
+# PyPI — pip
 pip install --index-url ${scheme}://\${USER}:\${SGW_TOKEN}@${pypi.replace(/^https?:\/\//, '')}/simple/ <package>
+
+# PyPI — uv
+UV_DEFAULT_INDEX=${scheme}://\${USER}:\${SGW_TOKEN}@${pypi.replace(/^https?:\/\//, '')}/simple/ uv pip install <package>
+
+# PyPI — pipenv
+PIPENV_PYPI_MIRROR=${scheme}://\${USER}:\${SGW_TOKEN}@${pypi.replace(/^https?:\/\//, '')}/simple/ pipenv install <package>
 
 # npm
 npm config set registry ${npm}/
@@ -365,8 +371,9 @@ dotnet nuget add source ${nuget}/v3/index.json -n shieldoo -u \${USER} -p \${SGW
 # Go modules
 GOPROXY=${gomod.replace(/^https?:\/\//, `${scheme}://\${USER}:\${SGW_TOKEN}@`)} go get <module>
 
-# Maven
-mvn -DrepositoryId=shieldoo -Durl=${maven}/repository/
+# Maven (Java) — add to ~/.m2/settings.xml
+# <server><id>shieldoo</id><username>\${USER}</username><password>\${SGW_TOKEN}</password></server>
+# <mirror><id>shieldoo</id><url>${maven}/repository/</url><mirrorOf>central</mirrorOf></mirror>
 
 # RubyGems
 gem sources --add ${rubygems.replace(/^https?:\/\//, `${scheme}://\${USER}:\${SGW_TOKEN}@`)}/`}

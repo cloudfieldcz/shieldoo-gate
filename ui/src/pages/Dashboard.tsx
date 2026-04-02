@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { statsApi, healthApi } from '../api/client'
-import { AlertTriangle, Package, ShieldX, Archive, Activity, ShieldCheck, Clock, Ban } from 'lucide-react'
+import { statsApi, healthApi, configApi } from '../api/client'
+import { AlertTriangle, Package, ShieldX, Archive, Activity, ShieldCheck, Clock, Ban, BookOpen, ChevronDown, ChevronUp, Terminal, RefreshCw, ShieldAlert } from 'lucide-react'
+import type { PublicURLs } from '../api/types'
 import {
   ResponsiveContainer,
   AreaChart,
@@ -50,6 +52,7 @@ function buildChartData(byPeriod: Record<string, Record<string, number>>) {
 export default function Dashboard() {
   const statsQuery = useQuery({ queryKey: ['stats-summary'], queryFn: statsApi.summary, retry: 1 })
   const healthQuery = useQuery({ queryKey: ['health'], queryFn: healthApi.check, retry: 1 })
+  const urlsQuery = useQuery({ queryKey: ['public-urls'], queryFn: configApi.publicURLs, retry: 1 })
 
   const stats = statsQuery.data
   const health = healthQuery.data
@@ -199,8 +202,126 @@ export default function Dashboard() {
         )}
       </div>
 
+      {/* How to section */}
+      <HowToSection urls={urlsQuery.data} />
+
       {statsQuery.isError && (
         <p className="text-sm text-red-500">Failed to load stats. Is the API server running?</p>
+      )}
+    </div>
+  )
+}
+
+function HowToSection({ urls }: { urls?: PublicURLs }) {
+  const [open, setOpen] = useState(true)
+
+  const pypi = urls?.pypi || 'http://<host>:5000'
+  const npm = urls?.npm || '<host>:4873'
+  const docker = urls?.docker || '<host>:5002'
+  const nuget = urls?.nuget || 'http://<host>:5001'
+  const gomod = urls?.gomod || 'http://<host>:8087'
+  const rubygems = urls?.rubygems || 'http://<host>:8086'
+  const maven = urls?.maven || 'http://<host>:8085'
+
+  const npmHost = npm.replace(/^https?:\/\//, '')
+  const dockerHost = docker.replace(/^https?:\/\//, '')
+  const scheme = pypi.startsWith('https') ? 'https' : 'http'
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between p-6 text-left"
+      >
+        <div className="flex items-center gap-2">
+          <BookOpen className="w-5 h-5 text-indigo-500" />
+          <h2 className="text-base font-semibold text-gray-900">Quick Start Guide</h2>
+        </div>
+        {open ? (
+          <ChevronUp className="w-5 h-5 text-gray-400" />
+        ) : (
+          <ChevronDown className="w-5 h-5 text-gray-400" />
+        )}
+      </button>
+
+      {open && (
+        <div className="px-6 pb-6 space-y-5 border-t border-gray-100 pt-4">
+          {/* How it works */}
+          <div className="flex gap-3">
+            <RefreshCw className="w-5 h-5 text-blue-500 mt-0.5 flex-shrink-0" />
+            <div>
+              <h3 className="text-sm font-semibold text-gray-900">How it works</h3>
+              <p className="text-sm text-gray-600 mt-1">
+                Shieldoo Gate sits between your package manager and the upstream registry.
+                The <strong>first download</strong> of any package is slower because the artifact is fetched,
+                cached, and scanned for malware in real time. Subsequent requests are served instantly from cache.
+              </p>
+            </div>
+          </div>
+
+          {/* Connect ecosystems */}
+          <div className="flex gap-3">
+            <Terminal className="w-5 h-5 text-green-500 mt-0.5 flex-shrink-0" />
+            <div className="min-w-0 flex-1">
+              <h3 className="text-sm font-semibold text-gray-900">Connect your package managers</h3>
+              <p className="text-sm text-gray-600 mt-1 mb-2">
+                Generate an API key in <strong>Profile → API Keys</strong>, then configure your tools.
+                All ecosystems use HTTP Basic Auth (your username + the token as password).
+              </p>
+              <pre className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-xs font-mono text-gray-800 overflow-x-auto whitespace-pre">
+{`export SGW_TOKEN="your-token-here"
+
+# PyPI — pip
+pip install --index-url ${scheme}://\${USER}:\${SGW_TOKEN}@${pypi.replace(/^https?:\/\//, '')}/simple/ <package>
+
+# PyPI — uv
+UV_DEFAULT_INDEX=${scheme}://\${USER}:\${SGW_TOKEN}@${pypi.replace(/^https?:\/\//, '')}/simple/ uv pip install <package>
+
+# PyPI — pipenv
+PIPENV_PYPI_MIRROR=${scheme}://\${USER}:\${SGW_TOKEN}@${pypi.replace(/^https?:\/\//, '')}/simple/ pipenv install <package>
+
+# npm (Node.js)
+npm config set registry ${npm}/
+npm config set //${npmHost}/:_auth $(printf "\${USER}:\${SGW_TOKEN}" | base64)
+
+# Docker
+echo \${SGW_TOKEN} | docker login ${dockerHost} -u \${USER} --password-stdin
+
+# NuGet (.NET)
+dotnet nuget add source ${nuget}/v3/index.json -n shieldoo -u \${USER} -p \${SGW_TOKEN}
+
+# Go modules
+GOPROXY=${gomod.replace(/^https?:\/\//, `${scheme}://\${USER}:\${SGW_TOKEN}@`)} go get <module>
+
+# Maven (Java) — add to ~/.m2/settings.xml
+# <server><id>shieldoo</id><username>\${USER}</username><password>\${SGW_TOKEN}</password></server>
+# <mirror><id>shieldoo</id><url>${maven}/repository/</url><mirrorOf>central</mirrorOf></mirror>
+
+# RubyGems
+gem sources --add ${rubygems.replace(/^https?:\/\//, `${scheme}://\${USER}:\${SGW_TOKEN}@`)}/`}
+              </pre>
+            </div>
+          </div>
+
+          {/* Troubleshooting */}
+          <div className="flex gap-3">
+            <ShieldAlert className="w-5 h-5 text-amber-500 mt-0.5 flex-shrink-0" />
+            <div>
+              <h3 className="text-sm font-semibold text-gray-900">Troubleshooting</h3>
+              <ul className="text-sm text-gray-600 mt-1 space-y-2 list-disc list-inside">
+                <li>
+                  <strong>Install fails on first attempt?</strong> The scan may still be in progress. Simply
+                  re-run the install command — once the scan finishes, the package will be served from cache.
+                </li>
+                <li>
+                  <strong>Getting a 403 Forbidden?</strong> The artifact has been quarantined as potentially
+                  malicious. Go to the <strong>Artifacts</strong> page, find the package, review the scan results,
+                  and if you determine it is safe, click <strong>Release</strong> to allow downloads.
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

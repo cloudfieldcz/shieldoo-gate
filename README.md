@@ -51,11 +51,16 @@ Port reference:
 # Unit tests
 make test
 
-# E2E shell tests (spins up isolated Docker stack, installs real packages, validates API)
+# E2E tests — containerized (recommended, only requires Docker)
+make test-e2e-containerized
+
+# E2E tests — host-based (requires uv, npm, dotnet, crane, etc.)
 ./tests/e2e-shell/run.sh
 ```
 
-See [`tests/e2e-shell/README.md`](tests/e2e-shell/README.md) for details and flags (`--no-build`, `--keep`).
+`make test-e2e-containerized` builds a test-runner container with all package managers pre-installed and runs the full E2E suite inside Docker — no host tools needed beyond Docker itself. This is the recommended approach for CI/CD and local validation.
+
+See [`tests/e2e-shell/README.md`](tests/e2e-shell/README.md) for details on the host-based runner and its flags (`--no-build`, `--keep`).
 
 ## Documentation
 
