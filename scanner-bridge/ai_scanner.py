@@ -84,7 +84,7 @@ async def _call_llm(content: str) -> dict:
     try:
         resp = await _client.chat.completions.create(
             model=_model,
-            max_tokens=512,
+            max_completion_tokens=1024,
             temperature=0,
             response_format={"type": "json_object"},
             messages=[
