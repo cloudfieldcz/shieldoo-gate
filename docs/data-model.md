@@ -361,9 +361,9 @@ Tracks which SQL migrations have been applied. Prevents re-running migrations.
 
 ### Additional Indexes (rescan scheduler)
 
-The rescan scheduler requires two indexes for efficient priority queries:
+The rescan scheduler requires two indexes for efficient queries:
 
-- `idx_artifact_status_rescan ON artifact_status(status, rescan_due_at)` — finds artifacts due for rescan
+- `idx_artifact_status_rescan ON artifact_status(status, rescan_due_at)` — finds PENDING_SCAN artifacts for manual rescan
 - `idx_artifacts_last_accessed ON artifacts(last_accessed_at)` — orders by most recently accessed
 
 ## Artifact ID Convention

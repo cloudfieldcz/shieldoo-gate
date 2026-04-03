@@ -129,7 +129,7 @@ threat_feed:
 
 rescan:
   enabled: true
-  interval: "6h"                   # How often the scheduler runs
+  interval: "24h"                  # How often the scheduler checks for pending rescans
   batch_size: 100                  # Max artifacts per cycle
   max_concurrent: 5                # Max parallel scans
 

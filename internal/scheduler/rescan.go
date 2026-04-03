@@ -56,7 +56,7 @@ func NewRescanScheduler(
 ) *RescanScheduler {
 	interval, err := time.ParseDuration(cfg.Interval)
 	if err != nil || interval <= 0 {
-		interval = 6 * time.Hour
+		interval = 24 * time.Hour
 	}
 
 	batchSize := cfg.BatchSize
@@ -157,23 +157,19 @@ func (s *RescanScheduler) runCycle(ctx context.Context) {
 	log.Info().Int("count", len(artifacts)).Msg("rescan scheduler: cycle complete")
 }
 
-// selectArtifacts queries artifacts that need rescanning.
-// Priority: PENDING_SCAN first, then CLEAN/SUSPICIOUS with rescan_due_at <= now.
-// QUARANTINED artifacts are never selected.
+// selectArtifacts queries artifacts queued for manual rescan (PENDING_SCAN).
+// Only manually triggered rescans are processed; automatic periodic rescans
+// of CLEAN/SUSPICIOUS artifacts are not performed.
 func (s *RescanScheduler) selectArtifacts(ctx context.Context) ([]artifactRow, error) {
-	now := time.Now().UTC()
 	var rows []artifactRow
 	err := s.db.SelectContext(ctx, &rows,
 		`SELECT a.id, a.ecosystem, a.name, a.version, a.sha256, a.storage_path, a.size_bytes, a.upstream_url
 		 FROM artifacts a
 		 JOIN artifact_status s ON a.id = s.artifact_id
-		 WHERE s.status IN ('PENDING_SCAN', 'CLEAN', 'SUSPICIOUS')
-		   AND (s.status = 'PENDING_SCAN' OR (s.rescan_due_at IS NOT NULL AND s.rescan_due_at <= ?))
-		 ORDER BY
-		   CASE WHEN s.status = 'PENDING_SCAN' THEN 0 ELSE 1 END,
-		   a.last_accessed_at DESC
+		 WHERE s.status = 'PENDING_SCAN'
+		 ORDER BY a.last_accessed_at DESC
 		 LIMIT ?`,
-		now, s.batchSize,
+		s.batchSize,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("rescan scheduler: selecting artifacts: %w", err)
@@ -209,8 +205,9 @@ func (s *RescanScheduler) rescanArtifact(ctx context.Context, art artifactRow) {
 		UpstreamURL: art.UpstreamURL,
 	}
 
-	// 3. Scan with all applicable scanners. Fail-open: preserve current status on error.
-	results, scanErr := s.scanEngine.ScanAll(ctx, scanArtifact)
+	// 3. Scan with all applicable scanners, excluding AI scanner (its results
+	// are deterministic for the same artifact content — no value in re-running).
+	results, scanErr := s.scanEngine.ScanAll(ctx, scanArtifact, "ai-scanner")
 	if scanErr != nil {
 		log.Error().Err(scanErr).Str("artifact", art.ID).Msg("rescan scheduler: scan error, preserving current status")
 		s.updateRescanDueAt(art.ID, time.Now().UTC().Add(s.interval))
@@ -228,7 +225,6 @@ func (s *RescanScheduler) rescanArtifact(ctx context.Context, art artifactRow) {
 
 	// 5. Update status + scan results + audit log in a transaction.
 	now := time.Now().UTC()
-	nextRescan := now.Add(s.interval)
 
 	tx, err := s.db.Beginx()
 	if err != nil {
@@ -265,10 +261,10 @@ func (s *RescanScheduler) rescanArtifact(ctx context.Context, art artifactRow) {
 		})
 
 	default:
-		// ActionAllow: update status to CLEAN and set next rescan.
+		// ActionAllow: update status to CLEAN (no automatic next rescan).
 		_, err = tx.Exec(
-			`UPDATE artifact_status SET status = ?, quarantine_reason = '', quarantined_at = NULL, rescan_due_at = ? WHERE artifact_id = ?`,
-			string(model.StatusClean), nextRescan, art.ID,
+			`UPDATE artifact_status SET status = ?, quarantine_reason = '', quarantined_at = NULL, rescan_due_at = NULL WHERE artifact_id = ?`,
+			string(model.StatusClean), art.ID,
 		)
 		if err != nil {
 			log.Error().Err(err).Str("artifact", art.ID).Msg("rescan scheduler: failed to update status to clean")

@@ -64,7 +64,7 @@ Shieldoo Gate runs as a single Go binary that exposes **eight HTTP servers** on 
 | **Tag Mutability** | `internal/adapter/mutability.go` | Detect when upstream tag/version resolves to a different digest than cached; quarantine/warn/block on change |
 | **Threat Feed Client** | `internal/threatfeed/` | Periodically fetch community threat feed and store entries in DB for fast-path lookups |
 | **Alerter** | `internal/alert/` | Multi-channel alert dispatch: webhook (HMAC-SHA256), Slack (Block Kit), email (SMTP batch digest) |
-| **Rescan Scheduler** | `internal/scheduler/` | Periodically re-scan cached artifacts to detect newly discovered threats; priority queue by access time |
+| **Rescan Scheduler** | `internal/scheduler/` | Process manually triggered rescans (PENDING_SCAN) to detect newly discovered threats; AI scanner excluded |
 | **Auth** | `internal/auth/` | OIDC admin authentication (Authorization Code + PKCE), proxy API key authentication (per-user PAT + global token) |
 | **Admin API** | `internal/api/` | REST API for artifact management, audit log, statistics, policy overrides, API keys, health checks |
 | **Data Models** | `internal/model/` | Shared Go structs for artifacts, scan results, audit entries, overrides, API keys, threat feed entries |
@@ -157,7 +157,7 @@ The bridge runs as a separate process (separate container in Docker Compose). Th
 - **Sandbox Scanner** runs asynchronously after artifact is served — does not block the download path. Semaphore-limited concurrency.
 - **HTTP servers** run concurrently via `errgroup`. Each ecosystem adapter (7) and the admin API run on their own port.
 - **Threat feed refresh** runs in a background goroutine with `time.Ticker`.
-- **Rescan scheduler** runs in a background goroutine, scanning artifacts in priority order with configurable concurrency.
+- **Rescan scheduler** runs in a background goroutine, processing only manually triggered rescans (`PENDING_SCAN`) with configurable concurrency. AI scanner is excluded from rescans.
 - **Docker sync service** runs in a background goroutine, periodically re-scanning pushed images.
 - **Alerter** dispatches alerts asynchronously; email sender batches digests at configurable intervals.
 - **Graceful shutdown** propagates via context cancellation + `http.Server.Shutdown()` with a 15-second deadline.

@@ -157,12 +157,13 @@ threat_feed:
   refresh_interval: "1h"             # How often to refresh the feed
 
 # ─── Rescan Scheduler (v1.1) ──────────────────────────────────────
-# Periodically re-scans cached artifacts to detect newly discovered threats.
-# Processes PENDING_SCAN artifacts first (from manual rescan API), then
-# CLEAN/SUSPICIOUS artifacts ordered by most recently accessed.
+# Processes only manually triggered rescans (PENDING_SCAN status set via
+# POST /api/v1/artifacts/{id}/rescan). Automatic periodic rescans of
+# CLEAN/SUSPICIOUS artifacts are not performed.
+# The AI scanner is excluded from rescans (deterministic for same content).
 rescan:
   enabled: true                       # Enable the rescan scheduler
-  interval: "6h"                      # How often the scheduler runs a batch
+  interval: "24h"                     # How often the scheduler checks for pending rescans
   batch_size: 100                     # Max artifacts per cycle
   max_concurrent: 5                   # Max parallel scans per cycle
 
@@ -371,9 +372,11 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 
 ## Rescan Scheduler (v1.1)
 
-The rescan scheduler periodically re-scans cached artifacts to detect newly discovered threats (zero-day window closure). It is implemented in `internal/scheduler/rescan.go`.
+The rescan scheduler processes **manually triggered rescans only**. It is implemented in `internal/scheduler/rescan.go`.
 
-**Priority ordering:** `PENDING_SCAN` artifacts (from manual `POST /api/v1/artifacts/{id}/rescan`) are processed first. Then `CLEAN` and `SUSPICIOUS` artifacts with `rescan_due_at <= now`, ordered by most recently accessed (`last_accessed_at DESC`).
+When an admin triggers a rescan via `POST /api/v1/artifacts/{id}/rescan`, the artifact status is set to `PENDING_SCAN`. The scheduler picks up these artifacts on its next tick (default every 24 hours) and re-scans them with all applicable scanners **except the AI scanner** (whose results are deterministic for the same artifact content).
+
+Automatic periodic rescans of `CLEAN` or `SUSPICIOUS` artifacts are not performed — only explicitly requested rescans are processed.
 
 **Fail-open semantics:** Scanner errors preserve the current artifact status and never escalate to `QUARANTINED`. Cache misses skip the artifact and clear `rescan_due_at`.
 

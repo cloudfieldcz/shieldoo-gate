@@ -23,9 +23,18 @@ func NewEngine(scanners []Scanner, timeout time.Duration) *Engine {
 // ScanAll runs all scanners that support the artifact's ecosystem in parallel.
 // It applies a per-scan timeout and uses fail-open semantics: scanner errors or
 // timeouts result in VerdictClean with the error recorded, never VerdictMalicious.
-func (e *Engine) ScanAll(ctx context.Context, artifact Artifact) ([]ScanResult, error) {
+// Optional excludeNames allows skipping specific scanners by name.
+func (e *Engine) ScanAll(ctx context.Context, artifact Artifact, excludeNames ...string) ([]ScanResult, error) {
+	excludeSet := make(map[string]struct{}, len(excludeNames))
+	for _, n := range excludeNames {
+		excludeSet[n] = struct{}{}
+	}
+
 	var applicable []Scanner
 	for _, s := range e.scanners {
+		if _, excluded := excludeSet[s.Name()]; excluded {
+			continue
+		}
 		for _, eco := range s.SupportedEcosystems() {
 			if eco == artifact.Ecosystem {
 				applicable = append(applicable, s)

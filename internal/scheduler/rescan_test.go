@@ -115,59 +115,15 @@ func createTempFile(t *testing.T) string {
 
 // --- tests ---
 
-func TestRescanScheduler_PrioritizesPendingScan(t *testing.T) {
+func TestRescanScheduler_SelectsOnlyPendingScan(t *testing.T) {
 	db := setupTestDB(t)
-	tmpPath := createTempFile(t)
 
 	past := time.Now().UTC().Add(-1 * time.Hour)
 
-	// Insert a CLEAN artifact with rescan due.
+	// Insert a CLEAN artifact with rescan_due_at in the past — should NOT be selected.
 	insertTestArtifact(t, db, "pypi:clean-pkg:1.0", "pypi", "clean-pkg", "1.0", model.StatusClean, &past)
-	// Insert a PENDING_SCAN artifact.
+	// Insert a PENDING_SCAN artifact — should be selected.
 	insertTestArtifact(t, db, "pypi:pending-pkg:1.0", "pypi", "pending-pkg", "1.0", model.StatusPendingScan, nil)
-
-	// Update last_accessed_at so CLEAN artifact appears more recently used.
-	future := time.Now().UTC().Add(1 * time.Hour)
-	_, _ = db.Exec(`UPDATE artifacts SET last_accessed_at = ? WHERE id = ?`, future, "pypi:clean-pkg:1.0")
-
-	cacheStore := &stubCacheStore{paths: map[string]string{
-		"pypi:clean-pkg:1.0":   tmpPath,
-		"pypi:pending-pkg:1.0": tmpPath,
-	}}
-	stubScan := &stubScanner{verdict: scanner.VerdictClean}
-	scanEngine := scanner.NewEngine([]scanner.Scanner{stubScan}, 30*time.Second)
-	policyEng := policy.NewEngine(policy.EngineConfig{
-		BlockIfVerdict:      scanner.VerdictMalicious,
-		QuarantineIfVerdict: scanner.VerdictSuspicious,
-	}, nil)
-
-	sched := NewRescanScheduler(db, cacheStore, scanEngine, policyEng, config.RescanConfig{
-		Enabled:       true,
-		Interval:      "1h",
-		BatchSize:     10,
-		MaxConcurrent: 1,
-	})
-
-	// Run a single cycle.
-	ctx := context.Background()
-	artifacts, err := sched.selectArtifacts(ctx)
-	require.NoError(t, err)
-	require.Len(t, artifacts, 2)
-
-	// PENDING_SCAN must come first regardless of last_accessed_at.
-	assert.Equal(t, "pypi:pending-pkg:1.0", artifacts[0].ID)
-	assert.Equal(t, "pypi:clean-pkg:1.0", artifacts[1].ID)
-}
-
-func TestRescanScheduler_SkipsQuarantined(t *testing.T) {
-	db := setupTestDB(t)
-
-	past := time.Now().UTC().Add(-1 * time.Hour)
-
-	// Insert a QUARANTINED artifact with rescan_due_at in the past.
-	insertTestArtifact(t, db, "pypi:quarantined:1.0", "pypi", "quarantined", "1.0", model.StatusQuarantined, &past)
-	// Insert a CLEAN artifact with rescan due.
-	insertTestArtifact(t, db, "pypi:clean:1.0", "pypi", "clean", "1.0", model.StatusClean, &past)
 
 	sched := NewRescanScheduler(db, &stubCacheStore{}, nil, nil, config.RescanConfig{
 		Enabled:       true,
@@ -179,18 +135,38 @@ func TestRescanScheduler_SkipsQuarantined(t *testing.T) {
 	ctx := context.Background()
 	artifacts, err := sched.selectArtifacts(ctx)
 	require.NoError(t, err)
-
-	// Only CLEAN artifact should be selected, not QUARANTINED.
 	require.Len(t, artifacts, 1)
-	assert.Equal(t, "pypi:clean:1.0", artifacts[0].ID)
+	assert.Equal(t, "pypi:pending-pkg:1.0", artifacts[0].ID)
+}
+
+func TestRescanScheduler_SkipsNonPendingScan(t *testing.T) {
+	db := setupTestDB(t)
+
+	past := time.Now().UTC().Add(-1 * time.Hour)
+
+	// None of these should be selected — only PENDING_SCAN is picked up.
+	insertTestArtifact(t, db, "pypi:quarantined:1.0", "pypi", "quarantined", "1.0", model.StatusQuarantined, &past)
+	insertTestArtifact(t, db, "pypi:clean:1.0", "pypi", "clean", "1.0", model.StatusClean, &past)
+	insertTestArtifact(t, db, "pypi:suspicious:1.0", "pypi", "suspicious", "1.0", model.StatusSuspicious, &past)
+
+	sched := NewRescanScheduler(db, &stubCacheStore{}, nil, nil, config.RescanConfig{
+		Enabled:       true,
+		Interval:      "1h",
+		BatchSize:     10,
+		MaxConcurrent: 1,
+	})
+
+	ctx := context.Background()
+	artifacts, err := sched.selectArtifacts(ctx)
+	require.NoError(t, err)
+	assert.Len(t, artifacts, 0)
 }
 
 func TestRescanScheduler_FailOpen_ScanError(t *testing.T) {
 	db := setupTestDB(t)
 	tmpPath := createTempFile(t)
 
-	past := time.Now().UTC().Add(-1 * time.Hour)
-	insertTestArtifact(t, db, "pypi:pkg:1.0", "pypi", "pkg", "1.0", model.StatusClean, &past)
+	insertTestArtifact(t, db, "pypi:pkg:1.0", "pypi", "pkg", "1.0", model.StatusPendingScan, nil)
 
 	cacheStore := &stubCacheStore{paths: map[string]string{"pypi:pkg:1.0": tmpPath}}
 
@@ -214,7 +190,7 @@ func TestRescanScheduler_FailOpen_ScanError(t *testing.T) {
 	ctx := context.Background()
 	sched.runCycle(ctx)
 
-	// Status should remain CLEAN (fail-open). The scan engine itself handles the fail-open
+	// Status should be CLEAN (fail-open). The scan engine handles the fail-open
 	// by returning VerdictClean results, so the policy engine evaluates them as clean.
 	status := getArtifactStatus(t, db, "pypi:pkg:1.0")
 	assert.Equal(t, model.StatusClean, status.Status)
@@ -224,8 +200,7 @@ func TestRescanScheduler_FailOpen_ScanError(t *testing.T) {
 func TestRescanScheduler_CacheMiss_SkipsArtifact(t *testing.T) {
 	db := setupTestDB(t)
 
-	past := time.Now().UTC().Add(-1 * time.Hour)
-	insertTestArtifact(t, db, "pypi:pkg:1.0", "pypi", "pkg", "1.0", model.StatusClean, &past)
+	insertTestArtifact(t, db, "pypi:pkg:1.0", "pypi", "pkg", "1.0", model.StatusPendingScan, nil)
 
 	// Empty cache — artifact not found.
 	cacheStore := &stubCacheStore{paths: map[string]string{}}
@@ -242,19 +217,18 @@ func TestRescanScheduler_CacheMiss_SkipsArtifact(t *testing.T) {
 	ctx := context.Background()
 	sched.runCycle(ctx)
 
-	// Status should remain CLEAN (not quarantined on cache miss).
+	// Status should remain PENDING_SCAN (not quarantined on cache miss).
 	status := getArtifactStatus(t, db, "pypi:pkg:1.0")
-	assert.Equal(t, model.StatusClean, status.Status)
+	assert.Equal(t, model.StatusPendingScan, status.Status)
 	// rescan_due_at should be cleared (artifact evicted from cache).
 	assert.Nil(t, status.RescanDueAt)
 }
 
-func TestRescanScheduler_UpdatesRescanDueAt(t *testing.T) {
+func TestRescanScheduler_ClearsRescanDueAtAfterSuccess(t *testing.T) {
 	db := setupTestDB(t)
 	tmpPath := createTempFile(t)
 
-	past := time.Now().UTC().Add(-1 * time.Hour)
-	insertTestArtifact(t, db, "pypi:pkg:1.0", "pypi", "pkg", "1.0", model.StatusClean, &past)
+	insertTestArtifact(t, db, "pypi:pkg:1.0", "pypi", "pkg", "1.0", model.StatusPendingScan, nil)
 
 	cacheStore := &stubCacheStore{paths: map[string]string{"pypi:pkg:1.0": tmpPath}}
 	stubScan := &stubScanner{verdict: scanner.VerdictClean}
@@ -274,18 +248,18 @@ func TestRescanScheduler_UpdatesRescanDueAt(t *testing.T) {
 	ctx := context.Background()
 	sched.runCycle(ctx)
 
-	// rescan_due_at should be set to approximately now + interval.
+	// After successful rescan, status should be CLEAN and rescan_due_at should be NULL
+	// (no automatic periodic rescans — only manual rescans are supported).
 	status := getArtifactStatus(t, db, "pypi:pkg:1.0")
-	require.NotNil(t, status.RescanDueAt)
-	assert.WithinDuration(t, time.Now().UTC().Add(1*time.Hour), *status.RescanDueAt, 5*time.Second)
+	assert.Equal(t, model.StatusClean, status.Status)
+	assert.Nil(t, status.RescanDueAt)
 }
 
 func TestRescanScheduler_QuarantinesOnMalicious(t *testing.T) {
 	db := setupTestDB(t)
 	tmpPath := createTempFile(t)
 
-	past := time.Now().UTC().Add(-1 * time.Hour)
-	insertTestArtifact(t, db, "pypi:evil:1.0", "pypi", "evil", "1.0", model.StatusClean, &past)
+	insertTestArtifact(t, db, "pypi:evil:1.0", "pypi", "evil", "1.0", model.StatusPendingScan, nil)
 
 	cacheStore := &stubCacheStore{paths: map[string]string{"pypi:evil:1.0": tmpPath}}
 	// Scanner returns MALICIOUS verdict.
@@ -323,13 +297,11 @@ func TestRescanScheduler_ConcurrencyLimit(t *testing.T) {
 	db := setupTestDB(t)
 	tmpPath := createTempFile(t)
 
-	past := time.Now().UTC().Add(-1 * time.Hour)
-
-	// Insert 10 artifacts due for rescan.
+	// Insert 10 PENDING_SCAN artifacts.
 	for i := 0; i < 10; i++ {
 		id := "pypi:pkg" + string(rune('a'+i)) + ":1.0"
 		name := "pkg" + string(rune('a'+i))
-		insertTestArtifact(t, db, id, "pypi", name, "1.0", model.StatusClean, &past)
+		insertTestArtifact(t, db, id, "pypi", name, "1.0", model.StatusPendingScan, nil)
 	}
 
 	paths := make(map[string]string)
