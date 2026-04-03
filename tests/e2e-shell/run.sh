@@ -11,6 +11,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.e2e.yml"
 
+# Source .env file if present (AI scanner credentials, proxy auth, etc.).
+# Only export vars that are not already set in the environment.
+if [ -f "${SCRIPT_DIR}/.env" ]; then
+    set -a
+    source "${SCRIPT_DIR}/.env"
+    set +a
+fi
+
 export SCRIPT_DIR COMPOSE_FILE
 
 # Parse args

@@ -33,6 +33,8 @@ services:
       - ./config.e2e.yaml:/etc/shieldoo-gate/config.yaml:ro
     environment:
       SGW_SCANNERS_GUARDDOG_BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
+      # AI scanner: set SGW_SCANNERS_AI_ENABLED=true to enable in e2e
+      SGW_SCANNERS_AI_ENABLED: "${SGW_SCANNERS_AI_ENABLED:-false}"
       # Proxy auth: set SGW_PROXY_AUTH_ENABLED=true and SGW_PROXY_TOKEN to enable
       SGW_PROXY_AUTH_ENABLED: "${SGW_PROXY_AUTH_ENABLED:-false}"
       SGW_PROXY_TOKEN: "${SGW_PROXY_TOKEN:-}"
@@ -50,6 +52,11 @@ services:
       - e2e-bridge-socket:/tmp
     environment:
       BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
+      AI_SCANNER_ENABLED: "${AI_SCANNER_ENABLED:-false}"
+      AI_SCANNER_API_KEY: "${AI_SCANNER_API_KEY:-}"
+      AI_SCANNER_PROVIDER: "${AI_SCANNER_PROVIDER:-azure_openai}"
+      AI_SCANNER_AZURE_ENDPOINT: "${AI_SCANNER_AZURE_ENDPOINT:-}"
+      AI_SCANNER_AZURE_DEPLOYMENT: "${AI_SCANNER_AZURE_DEPLOYMENT:-gpt-54-mini}"
     networks:
       - internal-net
     restart: "no"
@@ -100,6 +107,8 @@ services:
       SGW_ADMIN_URL: "http://shieldoo-gate:8080"
       SGW_DOCKER_PORT: "5002"
       SGW_PUSH_REGISTRY_URL: "http://push-registry:5000"
+      # AI scanner (pass through from host env for test assertions)
+      SGW_SCANNERS_AI_ENABLED: "${SGW_SCANNERS_AI_ENABLED:-false}"
       # Proxy auth (pass through from host env)
       SGW_PROXY_AUTH_ENABLED: "${SGW_PROXY_AUTH_ENABLED:-false}"
       SGW_PROXY_TOKEN: "${SGW_PROXY_TOKEN:-}"

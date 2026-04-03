@@ -190,9 +190,9 @@ scanners:
 | `AI_SCANNER_ENABLED` | `"true"` to enable the scanner in the Python bridge |
 | `AI_SCANNER_API_KEY` | Azure OpenAI or OpenAI API key |
 | `AI_SCANNER_PROVIDER` | `"azure_openai"` (default) or `"openai"` |
-| `AI_SCANNER_MODEL` | Model name, e.g. `"gpt-5.4-mini"` |
-| `AI_SCANNER_AZURE_ENDPOINT` | Azure OpenAI endpoint URL |
-| `AI_SCANNER_AZURE_DEPLOYMENT` | Azure deployment name |
+| `AI_SCANNER_MODEL` | Model name (only for `provider: "openai"`; Azure uses deployment name) |
+| `AI_SCANNER_AZURE_ENDPOINT` | Azure OpenAI endpoint URL (required for Azure provider) |
+| `AI_SCANNER_AZURE_DEPLOYMENT` | Azure deployment name (required for Azure provider) |
 
 #### Performance
 

@@ -93,6 +93,18 @@ scanners:
   osv:
     enabled: true
     api_url: "https://api.osv.dev"
+  # AI scanner: enabled via AI_SCANNER_ENABLED env var (default false).
+  # When enabled in e2e, tests malicious .pth detection through the proxy.
+  ai:
+    enabled: false                       # overridden by SGW_SCANNERS_AI_ENABLED env var
+    provider: "azure_openai"
+    model: "gpt-5.4-mini"
+    api_key_env: "AI_SCANNER_API_KEY"
+    timeout: "15s"
+    max_input_tokens: 32000
+    bridge_socket: "/tmp/shieldoo-bridge.sock"
+    azure_endpoint: ""
+    azure_deployment: "gpt-54-mini"
 
 policy:
   block_if_verdict: "MALICIOUS"
