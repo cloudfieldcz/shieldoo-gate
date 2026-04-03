@@ -8,10 +8,26 @@ Shieldoo Gate acts as a transparent caching proxy for all major package ecosyste
 
 - **Transparent proxy** — zero client-side changes beyond pointing at the Gate URL
 - **Multi-ecosystem** — Docker, PyPI, npm, NuGet, Maven, RubyGems, Go Modules
-- **Pluggable scanners** — GuardDog, Trivy, OSV, built-in heuristics
+- **Deep scanning pipeline** — every artifact passes through multiple scanner layers (see below)
 - **Block & quarantine** — malicious packages never reach your developers or CI
 - **Community threat feed** — fast-path blocking of known malicious package hashes
 - **Self-hostable** — single Docker Compose or Helm chart
+
+## Scanners
+
+Shieldoo Gate ships with a layered scanning pipeline — from fast hash checks to deep AI analysis. Scanners run in order; a malicious verdict at any stage blocks delivery immediately.
+
+| Scanner | What it does | Mode |
+|---|---|---|
+| **Threat Feed Checker** | Instant lookup against known-malicious package hashes from the community threat feed | Sync |
+| **Built-in Heuristics** | Static pattern detectors — install-hook injection, data exfiltration, obfuscation, path traversal | Sync |
+| **GuardDog** | Open-source malware scanner for PyPI & npm (via Python sidecar over gRPC) | Sync |
+| **Trivy** | Vulnerability scanner for container images and filesystem artifacts | Sync |
+| **OSV** | Queries the OSV.dev database for known vulnerabilities by package name & version | Sync |
+| **AI Scanner** | **LLM-powered code analysis** — sends install-time scripts to a large language model that reasons about malicious intent, catching novel attacks that pattern matching misses | Sync |
+| **Sandbox (Behavioral)** | Runs the package install inside a gVisor sandbox, monitors syscalls for suspicious runtime behavior (DNS to non-registry domains, HTTP POST to external hosts, file writes outside install tree, etc.) | Async — quarantines retroactively |
+
+The **AI Scanner** is a key differentiator: most supply chain security tools rely solely on static signatures and known-vulnerability databases. Shieldoo Gate adds LLM reasoning that can detect zero-day malicious packages — obfuscated data exfiltration, novel backdoors, and social-engineering lures — that no signature has ever seen before.
 
 ## Quick Start
 
