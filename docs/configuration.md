@@ -116,6 +116,17 @@ scanners:
     enabled: true              # Enable OSV.dev vulnerability lookup
     api_url: "https://api.osv.dev"  # OSV API endpoint
 
+  ai:
+    enabled: false                   # Opt-in; requires AI_SCANNER_API_KEY env var
+    provider: "azure_openai"         # "azure_openai" (default) or "openai"
+    model: "gpt-5.4-mini"           # LLM model for analysis
+    api_key_env: "AI_SCANNER_API_KEY" # Env var name holding the API key
+    timeout: "15s"                   # Per-LLM-call timeout
+    max_input_tokens: 32000          # Max tokens sent to LLM
+    bridge_socket: "/tmp/shieldoo-bridge.sock"  # Shared with GuardDog bridge
+    azure_endpoint: ""               # Azure OpenAI endpoint URL
+    azure_deployment: "gpt-54-mini"  # Azure deployment name
+
   sandbox:
     enabled: false                   # Disabled by default; requires Linux + gVisor (runsc)
     runtime_binary: "runsc"          # Path to gVisor runtime binary

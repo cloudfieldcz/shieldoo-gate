@@ -39,6 +39,7 @@ import (
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scheduler"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner/builtin"
+	aiscanner "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/ai"
 	guarddog "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/guarddog"
 	osvscanner "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/osv"
 	sandboxscanner "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/sandbox"
@@ -146,6 +147,27 @@ func main() {
 		osv := osvscanner.NewOSVScanner(apiURL, timeout)
 		scanners = append(scanners, osv)
 		log.Info().Str("api_url", apiURL).Msg("osv scanner enabled")
+	}
+
+	// Optional: AI scanner (LLM-based, synchronous)
+	if cfg.Scanners.AI.Enabled {
+		aiCfg := aiscanner.AIConfig{
+			Enabled:  true,
+			Timeout:  parseDuration(cfg.Scanners.AI.Timeout, 15*time.Second),
+			Socket:   cfg.Scanners.AI.BridgeSocket,
+			Provider: cfg.Scanners.AI.Provider,
+			Model:    cfg.Scanners.AI.Model,
+		}
+		if aiCfg.Socket == "" {
+			aiCfg.Socket = cfg.Scanners.GuardDog.BridgeSocket // reuse same bridge socket
+		}
+		ai, err := aiscanner.NewAIScanner(aiCfg)
+		if err != nil {
+			log.Warn().Err(err).Msg("ai scanner disabled: failed to init")
+		} else {
+			scanners = append(scanners, ai)
+			log.Info().Str("model", cfg.Scanners.AI.Model).Str("provider", cfg.Scanners.AI.Provider).Msg("ai scanner enabled")
+		}
 	}
 
 	// Init scanner engine

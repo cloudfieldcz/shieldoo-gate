@@ -43,6 +43,11 @@ services:
       - bridge-socket:/tmp
     environment:
       BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
+      AI_SCANNER_ENABLED: "${AI_SCANNER_ENABLED:-false}"
+      AI_SCANNER_API_KEY: "${AI_SCANNER_API_KEY:-}"
+      AI_SCANNER_PROVIDER: "${AI_SCANNER_PROVIDER:-azure_openai}"
+      AI_SCANNER_AZURE_ENDPOINT: "${AI_SCANNER_AZURE_ENDPOINT:-}"
+      AI_SCANNER_AZURE_DEPLOYMENT: "${AI_SCANNER_AZURE_DEPLOYMENT:-gpt-54-mini}"
     restart: unless-stopped
 
 volumes:

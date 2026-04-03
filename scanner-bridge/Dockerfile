@@ -31,6 +31,9 @@ RUN python -c "import _cffi_backend; import pygit2"
 COPY proto/ proto/
 RUN python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. proto/scanner.proto
 
+COPY extractors/ extractors/
+COPY prompts/ prompts/
+COPY ai_scanner.py .
 COPY main.py .
 
 ENV BRIDGE_SOCKET=/tmp/shieldoo-bridge.sock

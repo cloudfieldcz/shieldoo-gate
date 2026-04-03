@@ -44,7 +44,7 @@ Shieldoo Gate Protocol Adapter
 | Component | Description |
 |---|---|
 | **Protocol Adapters** | Native protocol implementations (Docker/OCI, PyPI PEP 503, npm, NuGet V3, Maven, RubyGems, Go Modules) |
-| **Scan Engine** | Pluggable scanner framework (GuardDog, Trivy, OSV, built-in heuristics, dynamic sandbox) |
+| **Scan Engine** | Pluggable scanner framework (GuardDog, Trivy, OSV, AI/LLM, built-in heuristics, dynamic sandbox) |
 | **Cache Store** | Local filesystem, S3/MinIO, Azure Blob Storage, or GCS with per-ecosystem TTL |
 | **Policy Engine** | Block / quarantine / warn / allow rules with allowlists |
 | **Policy Overrides** | Dynamic false-positive management and audit trail via UI/API |
@@ -85,6 +85,7 @@ Shieldoo Gate Protocol Adapter
 | — | User profile & API key management UI | Done |
 | — | Tag mutability detection | Done |
 | — | Dynamic sandbox (gVisor) | Done |
+| — | AI Scanner (LLM-based, Azure OpenAI) | Done |
 | — | E2E PostgreSQL + MinIO testing | Done |
 
 ## Getting Started

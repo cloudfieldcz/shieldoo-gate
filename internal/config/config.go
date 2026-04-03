@@ -202,6 +202,21 @@ type ScannersConfig struct {
 	Trivy    TrivyConfig    `mapstructure:"trivy"`
 	OSV      OSVConfig      `mapstructure:"osv"`
 	Sandbox  SandboxConfig  `mapstructure:"sandbox"`
+	AI       AIConfig       `mapstructure:"ai"`
+}
+
+// AIConfig holds configuration for the AI (LLM-based) scanner.
+// The scanner uses Azure OpenAI or OpenAI API to analyze install-time scripts.
+type AIConfig struct {
+	Enabled         bool   `mapstructure:"enabled"`
+	Provider        string `mapstructure:"provider"`          // "azure_openai" (default) or "openai"
+	Model           string `mapstructure:"model"`             // e.g. "gpt-5.4-mini"
+	APIKeyEnv       string `mapstructure:"api_key_env"`       // env var name for API key
+	Timeout         string `mapstructure:"timeout"`           // per-API call timeout, default "15s"
+	MaxInputTokens  int    `mapstructure:"max_input_tokens"`  // max tokens sent to LLM, default 32000
+	BridgeSocket    string `mapstructure:"bridge_socket"`     // scanner-bridge Unix socket path
+	AzureEndpoint   string `mapstructure:"azure_endpoint"`    // Azure OpenAI endpoint URL
+	AzureDeployment string `mapstructure:"azure_deployment"`  // Azure deployment name
 }
 
 // SandboxConfig holds configuration for the dynamic sandbox (gVisor) scanner.

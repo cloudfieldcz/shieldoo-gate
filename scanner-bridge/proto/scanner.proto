@@ -6,7 +6,25 @@ option go_package = "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/guar
 
 service ScannerBridge {
     rpc ScanArtifact(ScanRequest) returns (ScanResponse);
+    rpc ScanArtifactAI(AIScanRequest) returns (AIScanResponse);
     rpc HealthCheck(HealthRequest) returns (HealthResponse);
+}
+
+message AIScanRequest {
+    string artifact_id = 1;   // "ecosystem:name:version"
+    string ecosystem   = 2;   // pypi, npm, nuget, maven, rubygems
+    string name        = 3;
+    string version     = 4;
+    string local_path  = 5;   // path to downloaded artifact on disk
+}
+
+message AIScanResponse {
+    string verdict            = 1;  // "CLEAN" | "SUSPICIOUS" | "MALICIOUS" | "UNKNOWN"
+    float  confidence         = 2;  // 0.0–1.0
+    repeated string findings  = 3;  // e.g. ["base64+exec in .pth", "network call to non-registry host"]
+    string explanation        = 5;  // human-readable summary
+    string model_used         = 6;  // e.g. "gpt-5.4-mini"
+    int32  tokens_used        = 7;  // for monitoring
 }
 
 message ScanRequest {

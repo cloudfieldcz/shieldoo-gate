@@ -17,7 +17,7 @@ COPY ui/ ./
 RUN npm run build
 
 # Stage 2: Build Go binary
-FROM golang:1.25-alpine AS go-builder
+FROM golang:1.25.7-alpine AS go-builder
 
 ARG SGW_TOKEN=""
 ARG SGW_USER=docker-build

@@ -130,6 +130,92 @@ Trivy is the primary scanner for Docker images, where it scans image layers for 
 
 OSV queries the [OSV.dev](https://osv.dev) vulnerability database, which aggregates data from NVD, GitHub Advisory Database, and other sources. It checks whether a specific package version has known vulnerabilities.
 
+### AI Scanner (LLM-based, gRPC Bridge)
+
+| | |
+|---|---|
+| **Package** | `internal/scanner/ai/` |
+| **Ecosystems** | PyPI, npm, NuGet, Maven, RubyGems |
+| **Communication** | gRPC over Unix socket to Python sidecar (shared with GuardDog bridge) |
+| **Config key** | `scanners.ai.enabled`, `scanners.ai.provider`, `scanners.ai.model` |
+
+The AI scanner uses a single-pass LLM call (Azure OpenAI `gpt-5.4-mini`) to perform semantic security analysis of install-time scripts extracted from packages. Unlike pattern-based scanners, it can understand **intent** — detecting novel obfuscation techniques, credential harvesting patterns, and self-replication behaviors that rule-based scanners miss.
+
+#### How It Works
+
+1. The Go wrapper (`internal/scanner/ai/scanner.go`) sends an `AIScanRequest` to the Python scanner-bridge via gRPC.
+2. The Python bridge (`scanner-bridge/ai_scanner.py`) extracts install-time scripts using ecosystem-specific extractors (`scanner-bridge/extractors/`).
+3. Extracted files are assembled into a prompt (max 32K tokens / ~128K characters) and sent to the LLM with a security analyst system prompt.
+4. The LLM returns a structured JSON verdict: `CLEAN`, `SUSPICIOUS`, or `MALICIOUS` with confidence and findings.
+5. The response is mapped to a standard `ScanResult` and returned to the scan engine.
+
+#### What Gets Extracted Per Ecosystem
+
+| Ecosystem | Extracted Files | Why |
+|---|---|---|
+| **PyPI** | `setup.py`, `*.pth`, top-level `__init__.py`, `METADATA` | `.pth` auto-exec, install hooks, module-load side effects |
+| **npm** | `package.json`, `scripts/*`, files referenced from `preinstall`/`postinstall` | install-time execution points |
+| **NuGet** | `*.targets`, `*.props`, `install.ps1`, `init.ps1`, `tools/*.ps1` | MSBuild hooks, PowerShell scripts |
+| **Maven** | `pom.xml` (plugin sections), `*.sh` in root, assembly descriptors | exec-maven-plugin, antrun |
+| **RubyGems** | `extconf.rb`, `Rakefile`, `*.gemspec`, `bin/*` | native extension build hooks |
+
+#### Real-World Attack Detection
+
+The AI scanner is specifically designed to catch attacks like:
+
+- **LiteLLM/TeamPCP (PyPI, March 2026):** Double base64-encoded `.pth` file with credential-stealing payload. The AI scanner understands that `.pth` files should only contain filesystem paths, not executable code.
+- **Shai-Hulud 2.0 (npm, November 2025):** Obfuscated `preinstall` script that downloads TruffleHog, harvests credentials, and self-replicates. The AI scanner follows the execution chain from `package.json` → `setup_bun.js` and identifies the full attack.
+
+#### Configuration
+
+```yaml
+scanners:
+  ai:
+    enabled: false                    # opt-in
+    provider: "azure_openai"          # "azure_openai" or "openai"
+    model: "gpt-5.4-mini"
+    api_key_env: "AI_SCANNER_API_KEY" # env var name for API key
+    timeout: "15s"                    # per-LLM-call timeout
+    max_input_tokens: 32000
+    bridge_socket: "/tmp/shieldoo-bridge.sock"
+    # Azure OpenAI settings:
+    azure_endpoint: ""                # e.g. "https://<instance>.openai.azure.com/"
+    azure_deployment: "gpt-54-mini"
+```
+
+**Environment variables** (set in `.env` or `docker-compose.yml`):
+
+| Variable | Description |
+|---|---|
+| `AI_SCANNER_ENABLED` | `"true"` to enable the scanner in the Python bridge |
+| `AI_SCANNER_API_KEY` | Azure OpenAI or OpenAI API key |
+| `AI_SCANNER_PROVIDER` | `"azure_openai"` (default) or `"openai"` |
+| `AI_SCANNER_MODEL` | Model name (only for `provider: "openai"`; Azure uses deployment name) |
+| `AI_SCANNER_AZURE_ENDPOINT` | Azure OpenAI endpoint URL (required for Azure provider) |
+| `AI_SCANNER_AZURE_DEPLOYMENT` | Azure deployment name (required for Azure provider) |
+
+#### Performance
+
+- **Latency:** ~4–6 seconds per scan (extraction + LLM call + parsing)
+- **Token window:** 32K input tokens (~128K characters) — sufficient for most packages without truncation
+- **Throughput:** ~150–180 tokens/second, time-to-first-token ~3–5 seconds
+
+#### Failure Handling
+
+The AI scanner follows **fail-open semantics**: if the LLM API is unreachable, times out, or returns an error, the scanner returns `VerdictClean` with confidence 0 and logs the error. This ensures that OpenAI/Azure outages never block package installations. Every fail-open event is logged and can be monitored via metrics.
+
+#### Added Value vs Existing Scanners
+
+| Attack Pattern | Builtin Scanners | **AI Scanner** |
+|---|---|---|
+| `.pth` with base64+exec | PTH Inspector detects `.pth` | + semantic understanding of intent |
+| `preinstall` → external JS | Install Hook detects hook | + follows execution chain, understands downloaded payload |
+| Credential harvesting | Not detected | Detected |
+| Self-replication (token abuse) | Not detected | Detected |
+| IMDS metadata queries | Not detected | Detected |
+| Novel obfuscation patterns | Pattern-based (may miss) | Semantic understanding |
+| Fork bomb patterns | Not detected | Detected |
+
 ## Scan Result Aggregation
 
 After all scanners complete, the **policy aggregator** (`internal/policy/aggregator.go`) combines multiple `ScanResult` values into a single verdict. The rules, applied in priority order:
@@ -202,24 +288,18 @@ The threat feed checker scanner (`builtin-threat-feed`) performs a fast-path SHA
 | Trivy (subprocess) | x | x | x | x | | | |
 | OSV (API) | x | x | x | | | | |
 | Sandbox (gVisor) | x | x | x | | x | x | |
+| **AI Scanner (LLM)** | x | x | x | | x | x | |
 
 ### Scanner Coverage Gaps
 
-**Maven, RubyGems, and Go ecosystems have significantly reduced scanner coverage.** None of the built-in scanners or external scanners (GuardDog, Trivy, OSV) currently support these ecosystems. The only scanner available for Maven and RubyGems is the **Sandbox (gVisor)**, which is:
+With the addition of the **AI Scanner**, Maven and RubyGems now have both static AI analysis (synchronous, before serving) and dynamic sandbox analysis (asynchronous, after serving). This significantly improves coverage for these ecosystems.
 
-- **Optional** — disabled by default
-- **Asynchronous** — runs after the artifact is already served to the client
-- **Linux-only** — requires gVisor (runsc) on the host
+**Go modules remain without scanner coverage** — neither built-in, external, AI, nor sandbox scanners support the Go ecosystem. Go modules have no install-time hooks, so there is no meaningful install-time behavior to analyze. Go modules are proxied and cached but pass through without any scan.
 
-**Go modules have no scanner coverage at all** — neither built-in, external, nor sandbox scanners support the Go ecosystem. Go modules are proxied and cached but pass through without any scan.
+For Go modules, the only protection mechanisms are:
 
-This means that for these three ecosystems, the only protection mechanisms are:
-
-1. **Threat feed** — if the community feed includes SHA-256 hashes for Maven/RubyGems/Go artifacts (the threat feed checker does not filter by ecosystem at the hash level, but it is only registered for PyPI/npm/NuGet/Docker)
-2. **Policy engine** — manual quarantine and overrides still work
-3. **Tag mutability detection** — detects upstream digest changes
-
-Extending built-in scanner support to Maven, RubyGems, and Go is a planned improvement.
+1. **Policy engine** — manual quarantine and overrides still work
+2. **Tag mutability detection** — detects upstream digest changes
 
 ## Dynamic Sandbox Scanner (gVisor)
 
