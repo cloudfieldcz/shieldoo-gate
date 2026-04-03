@@ -14,8 +14,9 @@ coverage.html
 coverage.txt
 
 # Python (scanner-bridge)
-scanner-bridge/__pycache__/
+scanner-bridge/**/__pycache__/
 scanner-bridge/*.pyc
+**/__pycache__/
 scanner-bridge/.venv/
 scanner-bridge/venv/
 *.egg-info/
