@@ -1,5 +1,6 @@
-"""GuardDog scanner bridge — gRPC server for Shieldoo Gate."""
+"""GuardDog + AI scanner bridge — gRPC server for Shieldoo Gate."""
 
+import asyncio
 import logging
 import os
 import sys
@@ -17,6 +18,9 @@ logger = logging.getLogger(__name__)
 
 GUARDDOG_VERSION = "2.9.0"
 
+# AI scanner is optional — only loaded when enabled via environment.
+AI_SCANNER_ENABLED = os.environ.get("AI_SCANNER_ENABLED", "false").lower() == "true"
+
 
 class ScannerBridgeServicer(scanner_pb2_grpc.ScannerBridgeServicer):
     def __init__(self):
@@ -28,6 +32,16 @@ class ScannerBridgeServicer(scanner_pb2_grpc.ScannerBridgeServicer):
         except ImportError:
             logger.error("GuardDog not installed")
             raise
+
+        # Initialize AI scanner module (lazy — only import when enabled).
+        self._ai_scanner = None
+        if AI_SCANNER_ENABLED:
+            try:
+                import ai_scanner
+                self._ai_scanner = ai_scanner
+                logger.info("AI scanner module loaded (model: %s)", ai_scanner._model)
+            except Exception as e:
+                logger.error("AI scanner failed to initialize: %s", e)
 
     def ScanArtifact(self, request, context):
         start = time.time()
@@ -93,6 +107,42 @@ class ScannerBridgeServicer(scanner_pb2_grpc.ScannerBridgeServicer):
                 confidence=0.0,
                 scanner_version=GUARDDOG_VERSION,
                 duration_ms=duration_ms,
+            )
+
+    def ScanArtifactAI(self, request, context):
+        """AI-based security analysis of a package artifact."""
+        if self._ai_scanner is None:
+            return scanner_pb2.AIScanResponse(
+                verdict="UNKNOWN",
+                confidence=0.0,
+                explanation="AI scanner not enabled",
+                model_used="none",
+                tokens_used=0,
+            )
+
+        try:
+            loop = asyncio.new_event_loop()
+            try:
+                result = loop.run_until_complete(self._ai_scanner.scan(request))
+            finally:
+                loop.close()
+
+            return scanner_pb2.AIScanResponse(
+                verdict=result.get("verdict", "UNKNOWN"),
+                confidence=result.get("confidence", 0.0),
+                findings=result.get("findings", []),
+                explanation=result.get("explanation", ""),
+                model_used=result.get("model_used", ""),
+                tokens_used=result.get("tokens_used", 0),
+            )
+        except Exception as e:
+            logger.error("AI scan error for %s: %s", request.artifact_id, e)
+            return scanner_pb2.AIScanResponse(
+                verdict="UNKNOWN",
+                confidence=0.0,
+                explanation=f"AI scan error: {e}",
+                model_used="none",
+                tokens_used=0,
             )
 
     def HealthCheck(self, request, context):

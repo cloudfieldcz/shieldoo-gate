@@ -34,6 +34,7 @@ source "${SCRIPT_DIR}/test_maven.sh"
 source "${SCRIPT_DIR}/test_rubygems.sh"
 source "${SCRIPT_DIR}/test_gomod.sh"
 source "${SCRIPT_DIR}/test_api.sh"
+source "${SCRIPT_DIR}/test_ai_scanner.sh"
 
 check_prereqs() {
     local missing=()
@@ -107,6 +108,7 @@ main() {
     test_rubygems
     test_gomod
     test_api
+    test_ai_scanner
 
     # 6. Summary
     print_summary
