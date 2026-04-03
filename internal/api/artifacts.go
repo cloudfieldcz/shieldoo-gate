@@ -435,6 +435,11 @@ func (s *Server) handleRescanArtifact(w http.ResponseWriter, r *http.Request) {
 		UserEmail:  userEmail,
 	})
 
+	// Wake up the rescan scheduler immediately.
+	if s.onRescanQueued != nil {
+		s.onRescanQueued()
+	}
+
 	writeJSON(w, http.StatusAccepted, map[string]string{
 		"status":      "PENDING_SCAN",
 		"artifact_id": id,

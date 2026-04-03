@@ -30,9 +30,8 @@ type artifactRow struct {
 	UpstreamURL string `db:"upstream_url"`
 }
 
-// RescanScheduler periodically re-scans cached artifacts to detect newly
-// discovered threats. It processes PENDING_SCAN artifacts first (from manual
-// rescan API), then CLEAN/SUSPICIOUS artifacts with rescan_due_at in the past.
+// RescanScheduler processes manually triggered rescans (PENDING_SCAN).
+// It runs on a background ticker but can be woken up immediately via Notify().
 type RescanScheduler struct {
 	db            *config.GateDB
 	cache         cache.CacheStore
@@ -42,6 +41,7 @@ type RescanScheduler struct {
 	batchSize     int
 	maxConcurrent int64
 	sem           *semaphore.Weighted
+	notify        chan struct{}
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
 }
@@ -78,6 +78,7 @@ func NewRescanScheduler(
 		batchSize:     batchSize,
 		maxConcurrent: maxConc,
 		sem:           semaphore.NewWeighted(maxConc),
+		notify:        make(chan struct{}, 1),
 	}
 }
 
@@ -99,6 +100,15 @@ func (s *RescanScheduler) Start() {
 		Msg("rescan scheduler started")
 }
 
+// Notify wakes up the scheduler to process pending rescans immediately.
+// Non-blocking: if a notification is already pending, the call is a no-op.
+func (s *RescanScheduler) Notify() {
+	select {
+	case s.notify <- struct{}{}:
+	default:
+	}
+}
+
 // Stop gracefully shuts down the scheduler and waits for in-flight scans.
 func (s *RescanScheduler) Stop() {
 	if s.cancel != nil {
@@ -108,7 +118,7 @@ func (s *RescanScheduler) Stop() {
 	log.Info().Msg("rescan scheduler stopped")
 }
 
-// run is the main loop: tick, run cycle, repeat.
+// run is the main loop: tick or notify, run cycle, repeat.
 func (s *RescanScheduler) run(ctx context.Context) {
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
@@ -118,6 +128,8 @@ func (s *RescanScheduler) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			s.runCycle(ctx)
+		case <-s.notify:
 			s.runCycle(ctx)
 		}
 	}

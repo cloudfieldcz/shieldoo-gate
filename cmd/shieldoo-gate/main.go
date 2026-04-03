@@ -369,6 +369,7 @@ func main() {
 		rescanScheduler := scheduler.NewRescanScheduler(db, cacheStore, scanEngine, policyEngine, cfg.Rescan)
 		rescanScheduler.Start()
 		defer rescanScheduler.Stop()
+		apiServer.SetRescanNotifier(rescanScheduler.Notify)
 		log.Info().Msg("rescan scheduler enabled")
 	}
 

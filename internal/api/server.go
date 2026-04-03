@@ -33,6 +33,7 @@ type Server struct {
 	authEnabled      bool
 	proxyAuthEnabled bool
 	publicURLs       config.PublicURLsConfig
+	onRescanQueued   func()
 }
 
 // NewServer creates a new Server with the given dependencies.
@@ -52,6 +53,12 @@ func (s *Server) SetAuth(oidcMw *auth.OIDCMiddleware, authHandlers *auth.AuthHan
 	s.oidcMw = oidcMw
 	s.authHandlers = authHandlers
 	s.authEnabled = true
+}
+
+// SetRescanNotifier sets a callback invoked when a manual rescan is queued,
+// allowing the rescan scheduler to wake up immediately.
+func (s *Server) SetRescanNotifier(fn func()) {
+	s.onRescanQueued = fn
 }
 
 // SetProxyAuth configures proxy auth state so that API key management routes
