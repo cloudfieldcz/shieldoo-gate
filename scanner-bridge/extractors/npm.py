@@ -80,7 +80,7 @@ def extract(local_path: str, *, original_filename: str = "") -> dict[str, str]:
                     except Exception as e:
                         logger.warning("npm extractor: error reading %s: %s", basename, e)
 
-    except (tarfile.TarError, Exception) as e:
+    except Exception as e:
         logger.error("npm extractor: error opening tarball %s: %s", local_path, e)
 
     return result

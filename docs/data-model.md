@@ -120,7 +120,7 @@ Stores metadata about every artifact that has been downloaded and cached.
 
 **Go struct:** `model.Artifact` (`internal/model/artifact.go`)
 
-The `ID()` method computes the composite key: `fmt.Sprintf("%s:%s:%s", a.Ecosystem, a.Name, a.Version)`.
+The `ID()` method computes the composite key: `fmt.Sprintf("%s:%s:%s", a.Ecosystem, a.Name, a.Version)`. When `Filename` is non-empty (e.g., PyPI wheels with distinct filenames per platform), the ID includes a fourth part: `fmt.Sprintf("%s:%s:%s:%s", a.Ecosystem, a.Name, a.Version, a.Filename)`.
 
 **Indexes:** `idx_artifacts_ecosystem_name ON (ecosystem, name)`
 

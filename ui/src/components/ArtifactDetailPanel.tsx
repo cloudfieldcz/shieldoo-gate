@@ -4,6 +4,7 @@ import { artifactsApi } from '../api/client'
 import StatusBadge from './StatusBadge'
 import ScanResultCard from './ScanResultCard'
 import { X, RefreshCw, ShieldX, ShieldCheck } from 'lucide-react'
+import { formatBytes } from '../utils/format'
 
 interface ArtifactDetailByIdProps {
   artifactId: string
@@ -18,12 +19,6 @@ interface ArtifactDetailBySearchProps {
 }
 
 type ArtifactDetailPanelProps = ArtifactDetailByIdProps | ArtifactDetailBySearchProps
-
-function formatBytes(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
 
 export default function ArtifactDetailPanel({ artifactId, search, onClose }: ArtifactDetailPanelProps) {
   const qc = useQueryClient()

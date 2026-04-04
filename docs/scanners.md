@@ -14,8 +14,9 @@ The scan engine (`internal/scanner/engine.go`) orchestrates multiple scanners in
 
 ```go
 // Simplified flow
-func (e *Engine) ScanAll(ctx context.Context, artifact Artifact) ([]ScanResult, error) {
+func (e *Engine) ScanAll(ctx context.Context, artifact Artifact, excludeNames ...string) ([]ScanResult, error) {
     applicable := filterByEcosystem(e.scanners, artifact.Ecosystem)
+    // Optional excludeNames filters out specific scanners (e.g., AI scanner during rescan)
     scanCtx, cancel := context.WithTimeout(ctx, e.timeout)
     // Run each scanner in a goroutine, collect results
     // Scanner errors → ScanResult{Verdict: VerdictClean, Error: err}
@@ -42,11 +43,12 @@ The `Artifact` struct passed to scanners:
 
 ```go
 type Artifact struct {
-    ID          string     // "ecosystem:name:version"
+    ID          string     // "ecosystem:name:version" (or "ecosystem:name:version:filename")
     Ecosystem   Ecosystem  // pypi, npm, nuget, docker, maven, rubygems, go
     Name        string
     Version     string
     LocalPath   string     // Path to downloaded artifact on disk
+    Filename    string     // Original filename (when available)
     SHA256      string
     SizeBytes   int64
     UpstreamURL string
@@ -59,12 +61,12 @@ Six scanners are always active. They are registered in `cmd/shieldoo-gate/main.g
 
 | Scanner | ID | Ecosystems | What it detects |
 |---|---|---|---|
-| **Hash Verifier** | `builtin-hash-verifier` | All | Verifies SHA-256 checksum of the downloaded artifact matches the expected hash from upstream metadata |
-| **Install Hook Analyzer** | `builtin-install-hook` | PyPI, npm | Detects suspicious `setup.py` hooks, `postinstall` scripts, and install-time code execution |
-| **Obfuscation Detector** | `builtin-obfuscation` | All | Detects `base64.decode(exec(...))`, packed JavaScript, encrypted blobs, and other obfuscation patterns |
-| **Exfil Detector** | `builtin-exfil` | All | Detects HTTP/DNS calls to non-registry domains during install, data exfiltration patterns |
-| **PTH Inspector** | `builtin-pth` | PyPI | Detects `.pth` files with executable code — the exact attack vector from the LiteLLM incident |
-| **Threat Feed Checker** | `builtin-threat-feed` | All | Fast-path SHA-256 lookup against the local threat feed database. If a match is found, immediately returns `MALICIOUS` |
+| **Hash Verifier** | `hash-verifier` | PyPI, npm, NuGet, Docker | Verifies SHA-256 checksum of the downloaded artifact matches the expected hash from upstream metadata |
+| **Install Hook Analyzer** | `install-hook-analyzer` | PyPI, npm | Detects suspicious `setup.py` hooks, `postinstall` scripts, and install-time code execution |
+| **Obfuscation Detector** | `obfuscation-detector` | PyPI, npm, NuGet, Docker | Detects `base64.decode(exec(...))`, packed JavaScript, encrypted blobs, and other obfuscation patterns |
+| **Exfil Detector** | `exfil-detector` | PyPI, npm, NuGet, Docker | Detects HTTP/DNS calls to non-registry domains during install, data exfiltration patterns |
+| **PTH Inspector** | `pth-inspector` | PyPI | Detects `.pth` files with executable code — the exact attack vector from the LiteLLM incident |
+| **Threat Feed Checker** | `builtin-threat-feed` | PyPI, npm, NuGet, Docker | Fast-path SHA-256 lookup against the local threat feed database. If a match is found, immediately returns `MALICIOUS` |
 
 All built-in scanners are in `internal/scanner/builtin/`:
 - `hash_verifier.go`
@@ -365,7 +367,7 @@ At startup, the sandbox scanner lists all containers with the `sgw-sandbox-` pre
 ### Known Limitations
 
 - Sophisticated malware may fingerprint the gVisor environment (incomplete syscall support, timing differences).
-- `npm install` with native compilation (node-gyp) may exceed the 512MB memory limit, causing OOM kill and `VerdictUnknown`.
+- `npm install` with native compilation (node-gyp) may exceed the 512MB memory limit, causing OOM kill and `VerdictSuspicious` with confidence 0.0.
 - **Docker** is not supported — Docker images are not "installed" in the traditional sense; Trivy handles Docker scanning via image layer analysis instead.
 - **Go** is not supported — Go modules have no install hooks or post-install scripts, so there is no meaningful install-time behavior to observe.
 - **Maven and RubyGems are supported** — the sandbox can execute `mvn install:install-file` and `gem install --local` respectively to observe install-time behavior.

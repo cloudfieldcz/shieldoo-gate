@@ -161,6 +161,13 @@ Each task should map to **one module**. Do not modify multiple unrelated modules
 - Implement REST API endpoint group
 - Write integration tests for one adapter
 
+## Verification & Workflow Discipline
+
+1. **Verify before claiming done** — run `make build`, `make lint`, `make test` before reporting task completion. Never claim success without evidence.
+2. **Re-read before edit (context decay)** — after 10+ messages in a conversation, you MUST re-read any file before editing it. Do not trust your memory of file contents — auto-compaction may have silently destroyed that context. Editing against stale state is the #1 source of broken changes.
+3. **Phased execution** — multi-file changes should touch max ~5 files per phase. Verify (build + test) between phases before proceeding.
+4. **Cleanup first** — before structural refactors on large files, remove dead code (unused imports, exports, debug logs) in a separate commit first.
+
 ## Security Invariants — NEVER Violate
 
 1. **Never serve a quarantined artifact** — `artifact_status.status == QUARANTINED` is the final gate

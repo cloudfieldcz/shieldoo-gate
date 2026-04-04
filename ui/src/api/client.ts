@@ -57,7 +57,6 @@ export const artifactsApi = {
 
 export const statsApi = {
   summary: () => api.get<StatsSummary>('/stats/summary').then((r) => r.data),
-  blocked: () => api.get<AuditEntry[]>('/stats/blocked').then((r) => r.data),
 }
 
 export const auditApi = {
@@ -67,11 +66,6 @@ export const auditApi = {
         params: { page, per_page: perPage, event_type: eventType },
       })
       .then((r) => r.data),
-}
-
-export const feedApi = {
-  list: () => api.get('/feed').then((r) => r.data),
-  refresh: () => api.post('/feed/refresh').then((r) => r.data),
 }
 
 export const overridesApi = {

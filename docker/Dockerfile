@@ -55,7 +55,7 @@ RUN addgroup -S sgw && adduser -S sgw -G sgw \
  && chown sgw:sgw /var/lib/shieldoo-gate /var/cache/shieldoo-gate /var/cache/trivy /var/log/shieldoo-gate
 USER sgw
 
-EXPOSE 5000 4873 5001 5002 8080
+EXPOSE 5000 4873 5001 5002 8080 8085 8086 8087
 
 ENTRYPOINT ["/usr/local/bin/shieldoo-gate"]
 CMD ["--config", "/etc/shieldoo-gate/config.yaml"]

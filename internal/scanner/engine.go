@@ -91,6 +91,9 @@ func (e *Engine) ScanAll(ctx context.Context, artifact Artifact, excludeNames ..
 			if result.ScannerID == "" {
 				result.ScannerID = sc.Name()
 			}
+			if result.ScannerVersion == "" {
+				result.ScannerVersion = sc.Version()
+			}
 
 			mu.Lock()
 			results = append(results, result)
@@ -109,13 +112,6 @@ type AsyncScanner interface {
 	ScanAsync(ctx context.Context, artifact Artifact, localPath string, callback func(ScanResult))
 	Name() string
 	Close() error
-}
-
-// ScanAsync dispatches an asynchronous scan using the given AsyncScanner.
-// The callback is invoked when the scan completes; it should evaluate policy
-// and quarantine the artifact if needed. This method returns immediately.
-func (e *Engine) ScanAsync(ctx context.Context, artifact Artifact, localPath string, asyncScanner AsyncScanner, callback func(ScanResult)) {
-	asyncScanner.ScanAsync(ctx, artifact, localPath, callback)
 }
 
 // HealthCheck runs HealthCheck on all registered scanners and returns a map of

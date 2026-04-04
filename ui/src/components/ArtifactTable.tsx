@@ -1,25 +1,12 @@
 import type { ArtifactWithStatus } from '../api/types'
 import StatusBadge from './StatusBadge'
 import { ShieldAlert } from 'lucide-react'
+import { formatDate, formatBytes } from '../utils/format'
 
 interface ArtifactTableProps {
   artifacts: ArtifactWithStatus[]
   onRowClick: (artifact: ArtifactWithStatus) => void
   selectedId?: string
-}
-
-function formatDate(iso: string) {
-  try {
-    return new Date(iso).toLocaleString()
-  } catch {
-    return iso
-  }
-}
-
-function formatBytes(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 export default function ArtifactTable({ artifacts, onRowClick, selectedId }: ArtifactTableProps) {

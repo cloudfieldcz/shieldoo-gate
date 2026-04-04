@@ -1,4 +1,4 @@
-export interface Artifact {
+interface Artifact {
   id: string
   ecosystem: string
   name: string
@@ -12,7 +12,7 @@ export interface Artifact {
   has_override?: boolean
 }
 
-export interface ArtifactStatus {
+interface ArtifactStatus {
   artifact_id: string
   status: 'CLEAN' | 'SUSPICIOUS' | 'QUARANTINED' | 'PENDING_SCAN'
   quarantine_reason?: string
@@ -57,7 +57,7 @@ export interface PolicyOverride {
   revoked_at?: string
 }
 
-export interface ArtifactStatsSection {
+interface ArtifactStatsSection {
   total: number
   clean: number
   suspicious: number
@@ -65,7 +65,7 @@ export interface ArtifactStatsSection {
   pending_scan: number
 }
 
-export interface RequestStatsSection {
+interface RequestStatsSection {
   served_24h: number
   blocked_24h: number
   served_all: number
@@ -78,7 +78,7 @@ export interface StatsSummary {
   by_period: Record<string, Record<string, number>>
 }
 
-export interface ScannerHealth {
+interface ScannerHealth {
   healthy: boolean
   error?: string
 }
@@ -95,7 +95,7 @@ export interface PaginatedResponse<T> {
   total: number
 }
 
-export interface OverrideInfo {
+interface OverrideInfo {
   id: number
   scope: 'version' | 'package'
   reason: string

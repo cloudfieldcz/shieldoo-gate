@@ -62,7 +62,7 @@ The aggregated verdict is compared against two configurable thresholds:
 | `policy.block_if_verdict` | `MALICIOUS` | Return **BLOCK** |
 | `policy.quarantine_if_verdict` | `SUSPICIOUS` | Return **QUARANTINE** |
 
-These defaults are enforced programmatically via `viper.SetDefault()` in `config.go`. If omitted from the config file, the defaults apply. If the verdict matches `block_if_verdict`, the artifact is blocked. If it matches `quarantine_if_verdict`, it is quarantined. Otherwise, it is allowed.
+If omitted from the config file, these defaults apply. If the verdict matches `block_if_verdict`, the artifact is blocked. If it matches `quarantine_if_verdict`, it is quarantined. Otherwise, it is allowed.
 
 ### Step 4: Default
 
@@ -86,7 +86,7 @@ Before policy evaluation, the aggregator (`internal/policy/aggregator.go`) combi
 
 ### Confidence Threshold
 
-The `policy.minimum_confidence` setting (default `0.7`, enforced via `viper.SetDefault()`) filters out scanner results that are not confident enough to act on. This prevents low-confidence false positives from triggering blocks.
+The `policy.minimum_confidence` setting (default `0.7`) filters out scanner results that are not confident enough to act on. This prevents low-confidence false positives from triggering blocks.
 
 The threat feed checker is exempt from this threshold — it bypasses confidence checks entirely.
 

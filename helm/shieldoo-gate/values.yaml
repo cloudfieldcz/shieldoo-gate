@@ -14,7 +14,7 @@ fullnameOverride: ""
 
 scannerBridge:
   image:
-    repository: ghcr.io/cloudfieldcz/shieldoo-scanner-bridge
+    repository: ghcr.io/cloudfieldcz/scanner-bridge
     tag: ""
     pullPolicy: IfNotPresent
   resources:

@@ -337,6 +337,8 @@ The `examples/` directory contains minimal projects pre-configured to use the lo
 
 Each example has a README with setup instructions. They are useful for quick verification that the proxy works correctly.
 
+The `examples/deploy/` directory contains a ready-to-run deployment example with its own `compose.yaml`, `config.yaml`, and `README.md`.
+
 ## Admin UI
 
 The React admin UI is served on the admin port (default 8080) as a single-page application. Available pages:

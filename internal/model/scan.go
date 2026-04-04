@@ -10,24 +10,6 @@ const (
 	VerdictMalicious  Verdict = "MALICIOUS"
 )
 
-type Severity string
-
-const (
-	SeverityInfo     Severity = "INFO"
-	SeverityLow      Severity = "LOW"
-	SeverityMedium   Severity = "MEDIUM"
-	SeverityHigh     Severity = "HIGH"
-	SeverityCritical Severity = "CRITICAL"
-)
-
-type Finding struct {
-	Severity    Severity `json:"severity"`
-	Category    string   `json:"category"`
-	Description string   `json:"description"`
-	Location    string   `json:"location"`
-	IoCs        []string `json:"iocs,omitempty"`
-}
-
 type ScanResult struct {
 	ID             int64     `db:"id" json:"id"`
 	ArtifactID     string    `db:"artifact_id" json:"artifact_id"`

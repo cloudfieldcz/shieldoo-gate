@@ -336,11 +336,12 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 | `DatabaseConfig` | `database` | `Backend`, `SQLite`, `Postgres` |
 | `SQLiteConfig` | `database.sqlite` | `Path` |
 | `PostgresConfig` | `database.postgres` | `DSN`, `MaxOpenConns`, `MaxIdleConns`, `ConnMaxLifetime` |
-| `ScannersConfig` | `scanners` | `Parallel`, `Timeout`, `GuardDog`, `Trivy`, `OSV`, `Sandbox` |
+| `ScannersConfig` | `scanners` | `Parallel`, `Timeout`, `GuardDog`, `Trivy`, `OSV`, `Sandbox`, `AI` |
 | `GuardDogConfig` | `scanners.guarddog` | `Enabled`, `BridgeSocket` |
 | `TrivyConfig` | `scanners.trivy` | `Enabled`, `Binary`, `CacheDir` |
 | `OSVConfig` | `scanners.osv` | `Enabled`, `APIURL` |
 | `SandboxConfig` | `scanners.sandbox` | `Enabled`, `RuntimeBinary`, `Timeout`, `NetworkPolicy`, `MaxConcurrent` |
+| `AIConfig` | `scanners.ai` | `Enabled`, `Provider`, `Model`, `APIKeyEnv`, `Timeout`, `MaxInputTokens`, `BridgeSocket`, `AzureEndpoint`, `AzureDeployment` |
 | `PolicyConfig` | `policy` | `BlockIfVerdict`, `QuarantineIfVerdict`, `MinimumConfidence`, `Allowlist`, `TagMutability` |
 | `TagMutabilityConfig` | `policy.tag_mutability` | `Enabled`, `Action`, `ExcludeTags`, `CheckOnCacheHit` |
 | `ThreatFeedConfig` | `threat_feed` | `Enabled`, `URL`, `RefreshInterval` |

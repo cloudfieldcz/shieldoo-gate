@@ -84,7 +84,7 @@ def _extract_wheel(path: str) -> dict[str, str]:
                         result[info.filename] = content
                     except Exception as e:
                         logger.warning("pypi extractor: error reading %s: %s", info.filename, e)
-    except (zipfile.BadZipFile, Exception) as e:
+    except Exception as e:
         logger.error("pypi extractor: error opening wheel %s: %s", path, e)
     return result
 
@@ -104,6 +104,6 @@ def _extract_sdist(path: str) -> dict[str, str]:
                             result[member.name] = content
                     except Exception as e:
                         logger.warning("pypi extractor: error reading %s: %s", member.name, e)
-    except (tarfile.TarError, Exception) as e:
+    except Exception as e:
         logger.error("pypi extractor: error opening sdist %s: %s", path, e)
     return result

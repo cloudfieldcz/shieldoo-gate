@@ -8,7 +8,6 @@ logger = logging.getLogger(__name__)
 
 # Files that execute at NuGet install/build time.
 INTERESTING_EXTENSIONS = {".targets", ".props", ".ps1"}
-INTERESTING_NAMES = {"install.ps1", "init.ps1", "uninstall.ps1"}
 
 
 def extract(local_path: str, *, original_filename: str = "") -> dict[str, str]:
@@ -30,14 +29,7 @@ def extract(local_path: str, *, original_filename: str = "") -> dict[str, str]:
                 basename = os.path.basename(info.filename)
                 _, ext = os.path.splitext(basename)
 
-                should_extract = False
-                if ext.lower() in INTERESTING_EXTENSIONS:
-                    should_extract = True
-                if basename.lower() in INTERESTING_NAMES:
-                    should_extract = True
-                if "tools/" in info.filename.replace("\\", "/").lower():
-                    if ext.lower() == ".ps1":
-                        should_extract = True
+                should_extract = ext.lower() in INTERESTING_EXTENSIONS
 
                 if should_extract:
                     try:
@@ -45,6 +37,6 @@ def extract(local_path: str, *, original_filename: str = "") -> dict[str, str]:
                         result[info.filename] = content
                     except Exception as e:
                         logger.warning("nuget extractor: error reading %s: %s", info.filename, e)
-    except (zipfile.BadZipFile, Exception) as e:
+    except Exception as e:
         logger.error("nuget extractor: error opening nupkg %s: %s", local_path, e)
     return result

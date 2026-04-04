@@ -87,7 +87,7 @@ Shieldoo Gate runs as a single Go binary that exposes **eight HTTP servers** on 
 4. Adapter downloads artifact from upstream registry
        │
 5. Scan Engine runs all applicable scanners in parallel
-       │  Each scanner gets a context with timeout (default 30s, configurable)
+       │  Each scanner gets a context with timeout (default 60s, configurable)
        │  Scanner errors → VerdictClean (fail-open)
        │
 6. Policy Engine evaluates aggregated results:
@@ -126,7 +126,7 @@ The main entrypoint (`cmd/shieldoo-gate/main.go`) initializes components in this
 1. **Parse config** — Read YAML config file (`-config` flag, default `config.yaml`), apply `SGW_*` environment overrides
 2. **Validate config** — Check required fields (cache path, DB path, cloud storage credentials)
 3. **Setup logger** — Configure zerolog level and format (JSON or text), optional file output
-4. **Initialize database** — Open SQLite or PostgreSQL, run embedded migrations (001–010 in `sqlite/` or `postgres/` subdirectory), set WAL mode and foreign keys (SQLite)
+4. **Initialize database** — Open SQLite or PostgreSQL, run embedded migrations (001–013 in `sqlite/` or `postgres/` subdirectory), set WAL mode and foreign keys (SQLite)
 5. **Initialize cache store** — Create storage backend based on config: local filesystem (default), S3, Azure Blob, or GCS
 6. **Register scanners** — Always register 6 built-in scanners; conditionally add GuardDog, Trivy, OSV based on config
 7. **Create scan engine** — Wrap all scanners with parallel execution and timeout

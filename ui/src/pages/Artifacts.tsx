@@ -6,16 +6,7 @@ import type { ArtifactWithStatus } from '../api/types'
 import ArtifactTable from '../components/ArtifactTable'
 import ArtifactDetailPanel from '../components/ArtifactDetailPanel'
 import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
-
-const ECOSYSTEMS = [
-  { value: 'docker', label: 'Docker' },
-  { value: 'pypi', label: 'PyPI' },
-  { value: 'npm', label: 'npm' },
-  { value: 'nuget', label: 'NuGet' },
-  { value: 'maven', label: 'Maven' },
-  { value: 'rubygems', label: 'RubyGems' },
-  { value: 'go', label: 'Go Modules' },
-]
+import { ECOSYSTEMS } from '../constants/ecosystems'
 const STATUSES = ['', 'CLEAN', 'SUSPICIOUS', 'QUARANTINED', 'PENDING_SCAN']
 const PER_PAGE = 20
 

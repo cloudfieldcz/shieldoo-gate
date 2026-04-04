@@ -7,8 +7,6 @@ import tarfile
 import tempfile
 import zipfile
 
-import pytest
-
 # Add parent to path so extractors can be imported.
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))

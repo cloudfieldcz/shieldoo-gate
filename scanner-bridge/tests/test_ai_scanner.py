@@ -1,10 +1,8 @@
 """Tests for ai_scanner module (with mocked LLM client)."""
 
-import json
 import os
 import sys
 import types
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 

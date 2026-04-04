@@ -99,6 +99,6 @@ def _extract_jar(path: str) -> dict[str, str]:
                         result[info.filename] = content
                     except Exception as e:
                         logger.warning("maven extractor: error reading %s: %s", info.filename, e)
-    except (zipfile.BadZipFile, Exception) as e:
+    except Exception as e:
         logger.error("maven extractor: error opening jar %s: %s", path, e)
     return result

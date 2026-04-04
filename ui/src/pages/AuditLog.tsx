@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { auditApi } from '../api/client'
 import ArtifactDetailPanel from '../components/ArtifactDetailPanel'
 import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
+import { formatDate } from '../utils/format'
 
 const EVENT_TYPES = [
   '',
@@ -21,14 +22,6 @@ const eventTypeBadge: Record<string, string> = {
   QUARANTINED: 'bg-orange-100 text-orange-800',
   RELEASED: 'bg-blue-100 text-blue-800',
   SCANNED: 'bg-gray-100 text-gray-700',
-}
-
-function formatDate(iso: string) {
-  try {
-    return new Date(iso).toLocaleString()
-  } catch {
-    return iso
-  }
 }
 
 export default function AuditLog() {

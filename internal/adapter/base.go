@@ -135,10 +135,9 @@ func ValidateVersion(version string) error {
 
 // ErrorResponse is the JSON body returned for blocked or quarantined requests.
 type ErrorResponse struct {
-	Error      string `json:"error"`
-	Artifact   string `json:"artifact,omitempty"`
-	Reason     string `json:"reason,omitempty"`
-	DetailsURL string `json:"details_url,omitempty"`
+	Error    string `json:"error"`
+	Artifact string `json:"artifact,omitempty"`
+	Reason   string `json:"reason,omitempty"`
 }
 
 // WriteJSONError writes a JSON-encoded ErrorResponse with the given HTTP status.
@@ -218,14 +217,13 @@ func InsertScanResults(db *config.GateDB, artifactID string, results []scanner.S
 		if err != nil {
 			return fmt.Errorf("adapter: marshalling findings for %s: %w", artifactID, err)
 		}
-		scannerVersion := ""
 		_, err = tx.Exec(
 			`INSERT INTO scan_results (artifact_id, scanned_at, scanner_name, scanner_version, verdict, confidence, findings_json, duration_ms)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			artifactID,
 			r.ScannedAt,
 			r.ScannerID,
-			scannerVersion,
+			r.ScannerVersion,
 			string(r.Verdict),
 			r.Confidence,
 			string(findingsJSON),

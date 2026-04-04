@@ -106,36 +106,8 @@ func (tx *GateTx) ExecContext(ctx context.Context, query string, args ...any) (s
 	return tx.Tx.ExecContext(ctx, tx.Rebind(query), args...)
 }
 
-func (tx *GateTx) Get(dest any, query string, args ...any) error {
-	return tx.Tx.Get(dest, tx.Rebind(query), args...)
-}
-
-func (tx *GateTx) Select(dest any, query string, args ...any) error {
-	return tx.Tx.Select(dest, tx.Rebind(query), args...)
-}
-
-func (tx *GateTx) Query(query string, args ...any) (*sql.Rows, error) {
-	return tx.Tx.Query(tx.Rebind(query), args...)
-}
-
-func (tx *GateTx) QueryRow(query string, args ...any) *sql.Row {
-	return tx.Tx.QueryRow(tx.Rebind(query), args...)
-}
-
-func (tx *GateTx) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
-	return tx.Tx.QueryRowContext(ctx, tx.Rebind(query), args...)
-}
-
 func (tx *GateTx) QueryRowxContext(ctx context.Context, query string, args ...any) *sqlx.Row {
 	return tx.Tx.QueryRowxContext(ctx, tx.Rebind(query), args...)
-}
-
-func (tx *GateTx) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	return tx.Tx.QueryContext(ctx, tx.Rebind(query), args...)
-}
-
-func (tx *GateTx) QueryxContext(ctx context.Context, query string, args ...any) (*sqlx.Rows, error) {
-	return tx.Tx.QueryxContext(ctx, tx.Rebind(query), args...)
 }
 
 // readMigrations reads SQL migration files from the given embed.FS and subdirectory.

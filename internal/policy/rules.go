@@ -14,7 +14,6 @@ const (
 	ActionAllow      Action = "allow"
 	ActionBlock      Action = "block"
 	ActionQuarantine Action = "quarantine"
-	ActionWarn       Action = "warn"
 )
 
 // PolicyResult is the outcome of evaluating a policy against an artifact.

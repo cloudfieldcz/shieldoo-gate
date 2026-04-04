@@ -56,13 +56,14 @@ type Finding struct {
 }
 
 type ScanResult struct {
-	Verdict    Verdict
-	Confidence float32
-	Findings   []Finding
-	ScannerID  string
-	Duration   time.Duration
-	ScannedAt  time.Time
-	Error      error
+	Verdict        Verdict
+	Confidence     float32
+	Findings       []Finding
+	ScannerID      string
+	ScannerVersion string
+	Duration       time.Duration
+	ScannedAt      time.Time
+	Error          error
 }
 
 type Scanner interface {

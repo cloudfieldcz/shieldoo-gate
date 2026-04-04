@@ -4,24 +4,13 @@ import { overridesApi } from '../api/client'
 import type { PolicyOverride } from '../api/types'
 import ArtifactDetailPanel from '../components/ArtifactDetailPanel'
 import { Trash2, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
+import { formatDate } from '../utils/format'
+import { ECOSYSTEMS } from '../constants/ecosystems'
 
-const ECOSYSTEMS = [
-  { value: 'docker', label: 'Docker' },
-  { value: 'pypi', label: 'PyPI' },
-  { value: 'npm', label: 'npm' },
-  { value: 'nuget', label: 'NuGet' },
-  { value: 'maven', label: 'Maven' },
-  { value: 'rubygems', label: 'RubyGems' },
-  { value: 'go', label: 'Go Modules' },
-]
 const PER_PAGE = 20
 
 function scopeLabel(scope: string) {
   return scope === 'package' ? 'All versions' : 'Exact version'
-}
-
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleString()
 }
 
 export default function Overrides() {
