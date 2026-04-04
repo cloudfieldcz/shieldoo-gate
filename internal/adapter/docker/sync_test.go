@@ -109,7 +109,7 @@ func TestSyncService_SyncRepository_DetectsChange(t *testing.T) {
 	err = docker.UpsertTag(db, repo.ID, "latest", "sha256:olddigest", "")
 	require.NoError(t, err)
 
-	scanEngine := scanner.NewEngine(nil, 30*time.Second)
+	scanEngine := scanner.NewEngine(nil, 30*time.Second, 0)
 	policyEngine := policy.NewEngine(policy.EngineConfig{
 		BlockIfVerdict:      scanner.VerdictMalicious,
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
@@ -173,7 +173,7 @@ func TestSyncService_SyncRepository_NoChange_SkipsRescan(t *testing.T) {
 	err = docker.UpsertTag(db, repo.ID, "latest", currentDigest, "")
 	require.NoError(t, err)
 
-	scanEngine := scanner.NewEngine(nil, 30*time.Second)
+	scanEngine := scanner.NewEngine(nil, 30*time.Second, 0)
 	policyEngine := policy.NewEngine(policy.EngineConfig{
 		BlockIfVerdict:      scanner.VerdictMalicious,
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
@@ -231,7 +231,7 @@ func TestSyncService_SyncRepository_Upstream404_DisablesSync(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, repos, 1)
 
-	scanEngine := scanner.NewEngine(nil, 30*time.Second)
+	scanEngine := scanner.NewEngine(nil, 30*time.Second, 0)
 	policyEngine := policy.NewEngine(policy.EngineConfig{
 		BlockIfVerdict:      scanner.VerdictMalicious,
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
@@ -281,7 +281,7 @@ func TestSyncService_SyncRepository_Upstream429_SkipsTag(t *testing.T) {
 	err = docker.UpsertTag(db, repo.ID, "latest", "sha256:abc123", "")
 	require.NoError(t, err)
 
-	scanEngine := scanner.NewEngine(nil, 30*time.Second)
+	scanEngine := scanner.NewEngine(nil, 30*time.Second, 0)
 	policyEngine := policy.NewEngine(policy.EngineConfig{
 		BlockIfVerdict:      scanner.VerdictMalicious,
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
@@ -326,7 +326,7 @@ func TestSyncService_SyncRepository_UpstreamUnreachable_SkipsRepo(t *testing.T) 
 	err = docker.UpsertTag(db, repo.ID, "latest", "sha256:abc123", "")
 	require.NoError(t, err)
 
-	scanEngine := scanner.NewEngine(nil, 30*time.Second)
+	scanEngine := scanner.NewEngine(nil, 30*time.Second, 0)
 	policyEngine := policy.NewEngine(policy.EngineConfig{
 		BlockIfVerdict:      scanner.VerdictMalicious,
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
@@ -421,7 +421,7 @@ func TestSyncService_RescanInterval_Elapsed_TriggersRescan(t *testing.T) {
 		time.Now().UTC().Add(-2*time.Hour), repo.ID, "latest")
 	require.NoError(t, err)
 
-	scanEngine := scanner.NewEngine(nil, 30*time.Second)
+	scanEngine := scanner.NewEngine(nil, 30*time.Second, 0)
 	policyEngine := policy.NewEngine(policy.EngineConfig{
 		BlockIfVerdict:      scanner.VerdictMalicious,
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
@@ -480,7 +480,7 @@ func TestSyncService_MultipleRepos_ConcurrentSync(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	scanEngine := scanner.NewEngine(nil, 30*time.Second)
+	scanEngine := scanner.NewEngine(nil, 30*time.Second, 0)
 	policyEngine := policy.NewEngine(policy.EngineConfig{
 		BlockIfVerdict:      scanner.VerdictMalicious,
 		QuarantineIfVerdict: scanner.VerdictSuspicious,

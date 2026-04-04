@@ -93,7 +93,7 @@ async def _call_llm(content: str) -> dict:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": content},
             ],
-            timeout=15.0,
+            timeout=40.0,
         )
 
         parsed = json.loads(resp.choices[0].message.content)

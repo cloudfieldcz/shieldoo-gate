@@ -46,7 +46,7 @@ func TestEngine_ScanAll_RunsAllMatchingScanners(t *testing.T) {
 		},
 	}
 
-	engine := NewEngine([]Scanner{s1, s2}, 30*time.Second)
+	engine := NewEngine([]Scanner{s1, s2}, 30*time.Second, 0)
 	results, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemPyPI})
 	require.NoError(t, err)
 	assert.Len(t, results, 2)
@@ -61,7 +61,7 @@ func TestEngine_ScanAll_FiltersUnsupportedEcosystem(t *testing.T) {
 		},
 	}
 
-	engine := NewEngine([]Scanner{s}, 30*time.Second)
+	engine := NewEngine([]Scanner{s}, 30*time.Second, 0)
 	results, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemDocker})
 	require.NoError(t, err)
 	assert.Len(t, results, 0)
@@ -81,7 +81,7 @@ func TestEngine_ScanAll_Timeout_ReturnsErrorNotMalicious(t *testing.T) {
 		},
 	}
 
-	engine := NewEngine([]Scanner{slow}, 50*time.Millisecond)
+	engine := NewEngine([]Scanner{slow}, 50*time.Millisecond, 0)
 	results, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemPyPI})
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
@@ -98,7 +98,7 @@ func TestEngine_ScanAll_ScannerError_FailsOpen(t *testing.T) {
 		},
 	}
 
-	engine := NewEngine([]Scanner{failing}, 30*time.Second)
+	engine := NewEngine([]Scanner{failing}, 30*time.Second, 0)
 	results, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemPyPI})
 	require.NoError(t, err)
 	assert.Len(t, results, 1)

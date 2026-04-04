@@ -94,7 +94,7 @@ scanners:
     provider: "azure_openai"
     model: "gpt-5.4-mini"
     api_key_env: "AI_SCANNER_API_KEY"
-    timeout: "15s"
+    timeout: "45s"
     max_input_tokens: 32000
     bridge_socket: "/tmp/shieldoo-bridge.sock"
     azure_endpoint: ""

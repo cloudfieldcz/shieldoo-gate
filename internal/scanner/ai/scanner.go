@@ -74,28 +74,55 @@ func (s *AIScanner) SupportedEcosystems() []scanner.Ecosystem {
 }
 
 // Scan sends the artifact to the Python bridge for AI analysis.
-// On error (network, timeout, API failure), it fails open: returns VerdictClean
+// On error (network, timeout, API failure), it retries up to 3 times with
+// exponential backoff. After all retries it fails open: returns VerdictClean
 // with confidence 0 and logs the error. It never escalates to MALICIOUS on its own error.
 func (s *AIScanner) Scan(ctx context.Context, artifact scanner.Artifact) (scanner.ScanResult, error) {
 	timeout := s.config.Timeout
 	if timeout == 0 {
-		timeout = 30 * time.Second
+		timeout = 45 * time.Second
 	}
-	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 
-	resp, err := s.client.ScanArtifactAI(timeoutCtx, &pb.AIScanRequest{
+	req := &pb.AIScanRequest{
 		ArtifactId:       artifact.ID,
 		Ecosystem:        string(artifact.Ecosystem),
 		Name:             artifact.Name,
 		Version:          artifact.Version,
 		LocalPath:        artifact.LocalPath,
 		OriginalFilename: artifact.Filename,
-	})
+	}
+
+	var resp *pb.AIScanResponse
+	var err error
+	backoff := 2 * time.Second
+
+	for attempt := 0; attempt < 3; attempt++ {
+		timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
+		resp, err = s.client.ScanArtifactAI(timeoutCtx, req)
+		cancel()
+
+		if err == nil {
+			break
+		}
+
+		log.Warn().Err(err).
+			Str("artifact", artifact.ID).
+			Int("attempt", attempt+1).
+			Msg("ai scanner: bridge call failed, retrying")
+
+		// Don't retry if parent context is done.
+		select {
+		case <-ctx.Done():
+			break
+		case <-time.After(backoff):
+			backoff *= 2
+		}
+	}
+
 	if err != nil {
 		log.Warn().Err(err).
 			Str("artifact", artifact.ID).
-			Msg("ai scanner: bridge call failed, failing open")
+			Msg("ai scanner: all retries exhausted, failing open")
 		return scanner.ScanResult{
 			Verdict:    scanner.VerdictClean,
 			Confidence: 0,

@@ -31,7 +31,7 @@ func setupTestDocker(t *testing.T, upstreamHandler http.HandlerFunc) (*docker.Do
 	cacheStore, err := local.NewLocalCacheStore(t.TempDir(), 10)
 	require.NoError(t, err)
 
-	scanEngine := scanner.NewEngine(nil, 30*time.Second)
+	scanEngine := scanner.NewEngine(nil, 30*time.Second, 0)
 	policyEngine := policy.NewEngine(policy.EngineConfig{
 		BlockIfVerdict:      scanner.VerdictMalicious,
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
@@ -70,7 +70,7 @@ func TestDockerAdapter_V2Check_NoUpstream_StillReturnsHeader(t *testing.T) {
 	cacheStore, err := local.NewLocalCacheStore(t.TempDir(), 10)
 	require.NoError(t, err)
 
-	scanEngine := scanner.NewEngine(nil, 30*time.Second)
+	scanEngine := scanner.NewEngine(nil, 30*time.Second, 0)
 	policyEngine := policy.NewEngine(policy.EngineConfig{}, nil)
 	cfg := config.DockerUpstreamConfig{
 		DefaultRegistry: "http://does-not-exist.invalid",
@@ -229,7 +229,7 @@ func setupTestDockerMultiUpstream(t *testing.T, defaultHandler, ghcrHandler http
 	cacheStore, err := local.NewLocalCacheStore(t.TempDir(), 10)
 	require.NoError(t, err)
 
-	scanEngine := scanner.NewEngine(nil, 30*time.Second)
+	scanEngine := scanner.NewEngine(nil, 30*time.Second, 0)
 	policyEngine := policy.NewEngine(policy.EngineConfig{
 		BlockIfVerdict:      scanner.VerdictMalicious,
 		QuarantineIfVerdict: scanner.VerdictSuspicious,

@@ -4,19 +4,30 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/semaphore"
 )
 
 // Engine orchestrates multiple scanners in parallel with timeout and fail-open semantics.
+// MaxConcurrentScans limits how many artifacts can be scanned simultaneously to avoid
+// overwhelming the scanner bridge with too many concurrent gRPC calls.
 type Engine struct {
 	scanners []Scanner
 	timeout  time.Duration
+	sem      *semaphore.Weighted
 }
 
 // NewEngine creates a new Engine with the given scanners and per-scan timeout.
-func NewEngine(scanners []Scanner, timeout time.Duration) *Engine {
+// maxConcurrentScans limits how many ScanAll calls can run in parallel (0 = unlimited).
+func NewEngine(scanners []Scanner, timeout time.Duration, maxConcurrentScans int64) *Engine {
+	var sem *semaphore.Weighted
+	if maxConcurrentScans > 0 {
+		sem = semaphore.NewWeighted(maxConcurrentScans)
+	}
 	return &Engine{
 		scanners: scanners,
 		timeout:  timeout,
+		sem:      sem,
 	}
 }
 
@@ -45,6 +56,14 @@ func (e *Engine) ScanAll(ctx context.Context, artifact Artifact, excludeNames ..
 
 	if len(applicable) == 0 {
 		return nil, nil
+	}
+
+	// Limit concurrent artifact scans to avoid overwhelming the scanner bridge.
+	if e.sem != nil {
+		if err := e.sem.Acquire(ctx, 1); err != nil {
+			return nil, err
+		}
+		defer e.sem.Release(1)
 	}
 
 	scanCtx, cancel := context.WithTimeout(ctx, e.timeout)

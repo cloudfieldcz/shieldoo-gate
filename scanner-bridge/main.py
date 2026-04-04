@@ -159,7 +159,7 @@ def serve():
     if os.path.exists(socket_path):
         os.unlink(socket_path)
 
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=32))
     scanner_pb2_grpc.add_ScannerBridgeServicer_to_server(
         ScannerBridgeServicer(), server
     )

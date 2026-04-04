@@ -172,7 +172,7 @@ func TestRescanScheduler_FailOpen_ScanError(t *testing.T) {
 
 	// Scanner that always fails.
 	failScanner := &stubScanner{shouldFail: true}
-	scanEngine := scanner.NewEngine([]scanner.Scanner{failScanner}, 30*time.Second)
+	scanEngine := scanner.NewEngine([]scanner.Scanner{failScanner}, 30*time.Second, 0)
 	policyEng := policy.NewEngine(policy.EngineConfig{
 		BlockIfVerdict:      scanner.VerdictMalicious,
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
@@ -204,7 +204,7 @@ func TestRescanScheduler_CacheMiss_SkipsArtifact(t *testing.T) {
 
 	// Empty cache — artifact not found.
 	cacheStore := &stubCacheStore{paths: map[string]string{}}
-	scanEngine := scanner.NewEngine(nil, 30*time.Second)
+	scanEngine := scanner.NewEngine(nil, 30*time.Second, 0)
 	policyEng := policy.NewEngine(policy.EngineConfig{}, nil)
 
 	sched := NewRescanScheduler(db, cacheStore, scanEngine, policyEng, config.RescanConfig{
@@ -232,7 +232,7 @@ func TestRescanScheduler_ClearsRescanDueAtAfterSuccess(t *testing.T) {
 
 	cacheStore := &stubCacheStore{paths: map[string]string{"pypi:pkg:1.0": tmpPath}}
 	stubScan := &stubScanner{verdict: scanner.VerdictClean}
-	scanEngine := scanner.NewEngine([]scanner.Scanner{stubScan}, 30*time.Second)
+	scanEngine := scanner.NewEngine([]scanner.Scanner{stubScan}, 30*time.Second, 0)
 	policyEng := policy.NewEngine(policy.EngineConfig{
 		BlockIfVerdict:      scanner.VerdictMalicious,
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
@@ -264,7 +264,7 @@ func TestRescanScheduler_QuarantinesOnMalicious(t *testing.T) {
 	cacheStore := &stubCacheStore{paths: map[string]string{"pypi:evil:1.0": tmpPath}}
 	// Scanner returns MALICIOUS verdict.
 	malScanner := &stubScanner{verdict: scanner.VerdictMalicious}
-	scanEngine := scanner.NewEngine([]scanner.Scanner{malScanner}, 30*time.Second)
+	scanEngine := scanner.NewEngine([]scanner.Scanner{malScanner}, 30*time.Second, 0)
 	policyEng := policy.NewEngine(policy.EngineConfig{
 		BlockIfVerdict:      scanner.VerdictMalicious,
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
@@ -320,7 +320,7 @@ func TestRescanScheduler_ConcurrencyLimit(t *testing.T) {
 		delay:         50 * time.Millisecond,
 	}
 
-	scanEngine := scanner.NewEngine([]scanner.Scanner{slowScanner}, 30*time.Second)
+	scanEngine := scanner.NewEngine([]scanner.Scanner{slowScanner}, 30*time.Second, 0)
 	policyEng := policy.NewEngine(policy.EngineConfig{
 		BlockIfVerdict:      scanner.VerdictMalicious,
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
@@ -376,7 +376,7 @@ func (s *concurrencyTracker) HealthCheck(_ context.Context) error { return nil }
 func TestRescanScheduler_StartStop(t *testing.T) {
 	db := setupTestDB(t)
 	cacheStore := &stubCacheStore{paths: map[string]string{}}
-	scanEngine := scanner.NewEngine(nil, 30*time.Second)
+	scanEngine := scanner.NewEngine(nil, 30*time.Second, 0)
 	policyEng := policy.NewEngine(policy.EngineConfig{}, nil)
 
 	sched := NewRescanScheduler(db, cacheStore, scanEngine, policyEng, config.RescanConfig{

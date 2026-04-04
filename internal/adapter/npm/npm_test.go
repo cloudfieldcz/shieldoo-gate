@@ -28,7 +28,7 @@ func setupTestNPM(t *testing.T, upstreamHandler http.HandlerFunc) (*npm.NPMAdapt
 	cacheStore, err := local.NewLocalCacheStore(t.TempDir(), 10)
 	require.NoError(t, err)
 
-	scanEngine := scanner.NewEngine(nil, 30*time.Second)
+	scanEngine := scanner.NewEngine(nil, 30*time.Second, 0)
 	policyEngine := policy.NewEngine(policy.EngineConfig{
 		BlockIfVerdict:      scanner.VerdictMalicious,
 		QuarantineIfVerdict: scanner.VerdictSuspicious,

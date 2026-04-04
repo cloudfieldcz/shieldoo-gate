@@ -29,7 +29,7 @@ func setupTestDockerWithPush(t *testing.T) *docker.DockerAdapter {
 	cacheStore, err := local.NewLocalCacheStore(t.TempDir(), 10)
 	require.NoError(t, err)
 
-	scanEngine := scanner.NewEngine(nil, 30*time.Second)
+	scanEngine := scanner.NewEngine(nil, 30*time.Second, 0)
 	policyEngine := policy.NewEngine(policy.EngineConfig{
 		BlockIfVerdict:      scanner.VerdictMalicious,
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
@@ -202,7 +202,7 @@ func TestDockerPush_Disabled_Returns403(t *testing.T) {
 	cacheStore, err := local.NewLocalCacheStore(t.TempDir(), 10)
 	require.NoError(t, err)
 
-	scanEngine := scanner.NewEngine(nil, 30*time.Second)
+	scanEngine := scanner.NewEngine(nil, 30*time.Second, 0)
 	policyEngine := policy.NewEngine(policy.EngineConfig{}, nil)
 
 	// Push NOT enabled
