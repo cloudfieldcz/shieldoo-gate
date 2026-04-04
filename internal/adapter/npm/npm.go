@@ -111,7 +111,7 @@ func decodeScopedPath(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.RawPath, "%2f") || strings.Contains(r.URL.RawPath, "%2F") {
 			decoded, err := url.PathUnescape(r.URL.RawPath)
-			if err == nil && decoded != r.URL.Path {
+			if err == nil && decoded != r.URL.RawPath {
 				r2 := r.Clone(r.Context())
 				r2.URL.Path = decoded
 				r2.URL.RawPath = ""

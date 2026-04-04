@@ -131,6 +131,74 @@ func TestNPMAdapter_PackageMetadata_RewritesTarballURLs(t *testing.T) {
 	assert.Contains(t, body, "http://proxy.example.com:14873/is-odd/-/is-odd-3.0.1.tgz")
 }
 
+func TestNPMAdapter_ScopedMetadata_PercentEncodedSlash_RoutesToScopedHandler(t *testing.T) {
+	var gotPath string
+	a, _ := setupTestNPM(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"name":"@alloc/quick-lru"}`))
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/@alloc%2Fquick-lru", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "/@alloc/quick-lru", gotPath, "upstream must receive decoded scoped path")
+}
+
+func TestNPMAdapter_ScopedMetadata_LowercasePercentEncodedSlash_RoutesToScopedHandler(t *testing.T) {
+	var gotPath string
+	a, _ := setupTestNPM(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"name":"@alloc/quick-lru"}`))
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/@alloc%2fquick-lru", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "/@alloc/quick-lru", gotPath, "upstream must receive decoded scoped path")
+}
+
+func TestNPMAdapter_ScopedTarball_PercentEncodedSlash_Serves200(t *testing.T) {
+	var gotPath string
+	a, _ := setupTestNPM(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("fake tarball"))
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/@alloc%2Fquick-lru/-/quick-lru-5.2.0.tgz", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "/@alloc/quick-lru/-/quick-lru-5.2.0.tgz", gotPath, "upstream must receive decoded scoped tarball path")
+}
+
+func TestNPMAdapter_ScopedVersion_PercentEncodedSlash_ProxiesUpstream(t *testing.T) {
+	var gotPath string
+	a, _ := setupTestNPM(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"name":"@alloc/quick-lru","version":"5.2.0"}`))
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/@alloc%2Fquick-lru/5.2.0", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "/@alloc/quick-lru/5.2.0", gotPath, "upstream must receive decoded scoped version path")
+}
+
 func TestNPMAdapter_ScopedMetadata_RewritesTarballURLs(t *testing.T) {
 	var upstreamURL string
 	a, upstream := setupTestNPM(t, func(w http.ResponseWriter, r *http.Request) {
