@@ -34,14 +34,36 @@ class ScannerBridgeServicer(scanner_pb2_grpc.ScannerBridgeServicer):
             raise
 
         # Initialize AI scanner module (lazy — only import when enabled).
+        # The async OpenAI client must be used from a single persistent event loop
+        # to keep its internal HTTP connection pool working correctly.
         self._ai_scanner = None
+        self._ai_loop = None
         if AI_SCANNER_ENABLED:
             try:
+                self._ai_loop = asyncio.new_event_loop()
+                import threading
+                threading.Thread(
+                    target=self._ai_loop.run_forever,
+                    daemon=True,
+                    name="ai-scanner-loop",
+                ).start()
+
                 import ai_scanner
                 self._ai_scanner = ai_scanner
+                # Re-initialize the OpenAI client inside the persistent loop so the
+                # underlying httpx connection pool is bound to the correct loop.
+                asyncio.run_coroutine_threadsafe(
+                    self._reinit_ai_client(), self._ai_loop
+                ).result(timeout=10)
                 logger.info("AI scanner module loaded (model: %s)", ai_scanner._model)
             except Exception as e:
                 logger.error("AI scanner failed to initialize: %s", e)
+
+    @staticmethod
+    async def _reinit_ai_client():
+        """Re-create the OpenAI client inside the persistent event loop."""
+        import ai_scanner
+        ai_scanner._client, ai_scanner._model = ai_scanner._build_client()
 
     def ScanArtifact(self, request, context):
         start = time.time()
@@ -121,11 +143,10 @@ class ScannerBridgeServicer(scanner_pb2_grpc.ScannerBridgeServicer):
             )
 
         try:
-            loop = asyncio.new_event_loop()
-            try:
-                result = loop.run_until_complete(self._ai_scanner.scan(request))
-            finally:
-                loop.close()
+            future = asyncio.run_coroutine_threadsafe(
+                self._ai_scanner.scan(request), self._ai_loop
+            )
+            result = future.result(timeout=50)
 
             return scanner_pb2.AIScanResponse(
                 verdict=result.get("verdict", "UNKNOWN"),
