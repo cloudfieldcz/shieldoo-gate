@@ -5,7 +5,7 @@ import { artifactsApi } from '../api/client'
 import type { ArtifactWithStatus } from '../api/types'
 import ArtifactTable from '../components/ArtifactTable'
 import ArtifactDetailPanel from '../components/ArtifactDetailPanel'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
 
 const ECOSYSTEMS = [
   { value: 'docker', label: 'Docker' },
@@ -108,8 +108,16 @@ export default function Artifacts() {
           onChange={(e) => setVersion(e.target.value)}
         />
 
-        <span className="text-sm text-gray-500 ml-auto">
+        <span className="text-sm text-gray-500 ml-auto flex items-center gap-2">
           {listQuery.isLoading ? 'Loading...' : `${total} artifact${total !== 1 ? 's' : ''}`}
+          <button
+            onClick={() => listQuery.refetch()}
+            disabled={listQuery.isFetching}
+            className="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 disabled:opacity-50 transition-colors"
+            title="Refresh"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${listQuery.isFetching ? 'animate-spin' : ''}`} />
+          </button>
         </span>
       </div>
 

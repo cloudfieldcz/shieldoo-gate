@@ -11,11 +11,12 @@ service ScannerBridge {
 }
 
 message AIScanRequest {
-    string artifact_id = 1;   // "ecosystem:name:version"
-    string ecosystem   = 2;   // pypi, npm, nuget, maven, rubygems
-    string name        = 3;
-    string version     = 4;
-    string local_path  = 5;   // path to downloaded artifact on disk
+    string artifact_id        = 1;   // "ecosystem:name:version"
+    string ecosystem          = 2;   // pypi, npm, nuget, maven, rubygems
+    string name               = 3;
+    string version            = 4;
+    string local_path         = 5;   // path to downloaded artifact on disk
+    string original_filename  = 6;   // original filename (e.g. "requests-2.32.3-py3-none-any.whl")
 }
 
 message AIScanResponse {

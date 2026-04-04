@@ -103,10 +103,43 @@ func TestAIScanner_CleanArtifact_ReturnsClean(t *testing.T) {
 		Name:      "safe-pkg",
 		Version:   "1.0.0",
 		LocalPath: "/tmp/safe.whl",
+		Filename:  "safe-pkg-1.0.0.whl",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, scanner.VerdictClean, result.Verdict)
 	assert.Equal(t, "ai-scanner", result.ScannerID)
+}
+
+func TestAIScanner_OriginalFilename_PassedInRequest(t *testing.T) {
+	sock := startMockAIBridge(t, &mockAIBridgeServer{
+		aiScanFn: func(req *pb.AIScanRequest) *pb.AIScanResponse {
+			assert.Equal(t, "requests-2.32.3-py3-none-any.whl", req.OriginalFilename)
+			return &pb.AIScanResponse{
+				Verdict:    "CLEAN",
+				Confidence: 0.9,
+				ModelUsed:  "gpt-5.4-mini",
+				TokensUsed: 100,
+			}
+		},
+		healthFn: func() *pb.HealthResponse {
+			return &pb.HealthResponse{Healthy: true, Version: "1.0.0"}
+		},
+	})
+
+	s, err := NewAIScanner(AIConfig{Enabled: true, Socket: sock})
+	require.NoError(t, err)
+	defer s.Close()
+
+	result, err := s.Scan(context.Background(), scanner.Artifact{
+		ID:        "pypi:requests:2.32.3:requests-2.32.3-py3-none-any.whl",
+		Ecosystem: scanner.EcosystemPyPI,
+		Name:      "requests",
+		Version:   "2.32.3",
+		LocalPath: "/tmp/shieldoo-gate-pypi-12345.tmp",
+		Filename:  "requests-2.32.3-py3-none-any.whl",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, scanner.VerdictClean, result.Verdict)
 }
 
 func TestAIScanner_MaliciousArtifact_ReturnsMalicious(t *testing.T) {

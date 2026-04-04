@@ -11,33 +11,68 @@ INTERESTING_NAMES = {"pom.xml"}
 INTERESTING_EXTENSIONS = {".sh", ".xml"}
 
 
-def extract(local_path: str) -> dict[str, str]:
+def extract(local_path: str, *, original_filename: str = "") -> dict[str, str]:
     """Extract security-relevant files from a Maven artifact (.jar or .pom).
 
     Extracts pom.xml (plugin sections), shell scripts in root,
     and assembly descriptors.
+
+    Format detection uses magic bytes first, then falls back to original_filename
+    extension, then local_path extension.
     """
     if not os.path.isfile(local_path):
         logger.warning("maven extractor: file not found: %s", local_path)
         return {}
 
-    # .pom files are plain XML.
-    if local_path.endswith(".pom") or local_path.endswith(".xml"):
+    fmt = _detect_format(local_path, original_filename)
+    if fmt == "xml":
         try:
             with open(local_path, "r", encoding="utf-8", errors="replace") as f:
                 content = f.read()
-            return {os.path.basename(local_path): content}
+            name = original_filename or os.path.basename(local_path)
+            return {name: content}
         except Exception as e:
             logger.error("maven extractor: error reading %s: %s", local_path, e)
             return {}
-
-    if not local_path.endswith(".jar"):
-        logger.info("maven extractor: unsupported format: %s", local_path)
+    elif fmt == "zip":
+        return _extract_jar(local_path)
+    else:
+        logger.info("maven extractor: unsupported format: %s (original: %s)", local_path, original_filename)
         return {}
 
+
+def _detect_format(local_path: str, original_filename: str) -> str:
+    """Detect artifact format using magic bytes first, then filename hints.
+
+    Returns "zip" (for .jar), "xml" (for .pom/.xml), or "" if unknown.
+    """
+    # 1. Magic bytes — check for ZIP (jar files are ZIP archives).
+    if zipfile.is_zipfile(local_path):
+        return "zip"
+
+    # 2. Check if it looks like XML content.
+    try:
+        with open(local_path, "r", encoding="utf-8", errors="replace") as f:
+            head = f.read(256).lstrip()
+        if head.startswith("<?xml") or head.startswith("<project"):
+            return "xml"
+    except Exception:
+        pass
+
+    # 3. Fall back to original filename.
+    name = original_filename or local_path
+    if name.endswith(".jar"):
+        return "zip"
+    if name.endswith(".pom") or name.endswith(".xml"):
+        return "xml"
+
+    return ""
+
+
+def _extract_jar(path: str) -> dict[str, str]:
     result = {}
     try:
-        with zipfile.ZipFile(local_path, "r") as zf:
+        with zipfile.ZipFile(path, "r") as zf:
             for info in zf.infolist():
                 if info.is_dir():
                     continue
@@ -65,5 +100,5 @@ def extract(local_path: str) -> dict[str, str]:
                     except Exception as e:
                         logger.warning("maven extractor: error reading %s: %s", info.filename, e)
     except (zipfile.BadZipFile, Exception) as e:
-        logger.error("maven extractor: error opening jar %s: %s", local_path, e)
+        logger.error("maven extractor: error opening jar %s: %s", path, e)
     return result

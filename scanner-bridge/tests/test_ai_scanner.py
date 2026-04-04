@@ -12,7 +12,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
 def _make_request(ecosystem="pypi", name="test-pkg", version="1.0.0",
-                  local_path="/tmp/test.whl", artifact_id="pypi:test-pkg:1.0.0"):
+                  local_path="/tmp/test.whl", artifact_id="pypi:test-pkg:1.0.0",
+                  original_filename="test-pkg-1.0.0.whl"):
     """Create a mock AIScanRequest-like object."""
     req = types.SimpleNamespace()
     req.ecosystem = ecosystem
@@ -20,6 +21,7 @@ def _make_request(ecosystem="pypi", name="test-pkg", version="1.0.0",
     req.version = version
     req.local_path = local_path
     req.artifact_id = artifact_id
+    req.original_filename = original_filename
     return req
 
 

@@ -90,7 +90,7 @@ scanners:
   # AI scanner (LLM-based). Uses Azure OpenAI gpt-5.4-mini to analyze install-time
   # scripts for malicious patterns. Synchronous, opt-in. Requires AI_SCANNER_API_KEY env var.
   ai:
-    enabled: false
+    enabled: true
     provider: "azure_openai"
     model: "gpt-5.4-mini"
     api_key_env: "AI_SCANNER_API_KEY"

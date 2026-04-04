@@ -63,8 +63,10 @@ async def scan(request) -> dict:
     if not extractor:
         return _unknown(f"ecosystem '{request.ecosystem}' not supported for AI analysis")
 
+    original_filename = getattr(request, "original_filename", "") or ""
+
     try:
-        extracted = extractor(request.local_path)
+        extracted = extractor(request.local_path, original_filename=original_filename)
     except Exception as e:
         logger.error("ai_scanner: extraction failed for %s: %s", request.artifact_id, e)
         return _unknown(f"extraction failed: {e}")

@@ -85,11 +85,12 @@ func (s *AIScanner) Scan(ctx context.Context, artifact scanner.Artifact) (scanne
 	defer cancel()
 
 	resp, err := s.client.ScanArtifactAI(timeoutCtx, &pb.AIScanRequest{
-		ArtifactId: artifact.ID,
-		Ecosystem:  string(artifact.Ecosystem),
-		Name:       artifact.Name,
-		Version:    artifact.Version,
-		LocalPath:  artifact.LocalPath,
+		ArtifactId:       artifact.ID,
+		Ecosystem:        string(artifact.Ecosystem),
+		Name:             artifact.Name,
+		Version:          artifact.Version,
+		LocalPath:        artifact.LocalPath,
+		OriginalFilename: artifact.Filename,
 	})
 	if err != nil {
 		log.Warn().Err(err).

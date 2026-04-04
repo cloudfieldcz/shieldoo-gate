@@ -226,6 +226,23 @@ func (s *RescanScheduler) rescanArtifact(ctx context.Context, art artifactRow) {
 		return
 	}
 
+	// Log individual scanner results for observability.
+	for _, sr := range results {
+		l := log.Info().
+			Str("artifact", art.ID).
+			Str("scanner", sr.ScannerID).
+			Str("verdict", string(sr.Verdict)).
+			Float32("confidence", sr.Confidence).
+			Dur("duration", sr.Duration)
+		if sr.Error != nil {
+			l = l.Err(sr.Error)
+		}
+		if len(sr.Findings) > 0 {
+			l = l.Int("findings", len(sr.Findings))
+		}
+		l.Msg("rescan: scan result")
+	}
+
 	// 4. Policy evaluation (only when scan succeeded).
 	decision := s.policyEngine.Evaluate(ctx, scanArtifact, results)
 

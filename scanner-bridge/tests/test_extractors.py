@@ -64,6 +64,35 @@ class TestPyPIExtractor:
         result = extract_pypi(str(whl_path))
         assert result == {}
 
+    def test_extract_wheel_with_tmp_extension(self, tmp_path):
+        """Wheel saved as .tmp should be detected via magic bytes."""
+        tmp_file = tmp_path / "shieldoo-gate-pypi-12345.tmp"
+        with zipfile.ZipFile(tmp_file, "w") as zf:
+            zf.writestr("evil/__init__.py", "# init")
+            zf.writestr("evil_init.pth", "import os; os.system('hack')")
+        result = extract_pypi(str(tmp_file))
+        assert "evil_init.pth" in result
+
+    def test_extract_wheel_with_original_filename(self, tmp_path):
+        """When magic bytes fail, original_filename should be used as fallback."""
+        # Create a valid zip but with .tmp extension and pass original_filename
+        tmp_file = tmp_path / "shieldoo-gate-pypi-99999.tmp"
+        with zipfile.ZipFile(tmp_file, "w") as zf:
+            zf.writestr("setup.py", "setup()")
+        result = extract_pypi(str(tmp_file), original_filename="pkg-1.0.0.whl")
+        assert "setup.py" in result
+
+    def test_extract_sdist_with_tmp_extension(self, tmp_path):
+        """Sdist saved as .tmp should be detected via magic bytes."""
+        tmp_file = tmp_path / "shieldoo-gate-pypi-67890.tmp"
+        with tarfile.open(tmp_file, "w:gz") as tf:
+            content = b"from setuptools import setup; setup()"
+            info = tarfile.TarInfo(name="pkg-1.0.0/setup.py")
+            info.size = len(content)
+            tf.addfile(info, io.BytesIO(content))
+        result = extract_pypi(str(tmp_file))
+        assert any("setup.py" in k for k in result)
+
 
 class TestNPMExtractor:
     def test_extract_package_json_with_preinstall(self, tmp_path):
@@ -129,6 +158,31 @@ class TestMavenExtractor:
         pom_path.write_text("<project><build/></project>")
         result = extract_maven(str(pom_path))
         assert len(result) == 1
+
+    def test_extract_jar_with_tmp_extension(self, tmp_path):
+        """JAR saved as .tmp should be detected via magic bytes (ZIP)."""
+        tmp_file = tmp_path / "shieldoo-gate-maven-12345.tmp"
+        with zipfile.ZipFile(tmp_file, "w") as zf:
+            zf.writestr("META-INF/maven/com.evil/evil/pom.xml",
+                         "<project><build><plugins/></build></project>")
+        result = extract_maven(str(tmp_file))
+        assert any("pom.xml" in k for k in result)
+
+    def test_extract_pom_with_tmp_extension(self, tmp_path):
+        """POM saved as .tmp should be detected via XML content inspection."""
+        tmp_file = tmp_path / "shieldoo-gate-maven-67890.tmp"
+        tmp_file.write_text("<?xml version='1.0'?><project><build/></project>")
+        result = extract_maven(str(tmp_file))
+        assert len(result) == 1
+
+    def test_extract_jar_with_original_filename(self, tmp_path):
+        """When magic bytes work, original_filename is accepted but not needed."""
+        tmp_file = tmp_path / "shieldoo-gate-maven-99999.tmp"
+        with zipfile.ZipFile(tmp_file, "w") as zf:
+            zf.writestr("META-INF/maven/com.test/test/pom.xml",
+                         "<project/>")
+        result = extract_maven(str(tmp_file), original_filename="test-1.0.0.jar")
+        assert any("pom.xml" in k for k in result)
 
 
 class TestRubyGemsExtractor:

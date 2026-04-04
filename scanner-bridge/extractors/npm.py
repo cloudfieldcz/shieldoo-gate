@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 INSTALL_HOOKS = {"preinstall", "install", "postinstall", "preuninstall", "postuninstall"}
 
 
-def extract(local_path: str) -> dict[str, str]:
+def extract(local_path: str, *, original_filename: str = "") -> dict[str, str]:
     """Extract security-relevant files from an npm tarball.
 
     Always extracts package.json. If install-time scripts reference external files,

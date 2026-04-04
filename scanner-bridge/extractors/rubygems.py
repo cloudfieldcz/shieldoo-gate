@@ -12,7 +12,7 @@ INTERESTING_NAMES = {"extconf.rb", "rakefile", "Rakefile"}
 INTERESTING_EXTENSIONS = {".gemspec"}
 
 
-def extract(local_path: str) -> dict[str, str]:
+def extract(local_path: str, *, original_filename: str = "") -> dict[str, str]:
     """Extract security-relevant files from a RubyGem (.gem).
 
     A .gem file is a tar archive containing metadata.gz and data.tar.gz.

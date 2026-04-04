@@ -12,23 +12,49 @@ INTERESTING_PATTERNS = {"setup.py", "setup.cfg", "METADATA", "PKG-INFO"}
 INTERESTING_EXTENSIONS = {".pth"}
 
 
-def extract(local_path: str) -> dict[str, str]:
+def extract(local_path: str, *, original_filename: str = "") -> dict[str, str]:
     """Extract security-relevant files from a PyPI artifact.
 
     Returns a dict of {filename: content} for files that are relevant to
     install-time security analysis.
+
+    Format detection uses magic bytes first, then falls back to original_filename
+    extension, then local_path extension. This handles temp files (e.g. .tmp)
+    correctly.
     """
     if not os.path.isfile(local_path):
         logger.warning("pypi extractor: file not found: %s", local_path)
         return {}
 
-    if local_path.endswith(".whl") or local_path.endswith(".zip"):
+    fmt = _detect_format(local_path, original_filename)
+    if fmt == "zip":
         return _extract_wheel(local_path)
-    elif local_path.endswith(".tar.gz") or local_path.endswith(".tar.bz2"):
+    elif fmt == "tar":
         return _extract_sdist(local_path)
     else:
-        logger.info("pypi extractor: unsupported format: %s", local_path)
+        logger.info("pypi extractor: unsupported format: %s (original: %s)", local_path, original_filename)
         return {}
+
+
+def _detect_format(local_path: str, original_filename: str) -> str:
+    """Detect archive format using magic bytes first, then filename hints.
+
+    Returns "zip", "tar", or "" if unknown.
+    """
+    # 1. Magic bytes — most reliable.
+    if zipfile.is_zipfile(local_path):
+        return "zip"
+    if tarfile.is_tarfile(local_path):
+        return "tar"
+
+    # 2. Fall back to original filename (from gRPC request).
+    name = original_filename or local_path
+    if name.endswith(".whl") or name.endswith(".zip"):
+        return "zip"
+    if name.endswith(".tar.gz") or name.endswith(".tar.bz2"):
+        return "tar"
+
+    return ""
 
 
 def _is_interesting(name: str) -> bool:

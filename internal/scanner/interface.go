@@ -41,6 +41,7 @@ type Artifact struct {
 	Name        string
 	Version     string
 	LocalPath   string
+	Filename    string // original filename (e.g. "requests-2.32.3-py3-none-any.whl")
 	SHA256      string
 	SizeBytes   int64
 	UpstreamURL string

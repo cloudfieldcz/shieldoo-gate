@@ -298,6 +298,7 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 		Name:        pkgName,
 		Version:     version,
 		LocalPath:   tmpPath,
+		Filename:    tarball,
 		SHA256:      sha,
 		SizeBytes:   size,
 		UpstreamURL: upstreamURL,

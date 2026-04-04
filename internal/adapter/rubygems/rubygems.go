@@ -370,6 +370,7 @@ func (a *RubyGemsAdapter) downloadScanServe(w http.ResponseWriter, r *http.Reque
 		Name:        name,
 		Version:     version,
 		LocalPath:   tmpPath,
+		Filename:    filename,
 		SHA256:      sha,
 		SizeBytes:   size,
 		UpstreamURL: upstreamURL,

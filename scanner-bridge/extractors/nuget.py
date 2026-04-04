@@ -11,7 +11,7 @@ INTERESTING_EXTENSIONS = {".targets", ".props", ".ps1"}
 INTERESTING_NAMES = {"install.ps1", "init.ps1", "uninstall.ps1"}
 
 
-def extract(local_path: str) -> dict[str, str]:
+def extract(local_path: str, *, original_filename: str = "") -> dict[str, str]:
     """Extract security-relevant files from a NuGet package (.nupkg).
 
     Extracts MSBuild .targets/.props files, PowerShell install scripts,

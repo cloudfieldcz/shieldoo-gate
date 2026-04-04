@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { overridesApi } from '../api/client'
 import type { PolicyOverride } from '../api/types'
 import ArtifactDetailPanel from '../components/ArtifactDetailPanel'
-import { Trash2, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Trash2, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
 
 const ECOSYSTEMS = [
   { value: 'docker', label: 'Docker' },
@@ -100,8 +100,16 @@ export default function Overrides() {
           />
           Active only
         </label>
-        <span className="text-sm text-gray-500 ml-auto">
+        <span className="text-sm text-gray-500 ml-auto flex items-center gap-2">
           {listQuery.isLoading ? 'Loading...' : `${total} override${total !== 1 ? 's' : ''}`}
+          <button
+            onClick={() => listQuery.refetch()}
+            disabled={listQuery.isFetching}
+            className="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 disabled:opacity-50 transition-colors"
+            title="Refresh"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${listQuery.isFetching ? 'animate-spin' : ''}`} />
+          </button>
         </span>
       </div>
 

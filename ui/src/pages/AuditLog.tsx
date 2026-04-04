@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { auditApi } from '../api/client'
 import ArtifactDetailPanel from '../components/ArtifactDetailPanel'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
 
 const EVENT_TYPES = [
   '',
@@ -70,8 +70,16 @@ export default function AuditLog() {
           ))}
         </select>
 
-        <span className="text-sm text-gray-500 ml-auto">
+        <span className="text-sm text-gray-500 ml-auto flex items-center gap-2">
           {query.isLoading ? 'Loading...' : `${total} event${total !== 1 ? 's' : ''}`}
+          <button
+            onClick={() => query.refetch()}
+            disabled={query.isFetching}
+            className="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 disabled:opacity-50 transition-colors"
+            title="Refresh"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${query.isFetching ? 'animate-spin' : ''}`} />
+          </button>
         </span>
       </div>
 
