@@ -511,19 +511,14 @@ func (s *Server) handleReleaseArtifact(w http.ResponseWriter, r *http.Request) {
 	id := artifactID(r)
 	now := time.Now().UTC()
 
-	// Parse artifact ID: "ecosystem:name:version" or "ecosystem:name:version:filename"
-	parts := strings.SplitN(id, ":", 4)
-	if len(parts) < 3 {
-		writeError(w, http.StatusBadRequest, "invalid artifact ID format, expected ecosystem:name:version[:filename]")
-		return
-	}
-
-	var count int
-	if err := s.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM artifacts WHERE id = ?`, id).Scan(&count); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to check artifact existence")
-		return
-	}
-	if count == 0 {
+	// Look up the artifact's canonical ecosystem, name, and version from the DB
+	// (not from the ID string, which uses sanitized names like "remix-run_router"
+	// instead of the original "@remix-run/router").
+	var artEcosystem, artName, artVersion string
+	err := s.db.QueryRowContext(r.Context(),
+		`SELECT ecosystem, name, version FROM artifacts WHERE id = ?`, id,
+	).Scan(&artEcosystem, &artName, &artVersion)
+	if err != nil {
 		writeError(w, http.StatusNotFound, "artifact not found")
 		return
 	}
@@ -542,11 +537,11 @@ func (s *Server) handleReleaseArtifact(w http.ResponseWriter, r *http.Request) {
 		`INSERT INTO policy_overrides (ecosystem, name, version, scope, reason, created_by, created_at, revoked)
 		 VALUES (?, ?, ?, 'version', 'manual release', ?, ?, FALSE)
 		 ON CONFLICT DO NOTHING`,
-		parts[0], parts[1], parts[2], userEmail, now)
+		artEcosystem, artName, artVersion, userEmail, now)
 	err = tx.QueryRowxContext(r.Context(),
 		`SELECT id FROM policy_overrides
 		 WHERE ecosystem = ? AND name = ? AND version = ? AND scope = 'version' AND revoked = FALSE`,
-		parts[0], parts[1], parts[2]).Scan(&overrideID)
+		artEcosystem, artName, artVersion).Scan(&overrideID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to resolve override")
 		return

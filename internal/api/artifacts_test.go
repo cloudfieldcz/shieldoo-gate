@@ -149,6 +149,36 @@ func TestHandleQuarantineAndRelease_Flow(t *testing.T) {
 	assert.Equal(t, 1, overrideCount, "second release should reuse existing override, not create duplicate")
 }
 
+func TestHandleRelease_ScopedNpmPackage_OverrideUsesOriginalName(t *testing.T) {
+	srv, db := newTestServer(t)
+
+	// Insert artifact with scoped npm name — ID uses underscores, name uses original format.
+	insertTestArtifact(t, db, "npm:remix-run_router:1.16.1", "npm", "@remix-run/router", "1.16.1")
+
+	router := srv.Routes()
+
+	// Quarantine first
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts/npm:remix-run_router:1.16.1/quarantine", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Release — this should create override with original name "@remix-run/router"
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts/npm:remix-run_router:1.16.1/release", nil)
+	rec2 := httptest.NewRecorder()
+	router.ServeHTTP(rec2, req2)
+	assert.Equal(t, http.StatusOK, rec2.Code)
+
+	// Verify override uses the original name, NOT the sanitized ID name
+	var overrideName string
+	err := db.QueryRow(
+		`SELECT name FROM policy_overrides WHERE ecosystem = 'npm' AND version = '1.16.1' AND revoked = FALSE`,
+	).Scan(&overrideName)
+	require.NoError(t, err)
+	assert.Equal(t, "@remix-run/router", overrideName,
+		"policy override must use original package name, not sanitized ID name")
+}
+
 func TestHandleRescanArtifact_Exists_Returns202(t *testing.T) {
 	srv, db := newTestServer(t)
 
