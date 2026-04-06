@@ -97,9 +97,10 @@ The threat feed checker is exempt from this threshold — it bypasses confidence
 | **ALLOW** | Serve artifact | `CLEAN` | `SERVED` | Artifact passes all checks; cached and served |
 | **BLOCK** | HTTP 403 | `QUARANTINED` | `BLOCKED` | Artifact is malicious; rejected and quarantined |
 | **QUARANTINE** | HTTP 403 | `QUARANTINED` | `QUARANTINED` | Artifact is suspicious; stored but not served |
+| **ALLOW_WITH_WARNING** | Serve artifact + `X-Shieldoo-Warning` header | `CLEAN` | `ALLOWED_WITH_WARNING` | v1.2: Artifact has MEDIUM severity findings but allowed by balanced/permissive mode |
 | **WARN** | Serve artifact | `CLEAN` | `TAG_MUTATED` | Used by tag mutability detection; artifact served but alert fired |
 
-Both BLOCK and QUARANTINE result in the artifact being marked as `QUARANTINED` in the database. The difference is in the audit event type and the reason logged. WARN is currently only used by the tag mutability subsystem (not by the verdict-based engine).
+Both BLOCK and QUARANTINE result in the artifact being marked as `QUARANTINED` in the database. The difference is in the audit event type and the reason logged. ALLOW_WITH_WARNING serves the artifact but records it in the audit log for security team review.
 
 ## Policy Overrides
 
@@ -191,6 +192,92 @@ Aggregation: exfil result filtered (0.4 < 0.7 threshold), remaining = CLEAN
 Policy: CLEAN below action thresholds → ALLOW
 Result: Artifact served, status CLEAN, audit event SERVED
 ```
+
+## Policy Tiers (v1.2)
+
+Policy tiers introduce configurable policy modes that control how SUSPICIOUS verdicts are handled. MALICIOUS and CLEAN verdicts behave identically across all modes.
+
+### Modes
+
+| Mode | SUSPICIOUS (HIGH+) | SUSPICIOUS (MEDIUM) | SUSPICIOUS (LOW/INFO) |
+|---|---|---|---|
+| **strict** (default) | QUARANTINE | QUARANTINE | QUARANTINE |
+| **balanced** | QUARANTINE | AI Triage or QUARANTINE (degraded) | ALLOW + warning |
+| **permissive** | QUARANTINE | ALLOW + warning | ALLOW + warning |
+
+Configure via `policy.mode` or `SGW_POLICY_MODE` environment variable.
+
+### Scanner Categories
+
+Scanners are classified into categories that affect how their findings' severity is interpreted:
+
+| Category | Scanners | Min Effective Severity |
+|---|---|---|
+| **behavioral** | guarddog, ai-scanner, exfil-detector, install-hook, pth-inspector, obfuscation | **HIGH** (floor) |
+| **vulnerability** | osv, trivy | actual severity from findings |
+| **integrity** | hash-verifier, threat-feed | N/A (produce MALICIOUS, not SUSPICIOUS) |
+
+The **behavioral floor** is a critical security mechanism: behavioral scanner findings are elevated to at least HIGH effective severity. This prevents severity-downgrade attacks where a crafted package triggers SUSPICIOUS+MEDIUM from a behavioral scanner and would otherwise slip through balanced/permissive mode.
+
+### Effective Severity
+
+`MaxEffectiveSeverity()` calculates the highest severity among findings from scanners that contributed to the SUSPICIOUS verdict (CLEAN scanner findings are ignored). The behavioral floor is applied before comparison.
+
+**Edge case:** SUSPICIOUS without findings (anomaly) defaults to HIGH effective severity, ensuring quarantine.
+
+### AI Triage (balanced mode)
+
+In balanced mode, MEDIUM severity findings from vulnerability scanners are sent to an AI triage endpoint (gRPC scanner-bridge) for contextual evaluation. The AI considers package popularity, CVE exploitability, and fix availability.
+
+- **Timeout:** 5s, no retries on inline path
+- **Cache:** Results cached in `triage_cache` DB table (7-day TTL default)
+- **Circuit breaker:** 5 consecutive failures → 60s cooldown
+- **Rate limiter:** 10 calls/minute (configurable)
+- **Fail-safe:** Any error → fallback QUARANTINE (never ALLOW)
+
+When AI triage is disabled in balanced mode, MEDIUM severity falls back to QUARANTINE (degraded balanced = strict for MEDIUM tier).
+
+### Two Confidence Thresholds
+
+- `policy.minimum_confidence` (default 0.7) — **Scanner confidence**: filters scan results with low confidence in the aggregator
+- `policy.ai_triage.min_confidence` (default 0.7) — **Triage confidence**: requires minimum trust in AI triage decisions
+
+These are independent — scanner confidence determines whether a scan result enters aggregation; triage confidence determines whether an AI triage decision is trusted.
+
+### Startup Warnings
+
+| Condition | Log Level | Message |
+|---|---|---|
+| `mode=permissive` | WARN | Permissive mode is active — SUSPICIOUS with MEDIUM severity served without review |
+| `mode=balanced`, `ai_triage.enabled=false` | INFO | Balanced mode with AI triage disabled — MEDIUM severity will be quarantined |
+| `mode` set + `quarantine_if_verdict` set | WARN | policy.mode is set — policy.quarantine_if_verdict is ignored |
+
+### Mode vs quarantine_if_verdict
+
+When `mode` is set (non-empty, non-"strict"), it takes priority over `quarantine_if_verdict`. The old config field is ignored and a startup warning is logged.
+
+When `mode` is empty or absent, `quarantine_if_verdict` applies as before (backward compatible = strict behavior).
+
+### Alert Integration
+
+`ALLOWED_WITH_WARNING` is a filterable event type for webhook/Slack/email alerts:
+
+```yaml
+alerts:
+  webhook:
+    enabled: true
+    on: ["BLOCKED", "QUARANTINED", "ALLOWED_WITH_WARNING"]
+```
+
+### Client-Facing Behavior
+
+Artifacts allowed with warning are served normally (HTTP 200) with an additional header:
+
+```
+X-Shieldoo-Warning: MEDIUM vulnerability detected; see admin dashboard for details
+```
+
+Standard package managers (pip, npm, docker) ignore this header, but custom tooling can parse it.
 
 ## Tag Mutability Detection
 

@@ -107,9 +107,18 @@ scanners:
     max_concurrent: 2
 
 policy:
+  mode: "balanced"
   block_if_verdict: "MALICIOUS"
   quarantine_if_verdict: "SUSPICIOUS"
   minimum_confidence: 0.7
+  ai_triage:
+    enabled: true
+    timeout: "5s"
+    min_confidence: 0.7
+    cache_ttl: "168h"
+    rate_limit: 10
+    circuit_breaker_threshold: 5
+    circuit_breaker_cooldown: "60s"
   allowlist:
     - "pypi:litellm:==1.82.6"
   tag_mutability:

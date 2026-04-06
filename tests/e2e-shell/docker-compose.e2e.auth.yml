@@ -78,6 +78,12 @@ services:
       MINIO_ACCESS_KEY: "minioadmin"
       MINIO_SECRET_KEY: "minioadmin123"
 
+      # Policy mode → balanced for pass 2
+      SGW_POLICY_MODE: "balanced"
+      SGW_POLICY_AI_TRIAGE_ENABLED: "true"
+
   test-runner:
     environment:
       SGW_CACHE_BACKEND: "s3"
+      # Policy mode (test-runner needs to know current mode for adaptive assertions)
+      SGW_POLICY_MODE: "balanced"

@@ -7,6 +7,7 @@ option go_package = "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/guar
 service ScannerBridge {
     rpc ScanArtifact(ScanRequest) returns (ScanResponse);
     rpc ScanArtifactAI(AIScanRequest) returns (AIScanResponse);
+    rpc TriageFindings(TriageRequest) returns (TriageResponse);
     rpc HealthCheck(HealthRequest) returns (HealthResponse);
 }
 
@@ -49,6 +50,21 @@ message Finding {
     string description = 3;
     string location = 4;
     repeated string iocs = 5;
+}
+
+message TriageRequest {
+    string ecosystem             = 1;
+    string name                  = 2;
+    string version               = 3;
+    repeated Finding findings    = 4;  // reuse existing Finding message
+}
+
+message TriageResponse {
+    string decision    = 1;  // "ALLOW" | "QUARANTINE"
+    float  confidence  = 2;
+    string explanation = 3;  // human-readable reasoning for audit log (max 500 chars)
+    string model_used  = 4;
+    int32  tokens_used = 5;
 }
 
 message HealthRequest {}

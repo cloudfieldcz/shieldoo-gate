@@ -14,7 +14,7 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
 - [Data Model](data-model.md) — database schema, Go structs, table relationships, migrations
 - [Scanners](scanners.md) — scan engine, built-in and external scanners, aggregation, threat feed
 - [Protocol Adapters](adapters.md) — PyPI, npm, NuGet, Docker, Maven, RubyGems, Go Modules proxy implementations and routing
-- [Policy Engine](policy.md) — evaluation order, overrides, allowlists, aggregation rules, examples
+- [Policy Engine](policy.md) — evaluation order, overrides, allowlists, aggregation rules, policy tiers (v1.2), AI triage
 - [Configuration](configuration.md) — full `config.yaml` reference, environment variables, Go structs
   - [Authentication](configuration.md#authentication-v11) — OIDC admin API authentication (v1.1)
   - [Alerts](configuration.md#alerts-v11) — webhook, Slack, and email notification channels
@@ -46,7 +46,7 @@ Shieldoo Gate Protocol Adapter
 | **Protocol Adapters** | Native protocol implementations (Docker/OCI, PyPI PEP 503, npm, NuGet V3, Maven, RubyGems, Go Modules) |
 | **Scan Engine** | Pluggable scanner framework (GuardDog, Trivy, OSV, AI/LLM, built-in heuristics, dynamic sandbox) |
 | **Cache Store** | Local filesystem, S3/MinIO, Azure Blob Storage, or GCS with per-ecosystem TTL |
-| **Policy Engine** | Block / quarantine / warn / allow rules with allowlists |
+| **Policy Engine** | Block / quarantine / warn / allow rules with allowlists and policy tiers (strict/balanced/permissive) |
 | **Policy Overrides** | Dynamic false-positive management and audit trail via UI/API |
 | **Threat Feed** | Periodic threat feed refresh + manual rescan via API |
 | **Rescan Scheduler** | Background re-scanning of cached artifacts to detect newly discovered threats |

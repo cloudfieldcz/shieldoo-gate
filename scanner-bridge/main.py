@@ -165,6 +165,43 @@ class ScannerBridgeServicer(scanner_pb2_grpc.ScannerBridgeServicer):
                 tokens_used=0,
             )
 
+    def TriageFindings(self, request, context):
+        """AI-based triage of vulnerability findings for balanced policy mode."""
+        if self._ai_scanner is None:
+            return scanner_pb2.TriageResponse(
+                decision="QUARANTINE",
+                confidence=0.0,
+                explanation="AI scanner not enabled — cannot triage",
+                model_used="none",
+                tokens_used=0,
+            )
+
+        try:
+            import ai_triage
+            future = asyncio.run_coroutine_threadsafe(
+                ai_triage.triage(request, self._ai_scanner._client, self._ai_scanner._model),
+                self._ai_loop,
+            )
+            result = future.result(timeout=10)
+
+            return scanner_pb2.TriageResponse(
+                decision=result.get("decision", "QUARANTINE"),
+                confidence=result.get("confidence", 0.0),
+                explanation=result.get("explanation", ""),
+                model_used=result.get("model_used", ""),
+                tokens_used=result.get("tokens_used", 0),
+            )
+        except Exception as e:
+            logger.error("AI triage error for %s/%s@%s: %s",
+                         request.ecosystem, request.name, request.version, e)
+            return scanner_pb2.TriageResponse(
+                decision="QUARANTINE",
+                confidence=0.0,
+                explanation=f"Triage error: {e}",
+                model_used="none",
+                tokens_used=0,
+            )
+
     def HealthCheck(self, request, context):
         return scanner_pb2.HealthResponse(
             healthy=True,

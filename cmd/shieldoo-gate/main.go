@@ -199,12 +199,52 @@ func main() {
 	}
 
 	// Init policy engine from config
+	policyMode, err := policy.ParsePolicyMode(cfg.Policy.Mode)
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid policy mode")
+	}
+	if policyMode != policy.PolicyModeStrict {
+		log.Info().Str("mode", policyMode.String()).Msg("policy mode configured")
+	}
+	// Init AI triage infrastructure if enabled.
+	var engineOpts []policy.EngineOption
+	if cfg.Policy.AITriage.Enabled {
+		bridgeSocket := cfg.Scanners.GuardDog.BridgeSocket
+		if bridgeSocket == "" {
+			bridgeSocket = cfg.Scanners.AI.BridgeSocket
+		}
+		triageClient, triageCache, cb, rl, triageErr := policy.InitTriageInfra(
+			cfg.Policy.AITriage, bridgeSocket, db)
+		if triageErr != nil {
+			log.Warn().Err(triageErr).Msg("AI triage initialization failed — balanced mode will degrade to quarantine")
+		} else {
+			if triageClient != nil {
+				engineOpts = append(engineOpts, policy.WithTriageClient(triageClient))
+			}
+			if triageCache != nil {
+				engineOpts = append(engineOpts, policy.WithTriageCache(triageCache))
+			}
+			if cb != nil {
+				engineOpts = append(engineOpts, policy.WithCircuitBreaker(cb))
+			}
+			if rl != nil {
+				engineOpts = append(engineOpts, policy.WithRateLimiter(rl))
+			}
+			cacheTTL, _ := time.ParseDuration(cfg.Policy.AITriage.CacheTTL)
+			if cacheTTL > 0 {
+				engineOpts = append(engineOpts, policy.WithCacheTTL(cacheTTL))
+			}
+			log.Info().Msg("AI triage infrastructure initialized")
+		}
+	}
 	policyEngine := policy.NewEngine(policy.EngineConfig{
+		Mode:                policyMode,
 		BlockIfVerdict:      scanner.Verdict(cfg.Policy.BlockIfVerdict),
 		QuarantineIfVerdict: scanner.Verdict(cfg.Policy.QuarantineIfVerdict),
 		MinimumConfidence:   cfg.Policy.MinimumConfidence,
 		Allowlist:           cfg.Policy.Allowlist,
-	}, db)
+		AITriage:            cfg.Policy.AITriage,
+	}, db, engineOpts...)
 
 	// Init alerter from config.
 	var alerterInstance alert.Alerter

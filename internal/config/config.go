@@ -75,7 +75,8 @@ var knownEventTypes = map[string]bool{
 	"OVERRIDE_CREATED": true,
 	"OVERRIDE_REVOKED": true,
 	"TAG_MUTATED":      true,
-	"RESCAN_QUEUED":    true,
+	"RESCAN_QUEUED":          true,
+	"ALLOWED_WITH_WARNING":   true,
 }
 
 type ServerConfig struct {
@@ -246,11 +247,24 @@ type OSVConfig struct {
 }
 
 type PolicyConfig struct {
+	Mode                string              `mapstructure:"mode"`
 	BlockIfVerdict      string              `mapstructure:"block_if_verdict"`
 	QuarantineIfVerdict string              `mapstructure:"quarantine_if_verdict"`
 	MinimumConfidence   float32             `mapstructure:"minimum_confidence"`
+	AITriage            AITriageConfig      `mapstructure:"ai_triage"`
 	Allowlist           []string            `mapstructure:"allowlist"`
 	TagMutability       TagMutabilityConfig `mapstructure:"tag_mutability"`
+}
+
+// AITriageConfig holds configuration for AI-assisted triage in balanced mode.
+type AITriageConfig struct {
+	Enabled                 bool    `mapstructure:"enabled"`
+	Timeout                 string  `mapstructure:"timeout"`
+	MinConfidence           float32 `mapstructure:"min_confidence"`
+	CacheTTL                string  `mapstructure:"cache_ttl"`
+	RateLimit               int     `mapstructure:"rate_limit"`
+	CircuitBreakerThreshold int     `mapstructure:"circuit_breaker_threshold"`
+	CircuitBreakerCooldown  string  `mapstructure:"circuit_breaker_cooldown"`
 }
 
 // TagMutabilityConfig controls upstream digest change detection on cache hits.
@@ -320,9 +334,17 @@ func Load(path string) (*Config, error) {
 	}
 
 	// Set policy defaults before unmarshal so zero-value config is safe.
+	v.SetDefault("policy.mode", "")
 	v.SetDefault("policy.block_if_verdict", "MALICIOUS")
 	v.SetDefault("policy.quarantine_if_verdict", "SUSPICIOUS")
 	v.SetDefault("policy.minimum_confidence", 0.7)
+	v.SetDefault("policy.ai_triage.enabled", false)
+	v.SetDefault("policy.ai_triage.timeout", "5s")
+	v.SetDefault("policy.ai_triage.min_confidence", 0.7)
+	v.SetDefault("policy.ai_triage.cache_ttl", "168h")
+	v.SetDefault("policy.ai_triage.rate_limit", 10)
+	v.SetDefault("policy.ai_triage.circuit_breaker_threshold", 5)
+	v.SetDefault("policy.ai_triage.circuit_breaker_cooldown", "60s")
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
@@ -373,6 +395,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: unknown database backend: %s", c.Database.Backend)
 	}
 
+	if err := c.validatePolicy(); err != nil {
+		return err
+	}
+
 	if err := c.validateAlerts(); err != nil {
 		return err
 	}
@@ -387,6 +413,59 @@ func (c *Config) Validate() error {
 
 	if err := c.validateProxyAuth(); err != nil {
 		return err
+	}
+
+	return nil
+}
+
+// validatePolicy checks policy configuration including mode and AI triage settings.
+func (c *Config) validatePolicy() error {
+	mode := c.Policy.Mode
+	switch mode {
+	case "", "strict", "balanced", "permissive":
+		// valid
+	default:
+		return fmt.Errorf("config: unknown policy.mode %q (valid: strict, balanced, permissive)", mode)
+	}
+
+	// Startup warnings for mode interactions.
+	if mode != "" && mode != "strict" {
+		if c.Policy.QuarantineIfVerdict != "" && c.Policy.QuarantineIfVerdict != "SUSPICIOUS" {
+			log.Warn().Str("mode", mode).Msg("config: policy.mode is set — policy.quarantine_if_verdict is ignored")
+		}
+	}
+
+	if mode == "permissive" {
+		log.Warn().Msg("config: permissive mode is active — SUSPICIOUS artifacts with MEDIUM severity will be served without review. This is NOT recommended for production.")
+	}
+
+	if mode == "balanced" && !c.Policy.AITriage.Enabled {
+		log.Info().Msg("config: balanced mode with AI triage disabled — MEDIUM severity will be quarantined (degraded mode)")
+	}
+
+	// Validate AI triage config if enabled.
+	if c.Policy.AITriage.Enabled {
+		if c.Policy.AITriage.Timeout != "" {
+			if _, err := time.ParseDuration(c.Policy.AITriage.Timeout); err != nil {
+				return fmt.Errorf("config: policy.ai_triage.timeout %q is not a valid duration: %w", c.Policy.AITriage.Timeout, err)
+			}
+		}
+		if c.Policy.AITriage.CacheTTL != "" {
+			if _, err := time.ParseDuration(c.Policy.AITriage.CacheTTL); err != nil {
+				return fmt.Errorf("config: policy.ai_triage.cache_ttl %q is not a valid duration: %w", c.Policy.AITriage.CacheTTL, err)
+			}
+		}
+		if c.Policy.AITriage.CircuitBreakerCooldown != "" {
+			if _, err := time.ParseDuration(c.Policy.AITriage.CircuitBreakerCooldown); err != nil {
+				return fmt.Errorf("config: policy.ai_triage.circuit_breaker_cooldown %q is not a valid duration: %w", c.Policy.AITriage.CircuitBreakerCooldown, err)
+			}
+		}
+		if c.Policy.AITriage.MinConfidence < 0 || c.Policy.AITriage.MinConfidence > 1 {
+			return fmt.Errorf("config: policy.ai_triage.min_confidence must be between 0.0 and 1.0, got %f", c.Policy.AITriage.MinConfidence)
+		}
+		if c.Policy.AITriage.RateLimit < 0 {
+			return fmt.Errorf("config: policy.ai_triage.rate_limit must be >= 0, got %d", c.Policy.AITriage.RateLimit)
+		}
 	}
 
 	return nil

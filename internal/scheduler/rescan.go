@@ -289,6 +289,32 @@ func (s *RescanScheduler) rescanArtifact(ctx context.Context, art artifactRow) {
 			Reason:     fmt.Sprintf("reclassified during scheduled rescan: %s", decision.Reason),
 		})
 
+	case policy.ActionAllowWithWarning:
+		// Artifact is servable but has warnings — update status to CLEAN with explicit audit trail.
+		_, err = tx.Exec(
+			`UPDATE artifact_status SET status = ?, quarantine_reason = '', quarantined_at = NULL, rescan_due_at = NULL WHERE artifact_id = ?`,
+			string(model.StatusClean), art.ID,
+		)
+		if err != nil {
+			log.Error().Err(err).Str("artifact", art.ID).Msg("rescan scheduler: failed to update status to clean (allow with warning)")
+			return
+		}
+
+		if err := tx.Commit(); err != nil {
+			log.Error().Err(err).Str("artifact", art.ID).Msg("rescan scheduler: commit failed")
+			return
+		}
+
+		// Persist scan results (outside transaction, non-critical).
+		_ = adapter.InsertScanResults(s.db, art.ID, results)
+
+		// Audit log: allowed with warning (explicit entry for audit trail).
+		_ = adapter.WriteAuditLog(s.db, model.AuditEntry{
+			EventType:  model.EventAllowedWithWarning,
+			ArtifactID: art.ID,
+			Reason:     fmt.Sprintf("scheduled rescan: %s", decision.Reason),
+		})
+
 	default:
 		// ActionAllow: update status to CLEAN (no automatic next rescan).
 		_, err = tx.Exec(

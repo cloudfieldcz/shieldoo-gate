@@ -107,9 +107,20 @@ scanners:
     azure_deployment: "gpt-54-mini"
 
 policy:
+  # mode is overridden via SGW_POLICY_MODE env var per E2E pass
+  mode: "strict"
   block_if_verdict: "MALICIOUS"
   quarantine_if_verdict: "SUSPICIOUS"
   minimum_confidence: 0.7
+  ai_triage:
+    # enabled is overridden via SGW_POLICY_AI_TRIAGE_ENABLED per pass
+    enabled: false
+    timeout: "5s"
+    min_confidence: 0.7
+    cache_ttl: "168h"
+    rate_limit: 10
+    circuit_breaker_threshold: 5
+    circuit_breaker_cooldown: "60s"
   allowlist: []
 
 threat_feed:

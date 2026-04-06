@@ -411,6 +411,150 @@ func (x *Finding) GetIocs() []string {
 	return nil
 }
 
+type TriageRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ecosystem     string                 `protobuf:"bytes,1,opt,name=ecosystem,proto3" json:"ecosystem,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Version       string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
+	Findings      []*Finding             `protobuf:"bytes,4,rep,name=findings,proto3" json:"findings,omitempty"` // reuse existing Finding message
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TriageRequest) Reset() {
+	*x = TriageRequest{}
+	mi := &file_scanner_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TriageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TriageRequest) ProtoMessage() {}
+
+func (x *TriageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_scanner_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TriageRequest.ProtoReflect.Descriptor instead.
+func (*TriageRequest) Descriptor() ([]byte, []int) {
+	return file_scanner_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *TriageRequest) GetEcosystem() string {
+	if x != nil {
+		return x.Ecosystem
+	}
+	return ""
+}
+
+func (x *TriageRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *TriageRequest) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *TriageRequest) GetFindings() []*Finding {
+	if x != nil {
+		return x.Findings
+	}
+	return nil
+}
+
+type TriageResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Decision      string                 `protobuf:"bytes,1,opt,name=decision,proto3" json:"decision,omitempty"` // "ALLOW" | "QUARANTINE"
+	Confidence    float32                `protobuf:"fixed32,2,opt,name=confidence,proto3" json:"confidence,omitempty"`
+	Explanation   string                 `protobuf:"bytes,3,opt,name=explanation,proto3" json:"explanation,omitempty"` // human-readable reasoning for audit log (max 500 chars)
+	ModelUsed     string                 `protobuf:"bytes,4,opt,name=model_used,json=modelUsed,proto3" json:"model_used,omitempty"`
+	TokensUsed    int32                  `protobuf:"varint,5,opt,name=tokens_used,json=tokensUsed,proto3" json:"tokens_used,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TriageResponse) Reset() {
+	*x = TriageResponse{}
+	mi := &file_scanner_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TriageResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TriageResponse) ProtoMessage() {}
+
+func (x *TriageResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_scanner_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TriageResponse.ProtoReflect.Descriptor instead.
+func (*TriageResponse) Descriptor() ([]byte, []int) {
+	return file_scanner_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *TriageResponse) GetDecision() string {
+	if x != nil {
+		return x.Decision
+	}
+	return ""
+}
+
+func (x *TriageResponse) GetConfidence() float32 {
+	if x != nil {
+		return x.Confidence
+	}
+	return 0
+}
+
+func (x *TriageResponse) GetExplanation() string {
+	if x != nil {
+		return x.Explanation
+	}
+	return ""
+}
+
+func (x *TriageResponse) GetModelUsed() string {
+	if x != nil {
+		return x.ModelUsed
+	}
+	return ""
+}
+
+func (x *TriageResponse) GetTokensUsed() int32 {
+	if x != nil {
+		return x.TokensUsed
+	}
+	return 0
+}
+
 type HealthRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -419,7 +563,7 @@ type HealthRequest struct {
 
 func (x *HealthRequest) Reset() {
 	*x = HealthRequest{}
-	mi := &file_scanner_proto_msgTypes[5]
+	mi := &file_scanner_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -431,7 +575,7 @@ func (x *HealthRequest) String() string {
 func (*HealthRequest) ProtoMessage() {}
 
 func (x *HealthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_scanner_proto_msgTypes[5]
+	mi := &file_scanner_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -444,7 +588,7 @@ func (x *HealthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthRequest.ProtoReflect.Descriptor instead.
 func (*HealthRequest) Descriptor() ([]byte, []int) {
-	return file_scanner_proto_rawDescGZIP(), []int{5}
+	return file_scanner_proto_rawDescGZIP(), []int{7}
 }
 
 type HealthResponse struct {
@@ -457,7 +601,7 @@ type HealthResponse struct {
 
 func (x *HealthResponse) Reset() {
 	*x = HealthResponse{}
-	mi := &file_scanner_proto_msgTypes[6]
+	mi := &file_scanner_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -469,7 +613,7 @@ func (x *HealthResponse) String() string {
 func (*HealthResponse) ProtoMessage() {}
 
 func (x *HealthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_scanner_proto_msgTypes[6]
+	mi := &file_scanner_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -482,7 +626,7 @@ func (x *HealthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthResponse.ProtoReflect.Descriptor instead.
 func (*HealthResponse) Descriptor() ([]byte, []int) {
-	return file_scanner_proto_rawDescGZIP(), []int{6}
+	return file_scanner_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *HealthResponse) GetHealthy() bool {
@@ -543,14 +687,30 @@ const file_scanner_proto_rawDesc = "" +
 	"\bcategory\x18\x02 \x01(\tR\bcategory\x12 \n" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x1a\n" +
 	"\blocation\x18\x04 \x01(\tR\blocation\x12\x12\n" +
-	"\x04iocs\x18\x05 \x03(\tR\x04iocs\"\x0f\n" +
+	"\x04iocs\x18\x05 \x03(\tR\x04iocs\"\x89\x01\n" +
+	"\rTriageRequest\x12\x1c\n" +
+	"\tecosystem\x18\x01 \x01(\tR\tecosystem\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
+	"\aversion\x18\x03 \x01(\tR\aversion\x12,\n" +
+	"\bfindings\x18\x04 \x03(\v2\x10.scanner.FindingR\bfindings\"\xae\x01\n" +
+	"\x0eTriageResponse\x12\x1a\n" +
+	"\bdecision\x18\x01 \x01(\tR\bdecision\x12\x1e\n" +
+	"\n" +
+	"confidence\x18\x02 \x01(\x02R\n" +
+	"confidence\x12 \n" +
+	"\vexplanation\x18\x03 \x01(\tR\vexplanation\x12\x1d\n" +
+	"\n" +
+	"model_used\x18\x04 \x01(\tR\tmodelUsed\x12\x1f\n" +
+	"\vtokens_used\x18\x05 \x01(\x05R\n" +
+	"tokensUsed\"\x0f\n" +
 	"\rHealthRequest\"D\n" +
 	"\x0eHealthResponse\x12\x18\n" +
 	"\ahealthy\x18\x01 \x01(\bR\ahealthy\x12\x18\n" +
-	"\aversion\x18\x02 \x01(\tR\aversion2\xcf\x01\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion2\x92\x02\n" +
 	"\rScannerBridge\x12;\n" +
 	"\fScanArtifact\x12\x14.scanner.ScanRequest\x1a\x15.scanner.ScanResponse\x12A\n" +
-	"\x0eScanArtifactAI\x12\x16.scanner.AIScanRequest\x1a\x17.scanner.AIScanResponse\x12>\n" +
+	"\x0eScanArtifactAI\x12\x16.scanner.AIScanRequest\x1a\x17.scanner.AIScanResponse\x12A\n" +
+	"\x0eTriageFindings\x12\x16.scanner.TriageRequest\x1a\x17.scanner.TriageResponse\x12>\n" +
 	"\vHealthCheck\x12\x16.scanner.HealthRequest\x1a\x17.scanner.HealthResponseBGZEgithub.com/cloudfieldcz/shieldoo-gate/internal/scanner/guarddog/protob\x06proto3"
 
 var (
@@ -565,29 +725,34 @@ func file_scanner_proto_rawDescGZIP() []byte {
 	return file_scanner_proto_rawDescData
 }
 
-var file_scanner_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_scanner_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_scanner_proto_goTypes = []any{
 	(*AIScanRequest)(nil),  // 0: scanner.AIScanRequest
 	(*AIScanResponse)(nil), // 1: scanner.AIScanResponse
 	(*ScanRequest)(nil),    // 2: scanner.ScanRequest
 	(*ScanResponse)(nil),   // 3: scanner.ScanResponse
 	(*Finding)(nil),        // 4: scanner.Finding
-	(*HealthRequest)(nil),  // 5: scanner.HealthRequest
-	(*HealthResponse)(nil), // 6: scanner.HealthResponse
+	(*TriageRequest)(nil),  // 5: scanner.TriageRequest
+	(*TriageResponse)(nil), // 6: scanner.TriageResponse
+	(*HealthRequest)(nil),  // 7: scanner.HealthRequest
+	(*HealthResponse)(nil), // 8: scanner.HealthResponse
 }
 var file_scanner_proto_depIdxs = []int32{
 	4, // 0: scanner.ScanResponse.findings:type_name -> scanner.Finding
-	2, // 1: scanner.ScannerBridge.ScanArtifact:input_type -> scanner.ScanRequest
-	0, // 2: scanner.ScannerBridge.ScanArtifactAI:input_type -> scanner.AIScanRequest
-	5, // 3: scanner.ScannerBridge.HealthCheck:input_type -> scanner.HealthRequest
-	3, // 4: scanner.ScannerBridge.ScanArtifact:output_type -> scanner.ScanResponse
-	1, // 5: scanner.ScannerBridge.ScanArtifactAI:output_type -> scanner.AIScanResponse
-	6, // 6: scanner.ScannerBridge.HealthCheck:output_type -> scanner.HealthResponse
-	4, // [4:7] is the sub-list for method output_type
-	1, // [1:4] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	4, // 1: scanner.TriageRequest.findings:type_name -> scanner.Finding
+	2, // 2: scanner.ScannerBridge.ScanArtifact:input_type -> scanner.ScanRequest
+	0, // 3: scanner.ScannerBridge.ScanArtifactAI:input_type -> scanner.AIScanRequest
+	5, // 4: scanner.ScannerBridge.TriageFindings:input_type -> scanner.TriageRequest
+	7, // 5: scanner.ScannerBridge.HealthCheck:input_type -> scanner.HealthRequest
+	3, // 6: scanner.ScannerBridge.ScanArtifact:output_type -> scanner.ScanResponse
+	1, // 7: scanner.ScannerBridge.ScanArtifactAI:output_type -> scanner.AIScanResponse
+	6, // 8: scanner.ScannerBridge.TriageFindings:output_type -> scanner.TriageResponse
+	8, // 9: scanner.ScannerBridge.HealthCheck:output_type -> scanner.HealthResponse
+	6, // [6:10] is the sub-list for method output_type
+	2, // [2:6] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_scanner_proto_init() }
@@ -601,7 +766,7 @@ func file_scanner_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_scanner_proto_rawDesc), len(file_scanner_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

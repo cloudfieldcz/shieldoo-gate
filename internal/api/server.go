@@ -147,6 +147,11 @@ func (s *Server) Routes() chi.Router {
 			r.Post("/docker/sync/{id}", s.handleDockerSync)
 			r.Get("/docker/registries", s.handleListDockerRegistries)
 
+			// Admin actions
+			r.Post("/admin/rescan-quarantined", s.handleRescanQuarantined)
+			r.Get("/admin/policy-mode", s.handleGetPolicyMode)
+			r.Put("/admin/policy-mode", s.handleSetPolicyMode)
+
 			// Public URLs for usage instructions
 			r.Get("/public-urls", s.handlePublicURLs)
 

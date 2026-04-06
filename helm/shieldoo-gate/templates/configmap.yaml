@@ -105,9 +105,20 @@ data:
         api_url: {{ .Values.scanners.osv.apiUrl | quote }}
 
     policy:
+      {{- if .Values.policy.mode }}
+      mode: {{ .Values.policy.mode | quote }}
+      {{- end }}
       block_if_verdict: {{ .Values.policy.blockIfVerdict | quote }}
       quarantine_if_verdict: {{ .Values.policy.quarantineIfVerdict | quote }}
       minimum_confidence: {{ .Values.policy.minimumConfidence }}
+      ai_triage:
+        enabled: {{ .Values.policy.aiTriage.enabled }}
+        timeout: {{ .Values.policy.aiTriage.timeout | quote }}
+        min_confidence: {{ .Values.policy.aiTriage.minConfidence }}
+        cache_ttl: {{ .Values.policy.aiTriage.cacheTtl | quote }}
+        rate_limit: {{ .Values.policy.aiTriage.rateLimit }}
+        circuit_breaker_threshold: {{ .Values.policy.aiTriage.circuitBreakerThreshold }}
+        circuit_breaker_cooldown: {{ .Values.policy.aiTriage.circuitBreakerCooldown | quote }}
       {{- if .Values.policy.allowlist }}
       allowlist:
         {{- toYaml .Values.policy.allowlist | nindent 8 }}

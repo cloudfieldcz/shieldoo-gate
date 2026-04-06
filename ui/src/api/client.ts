@@ -14,6 +14,8 @@ import type {
   UserInfo,
   APIKey,
   APIKeyCreateResponse,
+  PolicyModeResponse,
+  RescanQuarantinedResponse,
 } from './types'
 
 const api = axios.create({
@@ -125,4 +127,15 @@ export const apiKeysApi = {
   create: (name: string) =>
     api.post<APIKeyCreateResponse>('/api-keys', { name }).then((r) => r.data),
   revoke: (id: number) => api.delete(`/api-keys/${id}`),
+}
+
+export const adminApi = {
+  rescanQuarantined: () =>
+    api.post<RescanQuarantinedResponse>('/admin/rescan-quarantined').then((r) => r.data),
+
+  getPolicyMode: () =>
+    api.get<PolicyModeResponse>('/admin/policy-mode').then((r) => r.data),
+
+  setPolicyMode: (mode: string) =>
+    api.put<PolicyModeResponse>('/admin/policy-mode', { mode }).then((r) => r.data),
 }

@@ -32,6 +32,8 @@ tags:
     description: API key management for proxy authentication
   - name: auth
     description: OIDC authentication flow
+  - name: admin
+    description: Administrative actions (policy mode, bulk operations)
   - name: config
     description: Runtime configuration endpoints
   - name: metrics
@@ -295,7 +297,7 @@ paths:
           description: Filter by event type
           schema:
             type: string
-            enum: [SERVED, BLOCKED, QUARANTINED, RELEASED, SCANNED, OVERRIDE_CREATED, OVERRIDE_REVOKED, TAG_MUTATED, RESCAN_QUEUED]
+            enum: [SERVED, BLOCKED, QUARANTINED, RELEASED, SCANNED, OVERRIDE_CREATED, OVERRIDE_REVOKED, TAG_MUTATED, RESCAN_QUEUED, ALLOWED_WITH_WARNING]
       responses:
         "200":
           description: Paginated list of audit log entries
@@ -704,6 +706,73 @@ paths:
         "404":
           description: Key not found
 
+  /api/v1/admin/policy-mode:
+    get:
+      summary: Get current policy mode
+      operationId: getPolicyMode
+      tags: [admin]
+      description: |
+        Returns the current policy evaluation mode (strict, balanced, or permissive).
+        See the Policy Tiers documentation for mode behavior details.
+      responses:
+        "200":
+          description: Current policy mode
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PolicyModeResponse"
+    put:
+      summary: Set policy mode
+      operationId: setPolicyMode
+      tags: [admin]
+      description: |
+        Changes the policy evaluation mode at runtime. The change takes effect
+        immediately for all subsequent artifact evaluations. Existing quarantined
+        artifacts are not re-evaluated automatically; use the rescan-quarantined
+        endpoint to trigger re-evaluation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode:
+                  type: string
+                  enum: [strict, balanced, permissive]
+                  description: The policy mode to set
+      responses:
+        "200":
+          description: Policy mode updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PolicyModeResponse"
+        "400":
+          description: Invalid mode value
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/admin/rescan-quarantined:
+    post:
+      summary: Rescan all quarantined artifacts
+      operationId: rescanQuarantined
+      tags: [admin]
+      description: |
+        Moves all QUARANTINED artifacts to PENDING_SCAN status and triggers
+        rescans. Useful after policy mode changes or scanner updates. An audit
+        log entry (RESCAN_QUEUED) is created for each artifact.
+      responses:
+        "200":
+          description: Rescans queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RescanQuarantinedResponse"
+
 components:
   parameters:
     artifactId:
@@ -1071,7 +1140,7 @@ components:
           format: date-time
         event_type:
           type: string
-          enum: [SERVED, BLOCKED, QUARANTINED, RELEASED, SCANNED, OVERRIDE_CREATED, OVERRIDE_REVOKED, TAG_MUTATED, RESCAN_QUEUED]
+          enum: [SERVED, BLOCKED, QUARANTINED, RELEASED, SCANNED, OVERRIDE_CREATED, OVERRIDE_REVOKED, TAG_MUTATED, RESCAN_QUEUED, ALLOWED_WITH_WARNING]
         artifact_id:
           type: string
         client_ip:
@@ -1402,6 +1471,27 @@ components:
         gomod:
           type: string
           example: "https://go.gate.example.com"
+
+    PolicyModeResponse:
+      type: object
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [strict, balanced, permissive]
+          description: Current policy evaluation mode
+
+    RescanQuarantinedResponse:
+      type: object
+      required: [queued, message]
+      properties:
+        queued:
+          type: integer
+          description: Number of artifacts queued for rescan
+          example: 12
+        message:
+          type: string
+          example: "Quarantined artifacts queued for rescan"
 
     ErrorResponse:
       type: object

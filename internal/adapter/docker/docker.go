@@ -470,6 +470,23 @@ func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request
 			UserAgent:  r.UserAgent(),
 		})
 		return
+
+	case policy.ActionAllowWithWarning:
+		_ = a.persistArtifact(artifactID, scanArtifact, hex.EncodeToString(h[:]), int64(len(body)), model.StatusClean, "", nil, scanResults)
+		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+			EventType:  model.EventAllowedWithWarning,
+			ArtifactID: artifactID,
+			ClientIP:   r.RemoteAddr,
+			UserAgent:  r.UserAgent(),
+			Reason:     policyResult.Reason,
+		})
+		_ = UpsertTag(a.db, repo.ID, ref, manifestDigest, artifactID)
+
+		w.Header().Set("X-Shieldoo-Warning", "MEDIUM vulnerability detected; see admin dashboard for details")
+		w.Header().Set("Docker-Content-Digest", manifestDigest)
+		w.Header().Set("Location", fmt.Sprintf("/v2/%s/manifests/%s", name, ref))
+		w.WriteHeader(http.StatusCreated)
+		return
 	}
 
 	// Allow — persist artifact as clean and create/update tag.
@@ -766,6 +783,47 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 			Artifact: artifactID,
 			Reason:   policyResult.Reason,
 		})
+		return
+
+	case policy.ActionAllowWithWarning:
+		_ = a.persistArtifact(artifactID, scanArtifact, manifestSHA, int64(len(manifestBytes)), model.StatusClean, "", nil, scanResults)
+		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+			EventType:  model.EventAllowedWithWarning,
+			ArtifactID: artifactID,
+			ClientIP:   r.RemoteAddr,
+			UserAgent:  r.UserAgent(),
+			Reason:     policyResult.Reason,
+		})
+
+		// Cache manifest before serving.
+		manifestTmp, tmpErr := writeManifestToTemp(manifestBytes)
+		if tmpErr != nil {
+			log.Error().Err(tmpErr).Str("artifact", artifactID).Msg("docker: failed to write manifest to temp file for caching (allow-with-warning)")
+		} else {
+			defer os.Remove(manifestTmp)
+			cacheArtifact := scanner.Artifact{
+				ID:          artifactID,
+				Ecosystem:   scanner.EcosystemDocker,
+				Name:        safeName,
+				Version:     ref,
+				LocalPath:   manifestTmp,
+				SHA256:      manifestSHA,
+				SizeBytes:   int64(len(manifestBytes)),
+				UpstreamURL: scanArtifact.UpstreamURL,
+			}
+			_ = a.cache.Put(pctx, cacheArtifact, manifestTmp)
+		}
+
+		w.Header().Set("X-Shieldoo-Warning", "MEDIUM vulnerability detected; see admin dashboard for details")
+		if manifestContentType != "" {
+			w.Header().Set("Content-Type", manifestContentType)
+		} else {
+			w.Header().Set("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
+		}
+		w.Header().Set("X-Shieldoo-Scanned", "true")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.Copy(w, bytes.NewReader(manifestBytes))
+		adapter.TriggerAsyncScan(r.Context(), scanArtifact, scanArtifact.LocalPath, a.db, a.policyEng)
 		return
 	}
 

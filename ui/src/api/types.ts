@@ -40,7 +40,30 @@ export interface AuditEntry {
   client_ip?: string
   user_agent?: string
   reason?: string
+  metadata_json?: string
   user_email?: string
+}
+
+export interface TriageMetadata {
+  decision: string
+  confidence: number
+  explanation: string
+  model_used: string
+  tokens_used: number
+  cache_hit: boolean
+}
+
+export interface AuditMetadata {
+  ai_triage?: TriageMetadata
+}
+
+export interface PolicyModeResponse {
+  mode: 'strict' | 'balanced' | 'permissive'
+}
+
+export interface RescanQuarantinedResponse {
+  queued: number
+  message: string
 }
 
 export interface PolicyOverride {

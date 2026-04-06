@@ -9,10 +9,53 @@ type AggregationConfig struct {
 	MinConfidence float32
 }
 
+// TaggedFinding associates a finding with the scanner that produced it.
+type TaggedFinding struct {
+	scanner.Finding
+	ScannerID      string
+	ScannerVerdict scanner.Verdict
+}
+
 // AggregatedResult holds the combined verdict and all findings from multiple scanners.
 type AggregatedResult struct {
 	Verdict  scanner.Verdict
 	Findings []scanner.Finding
+	// Tagged holds findings with scanner attribution for severity-aware evaluation.
+	Tagged []TaggedFinding
+}
+
+// SuspiciousFindings returns findings only from scanners that reported SUSPICIOUS or higher.
+func (a *AggregatedResult) SuspiciousFindings() []TaggedFinding {
+	var result []TaggedFinding
+	for _, tf := range a.Tagged {
+		if tf.ScannerVerdict == scanner.VerdictSuspicious || tf.ScannerVerdict == scanner.VerdictMalicious {
+			result = append(result, tf)
+		}
+	}
+	return result
+}
+
+// MaxEffectiveSeverity returns the highest effective severity among findings
+// from scanners that contributed to the SUSPICIOUS verdict.
+// If no findings exist (anomaly), returns HIGH as a safe default.
+func (a *AggregatedResult) MaxEffectiveSeverity() scanner.Severity {
+	suspicious := a.SuspiciousFindings()
+	if len(suspicious) == 0 {
+		// SUSPICIOUS without findings is an anomaly — treat as HIGH.
+		return scanner.SeverityHigh
+	}
+
+	maxRank := -1
+	maxSev := scanner.SeverityInfo
+	for _, tf := range suspicious {
+		eff := EffectiveSeverity(tf.Severity, tf.ScannerID)
+		r := severityRank(eff)
+		if r > maxRank {
+			maxRank = r
+			maxSev = eff
+		}
+	}
+	return maxSev
 }
 
 // Aggregate combines multiple ScanResults into a single AggregatedResult.
@@ -26,13 +69,19 @@ type AggregatedResult struct {
 //  5. No valid results → CLEAN.
 func Aggregate(results []scanner.ScanResult, cfg AggregationConfig) AggregatedResult {
 	var allFindings []scanner.Finding
+	var tagged []TaggedFinding
 
 	// Pass 1: threat-feed fast-path.
 	for _, r := range results {
 		if r.ScannerID == threatFeedScannerID && r.Verdict == scanner.VerdictMalicious {
+			var tf []TaggedFinding
+			for _, f := range r.Findings {
+				tf = append(tf, TaggedFinding{Finding: f, ScannerID: r.ScannerID, ScannerVerdict: r.Verdict})
+			}
 			return AggregatedResult{
 				Verdict:  scanner.VerdictMalicious,
 				Findings: r.Findings,
+				Tagged:   tf,
 			}
 		}
 	}
@@ -51,6 +100,9 @@ func Aggregate(results []scanner.ScanResult, cfg AggregationConfig) AggregatedRe
 		}
 
 		allFindings = append(allFindings, r.Findings...)
+		for _, f := range r.Findings {
+			tagged = append(tagged, TaggedFinding{Finding: f, ScannerID: r.ScannerID, ScannerVerdict: r.Verdict})
+		}
 
 		switch r.Verdict {
 		case scanner.VerdictMalicious:
@@ -65,5 +117,6 @@ func Aggregate(results []scanner.ScanResult, cfg AggregationConfig) AggregatedRe
 	return AggregatedResult{
 		Verdict:  verdict,
 		Findings: allFindings,
+		Tagged:   tagged,
 	}
 }

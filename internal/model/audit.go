@@ -13,7 +13,8 @@ const (
 	EventOverrideCreated EventType = "OVERRIDE_CREATED"
 	EventOverrideRevoked EventType = "OVERRIDE_REVOKED"
 	EventTagMutated      EventType = "TAG_MUTATED"
-	EventRescanQueued    EventType = "RESCAN_QUEUED"
+	EventRescanQueued       EventType = "RESCAN_QUEUED"
+	EventAllowedWithWarning EventType = "ALLOWED_WITH_WARNING"
 )
 
 type AuditEntry struct {

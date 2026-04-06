@@ -58,6 +58,11 @@ services:
       # Well-known Azurite connection string (public, not a real secret)
       AZURITE_CONN_STR: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1"
 
+      # Policy mode → permissive for pass 3
+      SGW_POLICY_MODE: "permissive"
+
   test-runner:
     environment:
       SGW_CACHE_BACKEND: "azure_blob"
+      # Policy mode (test-runner needs to know current mode for adaptive assertions)
+      SGW_POLICY_MODE: "permissive"

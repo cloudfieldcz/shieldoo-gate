@@ -111,9 +111,18 @@ scanners:
     max_concurrent: 2                # max concurrent sandbox executions
 
 policy:
+  mode: ""                             # "strict" (default) | "balanced" | "permissive"
   block_if_verdict: "MALICIOUS"
-  quarantine_if_verdict: "SUSPICIOUS"
-  minimum_confidence: 0.7
+  quarantine_if_verdict: "SUSPICIOUS"  # ignored when mode is set
+  minimum_confidence: 0.7              # scanner confidence threshold for aggregator
+  ai_triage:                           # AI-assisted triage for balanced mode
+    enabled: false
+    timeout: "5s"                      # per-call timeout (no retries)
+    min_confidence: 0.7                # triage decision trust threshold
+    cache_ttl: "168h"                  # 7 days
+    rate_limit: 10                     # max triage calls per minute
+    circuit_breaker_threshold: 5       # consecutive failures before cooldown
+    circuit_breaker_cooldown: "60s"
   allowlist:
     - "pypi:litellm:==1.82.6"
   tag_mutability:

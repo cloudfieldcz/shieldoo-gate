@@ -25,6 +25,7 @@ source "${SCRIPT_DIR}/test_rubygems.sh"
 source "${SCRIPT_DIR}/test_gomod.sh"
 source "${SCRIPT_DIR}/test_api.sh"
 source "${SCRIPT_DIR}/test_proxy_auth.sh"
+source "${SCRIPT_DIR}/test_policy_tiers.sh"
 
 _run_label=""
 if [ "${SGW_PROXY_AUTH_ENABLED:-false}" = "true" ]; then
@@ -114,6 +115,7 @@ test_rubygems
 test_gomod
 test_api
 test_proxy_auth
+test_policy_tiers
 
 # ---------------------------------------------------------------------------
 # Summary and exit code

@@ -11,9 +11,10 @@ import (
 type Action string
 
 const (
-	ActionAllow      Action = "allow"
-	ActionBlock      Action = "block"
-	ActionQuarantine Action = "quarantine"
+	ActionAllow            Action = "allow"
+	ActionBlock            Action = "block"
+	ActionQuarantine       Action = "quarantine"
+	ActionAllowWithWarning Action = "allow_with_warning"
 )
 
 // PolicyResult is the outcome of evaluating a policy against an artifact.

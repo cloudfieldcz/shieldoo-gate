@@ -136,12 +136,21 @@ scanners:
 
 # ─── Policy ────────────────────────────────────────────────────────
 policy:
-  block_if_verdict: "MALICIOUS"      # Block artifacts with this verdict
-  quarantine_if_verdict: "SUSPICIOUS" # Quarantine artifacts with this verdict
-  minimum_confidence: 0.7             # Ignore scanner results below this confidence
-  allowlist:                          # Static allowlist (bypasses all scan checks)
-    - "pypi:litellm:==1.82.6"        # Format: "ecosystem:name[:==version]"
-  tag_mutability:                     # v1.1: upstream digest change detection
+  mode: ""                             # v1.2: "strict" (default) | "balanced" | "permissive"
+  block_if_verdict: "MALICIOUS"        # Block artifacts with this verdict
+  quarantine_if_verdict: "SUSPICIOUS"  # Quarantine — ignored when mode is set
+  minimum_confidence: 0.7              # Scanner confidence threshold (aggregator)
+  ai_triage:                           # v1.2: AI-assisted triage for balanced mode
+    enabled: false                     # Enable AI triage for MEDIUM severity
+    timeout: "5s"                      # Per-call timeout (no retries on inline path)
+    min_confidence: 0.7                # Triage decision trust threshold
+    cache_ttl: "168h"                  # Cache TTL for triage decisions (7 days)
+    rate_limit: 10                     # Max triage calls per minute
+    circuit_breaker_threshold: 5       # Consecutive failures before cooldown
+    circuit_breaker_cooldown: "60s"    # Cooldown period after circuit break
+  allowlist:                           # Static allowlist (bypasses all scan checks)
+    - "pypi:litellm:==1.82.6"         # Format: "ecosystem:name[:==version]"
+  tag_mutability:                      # v1.1: upstream digest change detection
     enabled: true                     # Enable tag mutability detection
     action: "warn"                    # "quarantine" | "warn" | "block"
     exclude_tags:                     # Tags known to be mutable (skip checks)
@@ -281,8 +290,14 @@ Every config key can be overridden via environment variables using the `SGW_` pr
 | `scanners.guarddog.bridge_socket` | `SGW_SCANNERS_GUARDDOG_BRIDGE_SOCKET` | `SGW_SCANNERS_GUARDDOG_BRIDGE_SOCKET=/tmp/bridge.sock` |
 | `scanners.trivy.enabled` | `SGW_SCANNERS_TRIVY_ENABLED` | `SGW_SCANNERS_TRIVY_ENABLED=false` |
 | `scanners.osv.enabled` | `SGW_SCANNERS_OSV_ENABLED` | `SGW_SCANNERS_OSV_ENABLED=false` |
+| `policy.mode` | `SGW_POLICY_MODE` | `SGW_POLICY_MODE=balanced` |
 | `policy.block_if_verdict` | `SGW_POLICY_BLOCK_IF_VERDICT` | `SGW_POLICY_BLOCK_IF_VERDICT=MALICIOUS` |
 | `policy.minimum_confidence` | `SGW_POLICY_MINIMUM_CONFIDENCE` | `SGW_POLICY_MINIMUM_CONFIDENCE=0.8` |
+| `policy.ai_triage.enabled` | `SGW_POLICY_AI_TRIAGE_ENABLED` | `SGW_POLICY_AI_TRIAGE_ENABLED=true` |
+| `policy.ai_triage.timeout` | `SGW_POLICY_AI_TRIAGE_TIMEOUT` | `SGW_POLICY_AI_TRIAGE_TIMEOUT=5s` |
+| `policy.ai_triage.min_confidence` | `SGW_POLICY_AI_TRIAGE_MIN_CONFIDENCE` | `SGW_POLICY_AI_TRIAGE_MIN_CONFIDENCE=0.7` |
+| `policy.ai_triage.cache_ttl` | `SGW_POLICY_AI_TRIAGE_CACHE_TTL` | `SGW_POLICY_AI_TRIAGE_CACHE_TTL=168h` |
+| `policy.ai_triage.rate_limit` | `SGW_POLICY_AI_TRIAGE_RATE_LIMIT` | `SGW_POLICY_AI_TRIAGE_RATE_LIMIT=10` |
 | `threat_feed.enabled` | `SGW_THREAT_FEED_ENABLED` | `SGW_THREAT_FEED_ENABLED=false` |
 | `rescan.enabled` | `SGW_RESCAN_ENABLED` | `SGW_RESCAN_ENABLED=true` |
 | `rescan.interval` | `SGW_RESCAN_INTERVAL` | `SGW_RESCAN_INTERVAL=12h` |
@@ -342,7 +357,8 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 | `OSVConfig` | `scanners.osv` | `Enabled`, `APIURL` |
 | `SandboxConfig` | `scanners.sandbox` | `Enabled`, `RuntimeBinary`, `Timeout`, `NetworkPolicy`, `MaxConcurrent` |
 | `AIConfig` | `scanners.ai` | `Enabled`, `Provider`, `Model`, `APIKeyEnv`, `Timeout`, `MaxInputTokens`, `BridgeSocket`, `AzureEndpoint`, `AzureDeployment` |
-| `PolicyConfig` | `policy` | `BlockIfVerdict`, `QuarantineIfVerdict`, `MinimumConfidence`, `Allowlist`, `TagMutability` |
+| `PolicyConfig` | `policy` | `Mode`, `BlockIfVerdict`, `QuarantineIfVerdict`, `MinimumConfidence`, `AITriage`, `Allowlist`, `TagMutability` |
+| `AITriageConfig` | `policy.ai_triage` | `Enabled`, `Timeout`, `MinConfidence`, `CacheTTL`, `RateLimit`, `CircuitBreakerThreshold`, `CircuitBreakerCooldown` |
 | `TagMutabilityConfig` | `policy.tag_mutability` | `Enabled`, `Action`, `ExcludeTags`, `CheckOnCacheHit` |
 | `ThreatFeedConfig` | `threat_feed` | `Enabled`, `URL`, `RefreshInterval` |
 | `RescanConfig` | `rescan` | `Enabled`, `Interval`, `BatchSize`, `MaxConcurrent` |

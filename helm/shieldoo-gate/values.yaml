@@ -94,9 +94,18 @@ scanners:
     apiUrl: "https://api.osv.dev"
 
 policy:
+  mode: ""
   blockIfVerdict: "MALICIOUS"
   quarantineIfVerdict: "SUSPICIOUS"
   minimumConfidence: 0.7
+  aiTriage:
+    enabled: false
+    timeout: "5s"
+    minConfidence: 0.7
+    cacheTtl: "168h"
+    rateLimit: 10
+    circuitBreakerThreshold: 5
+    circuitBreakerCooldown: "60s"
   allowlist: []
   tagMutability:
     enabled: true

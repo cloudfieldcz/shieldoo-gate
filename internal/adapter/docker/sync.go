@@ -266,6 +266,14 @@ func (s *SyncService) syncTag(ctx context.Context, repo DockerRepository, tag Do
 			ArtifactID: artifactID,
 			Reason:     policyResult.Reason,
 		})
+	case policy.ActionAllowWithWarning:
+		_ = s.persistArtifact(artifactID, scanArtifact, manifestSHA, int64(len(manifestBytes)),
+			model.StatusClean, "", nil, scanResults)
+		_ = adapter.WriteAuditLog(s.db, model.AuditEntry{
+			EventType:  model.EventAllowedWithWarning,
+			ArtifactID: artifactID,
+			Reason:     policyResult.Reason,
+		})
 	default:
 		// ActionAllow or ActionBlock (block from sync just logs, doesn't quarantine)
 		_ = s.persistArtifact(artifactID, scanArtifact, manifestSHA, int64(len(manifestBytes)),
@@ -279,7 +287,7 @@ func (s *SyncService) syncTag(ctx context.Context, repo DockerRepository, tag Do
 	}
 
 	// Cache the manifest if allowed and cache is available.
-	if policyResult.Action == policy.ActionAllow && s.cache != nil {
+	if (policyResult.Action == policy.ActionAllow || policyResult.Action == policy.ActionAllowWithWarning) && s.cache != nil {
 		cacheTmp, err := writeManifestToTemp(manifestBytes)
 		if err == nil {
 			defer os.Remove(cacheTmp)

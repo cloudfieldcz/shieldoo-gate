@@ -442,6 +442,21 @@ func (a *RubyGemsAdapter) downloadScanServe(w http.ResponseWriter, r *http.Reque
 			Reason:   policyResult.Reason,
 		})
 		return
+
+	case policy.ActionAllowWithWarning:
+		_ = a.cache.Put(pctx, scanArtifact, tmpPath)
+		_ = a.persistArtifact(artifactID, scanArtifact, model.StatusClean, "", nil, scanResults)
+		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+			EventType:  model.EventAllowedWithWarning,
+			ArtifactID: artifactID,
+			ClientIP:   r.RemoteAddr,
+			UserAgent:  r.UserAgent(),
+			Reason:     policyResult.Reason,
+		})
+		w.Header().Set("X-Shieldoo-Warning", "MEDIUM vulnerability detected; see admin dashboard for details")
+		http.ServeFile(w, r, tmpPath)
+		adapter.TriggerAsyncScan(r.Context(), scanArtifact, tmpPath, a.db, a.policyEngine)
+		return
 	}
 
 	// 8. Allow — cache artifact and serve.
