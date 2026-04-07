@@ -23,7 +23,7 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
 ### Reference
 
 - [API Reference](api/) — OpenAPI 3.1 spec for the REST API
-- [Planned Features](features/index.md) — roadmap with 7 proposed features (RBAC, SCIM, SBOM, license policy, dependency graph, SIEM, threat feed portal)
+- [Planned Features](features/index.md) — phased roadmap with 15 proposed features across enterprise foundation, advanced detection, compliance, developer experience, and advanced deployment
 
 ## Architecture
 
