@@ -42,7 +42,7 @@ Each example is fully independent — you only need the toolchain for the one yo
 
 ## Docker Registry Proxy
 
-Shieldoo Gate also proxies Docker images on port `5002`. Docker registry configuration is more involved (requires daemon config changes), so there is no standalone example here. See the [technical specification](../docs/initial-analyse.md) for details.
+Shieldoo Gate also proxies Docker images on port `5002`. Docker registry configuration is more involved (requires daemon config changes), so there is no standalone example here. See the [Docker adapter documentation](../docs/adapters.md#docker-adapter) for details.
 
 ## macOS Note
 

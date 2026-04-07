@@ -23,7 +23,7 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
 ### Reference
 
 - [API Reference](api/) — OpenAPI 3.1 spec for the REST API
-- [Technical Specification](initial-analyse.md) — original design document and backlog
+- [Planned Features](features/index.md) — roadmap with 7 proposed features (RBAC, SCIM, SBOM, license policy, dependency graph, SIEM, threat feed portal)
 
 ## Architecture
 
@@ -164,4 +164,4 @@ make test-e2e
 
 ## Contributing
 
-See [Contributing](initial-analyse.md#16-contributing) in the technical specification.
+Shieldoo Gate welcomes contributions under Apache 2.0. See `CONTRIBUTING.md` for guidelines and `SECURITY.md` for responsible disclosure. Threat intelligence contributions (malicious package reports) are especially welcome — submit as OSV-format JSON with evidence.
