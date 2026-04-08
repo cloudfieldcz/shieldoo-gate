@@ -152,6 +152,41 @@ func TestMaxEffectiveSeverity_OnlySuspiciousFindings(t *testing.T) {
 	assert.Equal(t, scanner.SeverityMedium, agg.MaxEffectiveSeverity())
 }
 
+func TestAggregate_BehavioralScanner_LowerConfidenceThreshold(t *testing.T) {
+	// Behavioral scanner (ai-scanner) with confidence below MinConfidence but
+	// above BehavioralMinConfidence should still be included.
+	cfg := policy.AggregationConfig{MinConfidence: 0.7, BehavioralMinConfidence: 0.35}
+	results := []scanner.ScanResult{
+		{ScannerID: "ai-scanner", Verdict: scanner.VerdictSuspicious, Confidence: 0.5,
+			Findings: []scanner.Finding{{Severity: scanner.SeverityMedium, Category: "obfuscation"}}},
+	}
+	got := policy.Aggregate(results, cfg)
+	assert.Equal(t, scanner.VerdictSuspicious, got.Verdict, "behavioral scanner above behavioral threshold should be included")
+}
+
+func TestAggregate_BehavioralScanner_BelowBehavioralThreshold_Filtered(t *testing.T) {
+	// Behavioral scanner below even the behavioral threshold should be filtered out.
+	cfg := policy.AggregationConfig{MinConfidence: 0.7, BehavioralMinConfidence: 0.35}
+	results := []scanner.ScanResult{
+		{ScannerID: "ai-scanner", Verdict: scanner.VerdictSuspicious, Confidence: 0.2,
+			Findings: []scanner.Finding{{Severity: scanner.SeverityMedium, Category: "obfuscation"}}},
+	}
+	got := policy.Aggregate(results, cfg)
+	assert.Equal(t, scanner.VerdictClean, got.Verdict, "behavioral scanner below behavioral threshold should be filtered")
+}
+
+func TestAggregate_NonBehavioralScanner_UsesStandardThreshold(t *testing.T) {
+	// Non-behavioral scanner (osv) below MinConfidence should be filtered even
+	// though BehavioralMinConfidence is lower.
+	cfg := policy.AggregationConfig{MinConfidence: 0.7, BehavioralMinConfidence: 0.35}
+	results := []scanner.ScanResult{
+		{ScannerID: "osv", Verdict: scanner.VerdictSuspicious, Confidence: 0.5,
+			Findings: []scanner.Finding{{Severity: scanner.SeverityMedium, Category: "CVE"}}},
+	}
+	got := policy.Aggregate(results, cfg)
+	assert.Equal(t, scanner.VerdictClean, got.Verdict, "non-behavioral scanner below standard threshold should be filtered")
+}
+
 func TestMaxEffectiveSeverity_BehavioralFloor_Applied(t *testing.T) {
 	results := []scanner.ScanResult{
 		{

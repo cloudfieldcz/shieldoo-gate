@@ -7,6 +7,11 @@ const threatFeedScannerID = "builtin-threat-feed"
 // AggregationConfig controls how scan results are aggregated into a single verdict.
 type AggregationConfig struct {
 	MinConfidence float32
+	// BehavioralMinConfidence is the confidence threshold for behavioral scanners
+	// (guarddog, ai-scanner, exfil-detector, etc.). Behavioral scanners detect
+	// novel supply chain attack patterns where even moderate confidence warrants
+	// review. Defaults to MinConfidence / 2 if zero.
+	BehavioralMinConfidence float32
 }
 
 // TaggedFinding associates a finding with the scanner that produced it.
@@ -89,13 +94,24 @@ func Aggregate(results []scanner.ScanResult, cfg AggregationConfig) AggregatedRe
 	// Pass 2: aggregate by highest verdict above confidence threshold.
 	verdict := scanner.VerdictClean
 
+	// Behavioral scanners use a lower confidence threshold because they detect
+	// novel supply chain attack patterns where even moderate signals matter.
+	behavioralMin := cfg.BehavioralMinConfidence
+	if behavioralMin == 0 {
+		behavioralMin = cfg.MinConfidence / 2
+	}
+
 	for _, r := range results {
 		// Skip errored results (fail-open).
 		if r.Error != nil {
 			continue
 		}
-		// Skip low-confidence results.
-		if r.Confidence < cfg.MinConfidence {
+		// Skip low-confidence results. Behavioral scanners use a lower threshold.
+		minConf := cfg.MinConfidence
+		if ScannerCategoryFor(r.ScannerID) == CategoryBehavioral {
+			minConf = behavioralMin
+		}
+		if r.Confidence < minConf {
 			continue
 		}
 

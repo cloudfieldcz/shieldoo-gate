@@ -134,6 +134,10 @@ func (a *NPMAdapter) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 		})
 		return
 	}
+	// Pre-scan for typosquatting BEFORE contacting upstream.
+	if a.blockIfTyposquat(w, r, pkg) {
+		return
+	}
 	a.proxyUpstreamRewrite(w, r, "/"+pkg)
 }
 
@@ -143,6 +147,9 @@ func (a *NPMAdapter) handleVersionMetadata(w http.ResponseWriter, r *http.Reques
 	version := chi.URLParam(r, "version")
 	if err := adapter.ValidatePackageName(pkg); err != nil {
 		adapter.WriteJSONError(w, http.StatusBadRequest, adapter.ErrorResponse{Error: "invalid package name"})
+		return
+	}
+	if a.blockIfTyposquat(w, r, pkg) {
 		return
 	}
 	a.proxyUpstream(w, r, "/"+pkg+"/"+version)
@@ -169,6 +176,9 @@ func (a *NPMAdapter) handleScopedMetadata(w http.ResponseWriter, r *http.Request
 		adapter.WriteJSONError(w, http.StatusBadRequest, adapter.ErrorResponse{Error: "invalid package name"})
 		return
 	}
+	if a.blockIfTyposquat(w, r, "@"+scope+"/"+pkg) {
+		return
+	}
 	a.proxyUpstreamRewrite(w, r, "/@"+scope+"/"+pkg)
 }
 
@@ -183,6 +193,9 @@ func (a *NPMAdapter) handleScopedVersionMetadata(w http.ResponseWriter, r *http.
 	}
 	if err := adapter.ValidatePackageName(pkg); err != nil {
 		adapter.WriteJSONError(w, http.StatusBadRequest, adapter.ErrorResponse{Error: "invalid package name"})
+		return
+	}
+	if a.blockIfTyposquat(w, r, "@"+scope+"/"+pkg) {
 		return
 	}
 	a.proxyUpstream(w, r, "/@"+scope+"/"+pkg+"/"+version)
@@ -255,7 +268,12 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 		return
 	}
 
-	// 2. Acquire per-artifact lock to prevent concurrent download/scan races.
+	// 2. Pre-scan for typosquatting BEFORE contacting upstream.
+	if a.blockIfTyposquat(w, r, pkgName) {
+		return
+	}
+
+	// 3. Acquire per-artifact lock to prevent concurrent download/scan races.
 	unlock := adapter.ArtifactLocker.Lock(artifactID)
 	defer unlock()
 
@@ -560,4 +578,30 @@ func extractNPMVersion(pkgName, tarball string) string {
 		return tarball[len(prefix):]
 	}
 	return "unknown"
+}
+
+// blockIfTyposquat runs the typosquat pre-scan and returns true if the
+// request was blocked (response already written). Returns false if the
+// package name is clean or the scanner is not available.
+func (a *NPMAdapter) blockIfTyposquat(w http.ResponseWriter, r *http.Request, pkgName string) bool {
+	result, ok := a.scanEngine.PreScanTyposquat(r.Context(), pkgName, scanner.EcosystemNPM)
+	if !ok {
+		return false
+	}
+	if result.Verdict != scanner.VerdictSuspicious && result.Verdict != scanner.VerdictMalicious {
+		return false
+	}
+	log.Warn().Str("package", pkgName).Str("verdict", string(result.Verdict)).
+		Float32("confidence", result.Confidence).Msg("typosquat pre-scan: blocked before upstream fetch")
+	adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+		Error:  "blocked",
+		Reason: "typosquatting detected: " + result.Findings[0].Description,
+	})
+	_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+		EventType: model.EventBlocked,
+		ClientIP:  r.RemoteAddr,
+		UserAgent: r.UserAgent(),
+		Reason:    "typosquat pre-scan: " + string(result.Verdict),
+	})
+	return true
 }

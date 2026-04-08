@@ -197,13 +197,16 @@ type PostgresConfig struct {
 }
 
 type ScannersConfig struct {
-	Parallel bool           `mapstructure:"parallel"`
-	Timeout  string         `mapstructure:"timeout"`
-	GuardDog GuardDogConfig `mapstructure:"guarddog"`
-	Trivy    TrivyConfig    `mapstructure:"trivy"`
-	OSV      OSVConfig      `mapstructure:"osv"`
-	Sandbox  SandboxConfig  `mapstructure:"sandbox"`
-	AI       AIConfig       `mapstructure:"ai"`
+	Parallel  bool            `mapstructure:"parallel"`
+	Timeout   string          `mapstructure:"timeout"`
+	GuardDog  GuardDogConfig  `mapstructure:"guarddog"`
+	Trivy     TrivyConfig     `mapstructure:"trivy"`
+	OSV       OSVConfig       `mapstructure:"osv"`
+	Sandbox   SandboxConfig   `mapstructure:"sandbox"`
+	AI        AIConfig        `mapstructure:"ai"`
+	Typosquat   TyposquatConfig   `mapstructure:"typosquat"`
+	VersionDiff VersionDiffConfig `mapstructure:"version_diff"`
+	Reputation  ReputationConfig  `mapstructure:"reputation"`
 }
 
 // AIConfig holds configuration for the AI (LLM-based) scanner.
@@ -230,6 +233,82 @@ type SandboxConfig struct {
 	MaxConcurrent int    `mapstructure:"max_concurrent"`  // default 2
 }
 
+// TyposquatConfig holds configuration for the built-in typosquatting detection scanner.
+type TyposquatConfig struct {
+	Enabled            bool     `mapstructure:"enabled"`
+	TopPackagesCount   int      `mapstructure:"top_packages_count"`
+	MaxEditDistance     int      `mapstructure:"max_edit_distance"`
+	InternalNamespaces []string `mapstructure:"internal_namespaces"`
+	CombosquatSuffixes []string `mapstructure:"combosquat_suffixes"`
+	Allowlist          []string `mapstructure:"allowlist"`
+}
+
+// VersionDiffConfig holds configuration for the version diff analysis scanner.
+type VersionDiffConfig struct {
+	Enabled            bool                  `mapstructure:"enabled"`
+	MaxArtifactSizeMB  int                   `mapstructure:"max_artifact_size_mb"`
+	MaxExtractedSizeMB int                   `mapstructure:"max_extracted_size_mb"`
+	MaxExtractedFiles  int                   `mapstructure:"max_extracted_files"`
+	ScannerTimeout     string                `mapstructure:"scanner_timeout"`
+	EntropySampleBytes int                   `mapstructure:"entropy_sample_bytes"`
+	Allowlist          []string              `mapstructure:"allowlist"`
+	Thresholds         VersionDiffThresholds `mapstructure:"thresholds"`
+	SensitivePatterns  []string              `mapstructure:"sensitive_patterns"`
+}
+
+// VersionDiffThresholds holds anomaly detection thresholds.
+type VersionDiffThresholds struct {
+	CodeVolumeRatio float64 `mapstructure:"code_volume_ratio"`
+	MaxNewFiles     int     `mapstructure:"max_new_files"`
+	EntropyDelta    float64 `mapstructure:"entropy_delta"`
+}
+
+// ReputationConfig holds configuration for the maintainer/package reputation scanner.
+// The scanner queries upstream registry APIs for metadata (maintainer history,
+// publication patterns, download counts) and produces a risk score.
+type ReputationConfig struct {
+	Enabled      bool                 `mapstructure:"enabled"`
+	CacheTTL     string               `mapstructure:"cache_ttl"`      // metadata cache TTL, default "24h"
+	CacheTTLJitter string             `mapstructure:"cache_ttl_jitter"` // random jitter added to TTL, default "2h"
+	Timeout      string               `mapstructure:"timeout"`        // per-request timeout, default "10s"
+	RateLimit    int                  `mapstructure:"rate_limit"`     // max upstream API requests per minute per ecosystem, default 30
+	RetentionDays int                 `mapstructure:"retention_days"` // delete stale entries older than this, default 30
+	Thresholds   ReputationThresholds `mapstructure:"thresholds"`
+	Signals      ReputationSignals    `mapstructure:"signals"`
+}
+
+// ReputationThresholds controls verdict thresholds for reputation risk scores.
+type ReputationThresholds struct {
+	Suspicious float64 `mapstructure:"suspicious"` // score >= this → SUSPICIOUS, default 0.5
+	Malicious  float64 `mapstructure:"malicious"`  // score >= this → MALICIOUS, default 0.8
+}
+
+// ReputationSignals holds per-signal enable/weight configuration.
+type ReputationSignals struct {
+	// V1 signals
+	PackageAge          SignalConfig `mapstructure:"package_age"`
+	LowDownloads        SignalConfig `mapstructure:"low_downloads"`
+	NoSourceRepo        SignalConfig `mapstructure:"no_source_repo"`
+	DormantReactivation SignalConfig `mapstructure:"dormant_reactivation"`
+	FewVersions         SignalConfig `mapstructure:"few_versions"`
+	NoDescription       SignalConfig `mapstructure:"no_description"`
+	VersionCountSpike   SignalConfig `mapstructure:"version_count_spike"`
+	OwnershipChange     SignalConfig `mapstructure:"ownership_change"`
+	// V2 signals (from feature spec)
+	YankedVersions        SignalConfig `mapstructure:"yanked_versions"`
+	UnusualVersioning     SignalConfig `mapstructure:"unusual_versioning"`
+	MaintainerEmailDomain SignalConfig `mapstructure:"maintainer_email_domain"`
+	FirstPublication      SignalConfig `mapstructure:"first_publication"`
+	RepoMismatch          SignalConfig `mapstructure:"repo_mismatch"`
+	ClassifierAnomaly     SignalConfig `mapstructure:"classifier_anomaly"`
+}
+
+// SignalConfig controls a single reputation signal.
+type SignalConfig struct {
+	Enabled bool    `mapstructure:"enabled"`
+	Weight  float64 `mapstructure:"weight"`
+}
+
 type GuardDogConfig struct {
 	Enabled      bool   `mapstructure:"enabled"`
 	BridgeSocket string `mapstructure:"bridge_socket"`
@@ -247,13 +326,14 @@ type OSVConfig struct {
 }
 
 type PolicyConfig struct {
-	Mode                string              `mapstructure:"mode"`
-	BlockIfVerdict      string              `mapstructure:"block_if_verdict"`
-	QuarantineIfVerdict string              `mapstructure:"quarantine_if_verdict"`
-	MinimumConfidence   float32             `mapstructure:"minimum_confidence"`
-	AITriage            AITriageConfig      `mapstructure:"ai_triage"`
-	Allowlist           []string            `mapstructure:"allowlist"`
-	TagMutability       TagMutabilityConfig `mapstructure:"tag_mutability"`
+	Mode                        string              `mapstructure:"mode"`
+	BlockIfVerdict              string              `mapstructure:"block_if_verdict"`
+	QuarantineIfVerdict         string              `mapstructure:"quarantine_if_verdict"`
+	MinimumConfidence           float32             `mapstructure:"minimum_confidence"`
+	BehavioralMinimumConfidence float32             `mapstructure:"behavioral_minimum_confidence"`
+	AITriage                    AITriageConfig      `mapstructure:"ai_triage"`
+	Allowlist                   []string            `mapstructure:"allowlist"`
+	TagMutability               TagMutabilityConfig `mapstructure:"tag_mutability"`
 }
 
 // AITriageConfig holds configuration for AI-assisted triage in balanced mode.
@@ -346,6 +426,58 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("policy.ai_triage.circuit_breaker_threshold", 5)
 	v.SetDefault("policy.ai_triage.circuit_breaker_cooldown", "60s")
 
+	v.SetDefault("scanners.typosquat.enabled", true)
+	v.SetDefault("scanners.typosquat.max_edit_distance", 2)
+	v.SetDefault("scanners.typosquat.top_packages_count", 5000)
+	v.SetDefault("scanners.typosquat.combosquat_suffixes", []string{"-utils", "-helper", "-lib", "-dev", "-tool", "-sdk"})
+
+	v.SetDefault("scanners.version_diff.enabled", true)
+	v.SetDefault("scanners.version_diff.max_artifact_size_mb", 20)
+	v.SetDefault("scanners.version_diff.max_extracted_size_mb", 200)
+	v.SetDefault("scanners.version_diff.max_extracted_files", 10000)
+	v.SetDefault("scanners.version_diff.scanner_timeout", "10s")
+	v.SetDefault("scanners.version_diff.entropy_sample_bytes", 8192)
+	v.SetDefault("scanners.version_diff.thresholds.code_volume_ratio", 5.0)
+	v.SetDefault("scanners.version_diff.thresholds.max_new_files", 20)
+	v.SetDefault("scanners.version_diff.thresholds.entropy_delta", 2.0)
+
+	v.SetDefault("scanners.reputation.enabled", false)
+	v.SetDefault("scanners.reputation.cache_ttl", "24h")
+	v.SetDefault("scanners.reputation.timeout", "10s")
+	v.SetDefault("scanners.reputation.thresholds.suspicious", 0.5)
+	v.SetDefault("scanners.reputation.thresholds.malicious", 0.8)
+	v.SetDefault("scanners.reputation.signals.package_age.enabled", true)
+	v.SetDefault("scanners.reputation.signals.package_age.weight", 0.3)
+	v.SetDefault("scanners.reputation.signals.low_downloads.enabled", true)
+	v.SetDefault("scanners.reputation.signals.low_downloads.weight", 0.2)
+	v.SetDefault("scanners.reputation.signals.no_source_repo.enabled", true)
+	v.SetDefault("scanners.reputation.signals.no_source_repo.weight", 0.3)
+	v.SetDefault("scanners.reputation.signals.dormant_reactivation.enabled", true)
+	v.SetDefault("scanners.reputation.signals.dormant_reactivation.weight", 0.7)
+	v.SetDefault("scanners.reputation.signals.few_versions.enabled", true)
+	v.SetDefault("scanners.reputation.signals.few_versions.weight", 0.15)
+	v.SetDefault("scanners.reputation.signals.no_description.enabled", true)
+	v.SetDefault("scanners.reputation.signals.no_description.weight", 0.1)
+	v.SetDefault("scanners.reputation.signals.version_count_spike.enabled", true)
+	v.SetDefault("scanners.reputation.signals.version_count_spike.weight", 0.4)
+	v.SetDefault("scanners.reputation.signals.ownership_change.enabled", true)
+	v.SetDefault("scanners.reputation.signals.ownership_change.weight", 0.8)
+	v.SetDefault("scanners.reputation.signals.yanked_versions.enabled", true)
+	v.SetDefault("scanners.reputation.signals.yanked_versions.weight", 0.6)
+	v.SetDefault("scanners.reputation.signals.unusual_versioning.enabled", true)
+	v.SetDefault("scanners.reputation.signals.unusual_versioning.weight", 0.2)
+	v.SetDefault("scanners.reputation.signals.maintainer_email_domain.enabled", true)
+	v.SetDefault("scanners.reputation.signals.maintainer_email_domain.weight", 0.15)
+	v.SetDefault("scanners.reputation.signals.first_publication.enabled", true)
+	v.SetDefault("scanners.reputation.signals.first_publication.weight", 0.25)
+	v.SetDefault("scanners.reputation.signals.repo_mismatch.enabled", false)
+	v.SetDefault("scanners.reputation.signals.repo_mismatch.weight", 0.4)
+	v.SetDefault("scanners.reputation.signals.classifier_anomaly.enabled", false)
+	v.SetDefault("scanners.reputation.signals.classifier_anomaly.weight", 0.15)
+	v.SetDefault("scanners.reputation.cache_ttl_jitter", "2h")
+	v.SetDefault("scanners.reputation.rate_limit", 30)
+	v.SetDefault("scanners.reputation.retention_days", 30)
+
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("config: unmarshalling: %w", err)
@@ -412,6 +544,18 @@ func (c *Config) Validate() error {
 	}
 
 	if err := c.validateProxyAuth(); err != nil {
+		return err
+	}
+
+	if err := c.validateTyposquat(); err != nil {
+		return err
+	}
+
+	if err := c.validateVersionDiff(); err != nil {
+		return err
+	}
+
+	if err := c.validateReputation(); err != nil {
 		return err
 	}
 
@@ -522,6 +666,104 @@ func (c *Config) validateProxyAuth() error {
 		log.Warn().Str("env_var", c.ProxyAuth.GlobalTokenEnv).Msg("config: proxy_auth.global_token_env references an unset environment variable")
 	}
 
+	return nil
+}
+
+// validateTyposquat checks typosquatting scanner configuration.
+func (c *Config) validateTyposquat() error {
+	tc := c.Scanners.Typosquat
+	if !tc.Enabled {
+		return nil
+	}
+	if tc.MaxEditDistance < 1 || tc.MaxEditDistance > 3 {
+		return fmt.Errorf("config: scanners.typosquat.max_edit_distance must be 1-3, got %d", tc.MaxEditDistance)
+	}
+	if tc.TopPackagesCount > 10000 {
+		return fmt.Errorf("config: scanners.typosquat.top_packages_count must be <= 10000, got %d", tc.TopPackagesCount)
+	}
+	return nil
+}
+
+// validateVersionDiff checks version diff scanner configuration.
+func (c *Config) validateVersionDiff() error {
+	vc := c.Scanners.VersionDiff
+	if !vc.Enabled {
+		return nil
+	}
+	if vc.MaxArtifactSizeMB < 1 {
+		return fmt.Errorf("config: scanners.version_diff.max_artifact_size_mb must be >= 1, got %d", vc.MaxArtifactSizeMB)
+	}
+	if vc.MaxExtractedSizeMB < 1 {
+		return fmt.Errorf("config: scanners.version_diff.max_extracted_size_mb must be >= 1, got %d", vc.MaxExtractedSizeMB)
+	}
+	if vc.MaxExtractedFiles < 100 {
+		return fmt.Errorf("config: scanners.version_diff.max_extracted_files must be >= 100, got %d", vc.MaxExtractedFiles)
+	}
+	if vc.Thresholds.CodeVolumeRatio < 1.0 {
+		return fmt.Errorf("config: scanners.version_diff.thresholds.code_volume_ratio must be >= 1.0, got %f", vc.Thresholds.CodeVolumeRatio)
+	}
+	return nil
+}
+
+// validateReputation checks reputation scanner configuration.
+func (c *Config) validateReputation() error {
+	rc := c.Scanners.Reputation
+	if !rc.Enabled {
+		return nil
+	}
+	if rc.CacheTTL != "" {
+		if _, err := time.ParseDuration(rc.CacheTTL); err != nil {
+			return fmt.Errorf("config: scanners.reputation.cache_ttl %q is not a valid duration: %w", rc.CacheTTL, err)
+		}
+	}
+	if rc.Timeout != "" {
+		if _, err := time.ParseDuration(rc.Timeout); err != nil {
+			return fmt.Errorf("config: scanners.reputation.timeout %q is not a valid duration: %w", rc.Timeout, err)
+		}
+	}
+	if rc.Thresholds.Suspicious < 0 || rc.Thresholds.Suspicious > 1 {
+		return fmt.Errorf("config: scanners.reputation.thresholds.suspicious must be 0.0-1.0, got %f", rc.Thresholds.Suspicious)
+	}
+	if rc.Thresholds.Malicious < 0 || rc.Thresholds.Malicious > 1 {
+		return fmt.Errorf("config: scanners.reputation.thresholds.malicious must be 0.0-1.0, got %f", rc.Thresholds.Malicious)
+	}
+	if rc.Thresholds.Malicious <= rc.Thresholds.Suspicious {
+		return fmt.Errorf("config: scanners.reputation.thresholds.malicious (%f) must be greater than suspicious (%f)", rc.Thresholds.Malicious, rc.Thresholds.Suspicious)
+	}
+	if rc.CacheTTLJitter != "" {
+		if _, err := time.ParseDuration(rc.CacheTTLJitter); err != nil {
+			return fmt.Errorf("config: scanners.reputation.cache_ttl_jitter %q is not a valid duration: %w", rc.CacheTTLJitter, err)
+		}
+	}
+	if rc.RateLimit < 0 {
+		return fmt.Errorf("config: scanners.reputation.rate_limit must be >= 0, got %d", rc.RateLimit)
+	}
+	if rc.RetentionDays < 0 {
+		return fmt.Errorf("config: scanners.reputation.retention_days must be >= 0, got %d", rc.RetentionDays)
+	}
+	// Validate signal weights are in (0, 1].
+	if err := validateSignalWeights(rc.Signals); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateSignalWeights checks that all enabled signal weights are in the valid range (0, 1].
+func validateSignalWeights(s ReputationSignals) error {
+	signals := map[string]SignalConfig{
+		"package_age": s.PackageAge, "low_downloads": s.LowDownloads,
+		"no_source_repo": s.NoSourceRepo, "dormant_reactivation": s.DormantReactivation,
+		"few_versions": s.FewVersions, "no_description": s.NoDescription,
+		"version_count_spike": s.VersionCountSpike, "ownership_change": s.OwnershipChange,
+		"yanked_versions": s.YankedVersions, "unusual_versioning": s.UnusualVersioning,
+		"maintainer_email_domain": s.MaintainerEmailDomain, "first_publication": s.FirstPublication,
+		"repo_mismatch": s.RepoMismatch, "classifier_anomaly": s.ClassifierAnomaly,
+	}
+	for name, cfg := range signals {
+		if cfg.Enabled && (cfg.Weight <= 0 || cfg.Weight > 1.0) {
+			return fmt.Errorf("config: scanners.reputation.signals.%s.weight must be in (0.0, 1.0], got %f", name, cfg.Weight)
+		}
+	}
 	return nil
 }
 

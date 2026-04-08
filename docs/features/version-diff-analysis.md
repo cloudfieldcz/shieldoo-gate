@@ -2,7 +2,7 @@
 
 > Automatically compare new package versions against previous versions to detect suspicious changes, unexpected code injections, and supply chain compromises.
 
-**Status:** Proposed
+**Status:** Implemented (v1.2)
 **Priority:** High
 **Perspective:** Developer / Security Operations
 
@@ -57,7 +57,7 @@ scanners:
 
 - **Scanner:** New `VersionDiffScanner` in `internal/scanner/versiondiff/`. Implements `Scanner` interface. Queries the cache and database for the previous version of the same package.
 - **Cache interaction:** Reads the previous version from the cache store (any backend). Extracts and compares contents in a temporary directory.
-- **Database:** Uses existing `artifacts` table to find previous versions. May add `version_diff_results` table for storing structured diff outputs for UI display.
+- **Database:** Uses existing `artifacts` table to find previous versions. Stores structured diff outputs in `version_diff_results` table. Note: the `artifact_id` column does NOT have a foreign key constraint on `artifacts(id)` because the version-diff scanner runs during the scan pipeline before the current artifact is persisted. The `previous_artifact` column does reference `artifacts(id)` since it's retrieved from an existing DB row.
 - **Admin UI:** Show a "Changes from previous version" section on the artifact detail page with a visual diff summary.
 
 ### Ecosystem Coverage

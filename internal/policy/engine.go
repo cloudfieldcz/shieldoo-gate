@@ -14,12 +14,13 @@ import (
 
 // EngineConfig configures the policy engine thresholds and allowlist.
 type EngineConfig struct {
-	Mode                PolicyMode
-	BlockIfVerdict      scanner.Verdict
-	QuarantineIfVerdict scanner.Verdict
-	MinimumConfidence   float32
-	Allowlist           []string
-	AITriage            config.AITriageConfig
+	Mode                        PolicyMode
+	BlockIfVerdict              scanner.Verdict
+	QuarantineIfVerdict         scanner.Verdict
+	MinimumConfidence           float32
+	BehavioralMinimumConfidence float32
+	Allowlist                   []string
+	AITriage                    config.AITriageConfig
 }
 
 // TriageClient is the interface for AI triage calls (Phase 3).
@@ -176,7 +177,10 @@ func (e *Engine) Evaluate(ctx context.Context, artifact scanner.Artifact, scanRe
 		}
 	}
 
-	aggCfg := AggregationConfig{MinConfidence: e.cfg.MinimumConfidence}
+	aggCfg := AggregationConfig{
+		MinConfidence:           e.cfg.MinimumConfidence,
+		BehavioralMinConfidence: e.cfg.BehavioralMinimumConfidence,
+	}
 	agg := Aggregate(scanResults, aggCfg)
 
 	switch {

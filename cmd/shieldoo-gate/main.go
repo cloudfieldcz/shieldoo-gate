@@ -44,6 +44,8 @@ import (
 	osvscanner "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/osv"
 	sandboxscanner "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/sandbox"
 	trivyscanner "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/trivy"
+	reputationscanner "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/reputation"
+	versiondiff "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/versiondiff"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/threatfeed"
 )
 
@@ -108,7 +110,7 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to initialize cache store")
 	}
 
-	// Init scanners: 6 built-in scanners
+	// Init scanners: 6 built-in scanners + optional typosquat
 	scanners := []scanner.Scanner{
 		builtin.NewHashVerifier(),
 		builtin.NewInstallHookAnalyzer(),
@@ -167,6 +169,39 @@ func main() {
 		} else {
 			scanners = append(scanners, ai)
 			log.Info().Str("model", cfg.Scanners.AI.Model).Str("provider", cfg.Scanners.AI.Provider).Msg("ai scanner enabled")
+		}
+	}
+
+	// Optional: Typosquatting detection scanner (built-in, enabled by default)
+	if cfg.Scanners.Typosquat.Enabled {
+		ts, err := builtin.NewTyposquatScanner(db, cfg.Scanners.Typosquat)
+		if err != nil {
+			log.Warn().Err(err).Msg("typosquat scanner disabled: failed to init")
+		} else {
+			scanners = append(scanners, ts)
+			log.Info().Msg("typosquat scanner enabled")
+		}
+	}
+
+	// Optional: Reputation scanner (upstream metadata risk scoring)
+	if cfg.Scanners.Reputation.Enabled {
+		rep, err := reputationscanner.NewReputationScanner(db, cfg.Scanners.Reputation)
+		if err != nil {
+			log.Warn().Err(err).Msg("reputation scanner disabled: failed to init")
+		} else {
+			scanners = append(scanners, rep)
+			log.Info().Msg("reputation scanner enabled")
+		}
+	}
+
+	// Optional: Version diff scanner (compares new vs previous versions)
+	if cfg.Scanners.VersionDiff.Enabled {
+		vd, err := versiondiff.NewVersionDiffScanner(db, cacheStore, cfg.Scanners.VersionDiff)
+		if err != nil {
+			log.Warn().Err(err).Msg("version-diff scanner disabled: failed to init")
+		} else {
+			scanners = append(scanners, vd)
+			log.Info().Msg("version-diff scanner enabled")
 		}
 	}
 
@@ -238,12 +273,13 @@ func main() {
 		}
 	}
 	policyEngine := policy.NewEngine(policy.EngineConfig{
-		Mode:                policyMode,
-		BlockIfVerdict:      scanner.Verdict(cfg.Policy.BlockIfVerdict),
-		QuarantineIfVerdict: scanner.Verdict(cfg.Policy.QuarantineIfVerdict),
-		MinimumConfidence:   cfg.Policy.MinimumConfidence,
-		Allowlist:           cfg.Policy.Allowlist,
-		AITriage:            cfg.Policy.AITriage,
+		Mode:                        policyMode,
+		BlockIfVerdict:              scanner.Verdict(cfg.Policy.BlockIfVerdict),
+		QuarantineIfVerdict:         scanner.Verdict(cfg.Policy.QuarantineIfVerdict),
+		MinimumConfidence:           cfg.Policy.MinimumConfidence,
+		BehavioralMinimumConfidence: cfg.Policy.BehavioralMinimumConfidence,
+		Allowlist:                   cfg.Policy.Allowlist,
+		AITriage:                    cfg.Policy.AITriage,
 	}, db, engineOpts...)
 
 	// Init alerter from config.

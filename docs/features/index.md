@@ -1,5 +1,52 @@
 # Planned Features
 
+> [!IMPORTANT]
+> ## Instructions for Ralph (AI Agent)
+>
+> These rules are **non-negotiable**. Follow them for every feature in this document.
+>
+> ### 1. Always use skills and make plans
+> - **Before writing any code**, invoke the relevant skill (analysis, TDD, debugging, etc.). No exceptions.
+> - **Create an implementation plan** (`cf-powers:writing-plans`) and get it reviewed before touching code.
+> - Use `cf-powers:analysis` for every new feature — it produces the technical analysis that drives implementation.
+> - Use `cf-powers:test-driven-development` — write tests first, then implementation.
+> - Use `cf-powers:verification-before-completion` before claiming anything is done.
+>
+> ### 2. Always update `docs/`
+> - Every code change **MUST** include corresponding documentation updates in `docs/`.
+> - New features require a new doc page linked from `docs/index.md`.
+> - API changes must update `docs/api/openapi.yaml`.
+> - Architecture decisions go in `docs/adr/`.
+> - **Do not defer docs to "later" — update them as you go.**
+>
+> ### 3. Always create E2E tests
+> - Every implemented feature **MUST** have E2E tests covering **all scenarios** — happy path, error cases, edge cases.
+> - For backend/proxy features: write Go E2E tests in `tests/e2e/` and shell-based tests in `tests/e2e-shell/`.
+> - For UI features: use **Playwright** to validate the admin UI.
+> - E2E tests are the **only reliable way** to verify functionality works end-to-end.
+> - Run and verify with:
+>   ```
+>   make test-e2e-containerized
+>   ```
+> - **If E2E tests don't pass, the feature is not done.**
+>
+> ### 4. Branch & commit strategy
+> - **Create a feature sub-branch** for each feature you work on.
+> - Branch naming: `feature/<feature-short-name>` from the **current branch** (branches chain from each other).
+>   - Examples: `feature/typosquatting-detection`, `feature/version-diff-analysis`, `feature/sbom-generation`
+> - **Commit early and often** with descriptive commit messages (see CLAUDE.md for format).
+> - **Do NOT push.** Do NOT create PRs. Work stays local.
+> - When a feature is done, create the **next feature branch from the current one** — branches build on top of each other sequentially.
+> - **Never commit multiple unrelated features into the same branch.**
+>
+> ### Summary
+> ```
+> Branch → Plan → Analysis → TDD → Implement → Update docs → E2E tests → Verify → Done
+> ```
+> Skip any step and the feature is rejected.
+
+---
+
 > Feature proposals for future Shieldoo Gate releases, ordered by impact-to-effort ratio. We prioritize features that improve real security for teams of any size over features that only matter at enterprise scale.
 
 ## Prioritization Criteria
@@ -17,12 +64,12 @@ Features that are pure Go, need no new infrastructure, and catch attacks the cur
 
 Pure detection improvements. No new infrastructure. Each one catches an attack class that content scanners fundamentally cannot. All can be built independently and in parallel.
 
-| # | Feature | What it catches | Effort | Deps |
-|---|---|---|---|---|
-| 1 | [Typosquatting Detection](typosquatting-detection.md) | Fake packages impersonating popular libraries (`reqeusts`, `lodsah`). Edit distance, homoglyph, namespace confusion analysis. | Low — built-in scanner, pure Go, <1ms per check | None |
-| 2 | [Version Diff Analysis](version-diff-analysis.md) | Compromised updates — compare new version against cached previous version. Anomalous code additions, new install hooks, entropy spikes. | Medium — needs archive extraction + diff logic, async | Cache (done) |
-| 3 | [Maintainer Risk Scoring](maintainer-risk-scoring.md) | Account takeovers, abandoned package hijacking, ownership transfers. Scores packages by maintainer history + publication patterns. | Medium — upstream API queries, caching | None |
-| 4 | [CLI & CI/CD Integration](cli-cicd-integration.md) | Nothing directly, but makes everything else *usable*. `shieldoo check`, `shieldoo audit`, GitHub Actions, pre-commit hooks. Developers finally see why their build failed. SARIF output. | Medium — separate Go binary, needs batch API endpoint | Admin API (done) |
+| # | Feature | What it catches | Effort | Deps | Status |
+|---|---|---|---|---|---|
+| 1 | [Typosquatting Detection](typosquatting-detection.md) | Fake packages impersonating popular libraries (`reqeusts`, `lodsah`). Edit distance, homoglyph, namespace confusion analysis. | Low — built-in scanner, pure Go, <1ms per check | None | **Implemented** |
+| 2 | [Version Diff Analysis](version-diff-analysis.md) | Compromised updates — compare new version against cached previous version. Anomalous code additions, new install hooks, entropy spikes. | Medium — needs archive extraction + diff logic, async | Cache (done) | **Implemented** |
+| 3 | [Maintainer Risk Scoring](maintainer-risk-scoring.md) | Account takeovers, abandoned package hijacking, ownership transfers. Scores packages by maintainer history + publication patterns. | Medium — upstream API queries, caching | None | **Implemented** |
+| 4 | [CLI & CI/CD Integration](cli-cicd-integration.md) | Nothing directly, but makes everything else *usable*. `shieldoo check`, `shieldoo audit`, GitHub Actions, pre-commit hooks. Developers finally see why their build failed. SARIF output. | Medium — separate Go binary, needs batch API endpoint | Admin API (done) | Planned |
 
 **Why this order:** Typosquatting is the cheapest scanner to build and catches the most common attack vector. Version diff is the most powerful signal against account-takeover attacks. Maintainer scoring adds context that amplifies every other scanner. CLI makes the whole system usable for developers instead of just admins.
 
@@ -52,16 +99,7 @@ These matter when you have 20+ developers, auditors asking questions, or a SOC t
 
 **Why this order:** RBAC is the minimum viable access control. Compliance reporting is increasingly non-optional even for smaller companies (EU CRA). SIEM is straightforward once alerting exists. SCIM is pure enterprise — skip until you have an IdP with hundreds of users.
 
-### Tier 4 — Advanced scenarios (v2.0+)
-
-Specialized deployment models. Only implement when there's concrete demand.
-
-| # | Feature | Use case | Effort | Deps |
-|---|---|---|---|---|
-| 13 | [Policy-as-Code (OPA)](policy-as-code.md) | Complex conditional policies ("block suspicious in prod, allow in dev"). Rego rules in Git, testable, dry-run mode. | Medium-High — embedded OPA, policy loading, decision logging | Policy engine (done) |
-| 14 | [Air-Gapped Mode](air-gapped-mode.md) | Defense, government, critical infrastructure. Signed export bundles, local vuln DB, curated repo mode. | High — export/import mechanism, bundle signing, offline scanners | Cache (done) |
-| 15 | [Multi-Instance Federation](multi-instance-federation.md) | Multi-region, multi-team, hybrid cloud. Share threat detections across instances via mTLS. | High — sync protocol, conflict resolution, peer management | None |
-| 16 | [Threat Feed Contributions](threat-feed-contributions.md) | Community threat sharing portal. Separate service with moderation workflow. | High — separate service, review process, GPG-signed feed | Threat feed (done) |
+> For advanced scenarios (v2.0+) — Policy-as-Code, Air-Gapped Mode, Federation, Threat Feed Contributions — see [Future Features](index-future.md).
 
 ## Priority Matrix
 
@@ -99,11 +137,10 @@ No dependencies — start any time:
   ● Typosquatting Detection
   ● Maintainer Risk Scoring
   ● Package Provenance
-  ● Multi-Instance Federation
 
 Cache (done)
   ├──▶ Version Diff Analysis
-  └──▶ Air-Gapped Mode
+  └──▶ Air-Gapped Mode (future)
 
 Admin API + PAT (done)
   └──▶ CLI & CI/CD Integration
@@ -120,12 +157,6 @@ OIDC Auth (done)
 
 Audit Log (done) + SBOM (recommended)
   └──▶ Compliance Reporting
-
-Policy Engine (done)
-  └──▶ Policy-as-Code (OPA)
-
-Threat Feed (done)
-  └──▶ Threat Feed Contributions (separate service)
 ```
 
 ## Implementation Notes

@@ -88,6 +88,8 @@ Before policy evaluation, the aggregator (`internal/policy/aggregator.go`) combi
 
 The `policy.minimum_confidence` setting (default `0.7`) filters out scanner results that are not confident enough to act on. This prevents low-confidence false positives from triggering blocks.
 
+**Behavioral scanners** (guarddog, ai-scanner, exfil-detector, install-hook-analyzer, pth-inspector, obfuscation-detector) use a lower threshold configured via `policy.behavioral_minimum_confidence` (default: half of `minimum_confidence`). These scanners detect novel supply chain attack patterns where even moderate confidence warrants review. This is consistent with the behavioral severity floor (findings from these scanners are elevated to at least HIGH).
+
 The threat feed checker is exempt from this threshold — it bypasses confidence checks entirely.
 
 ## Policy Actions
@@ -237,12 +239,13 @@ In balanced mode, MEDIUM severity findings from vulnerability scanners are sent 
 
 When AI triage is disabled in balanced mode, MEDIUM severity falls back to QUARANTINE (degraded balanced = strict for MEDIUM tier).
 
-### Two Confidence Thresholds
+### Three Confidence Thresholds
 
 - `policy.minimum_confidence` (default 0.7) — **Scanner confidence**: filters scan results with low confidence in the aggregator
+- `policy.behavioral_minimum_confidence` (default: half of `minimum_confidence`) — **Behavioral scanner confidence**: lower threshold for behavioral scanners that detect supply chain attack patterns
 - `policy.ai_triage.min_confidence` (default 0.7) — **Triage confidence**: requires minimum trust in AI triage decisions
 
-These are independent — scanner confidence determines whether a scan result enters aggregation; triage confidence determines whether an AI triage decision is trusted.
+These are independent — scanner confidence determines whether a scan result enters aggregation (with behavioral scanners using the lower threshold); triage confidence determines whether an AI triage decision is trusted.
 
 ### Startup Warnings
 

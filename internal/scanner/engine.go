@@ -114,6 +114,34 @@ type AsyncScanner interface {
 	Close() error
 }
 
+// PreScanTyposquat runs only the builtin-typosquat scanner on a name-only
+// artifact. This allows adapters to block typosquats before contacting
+// upstream, avoiding 502s for non-existent packages and catching typosquats
+// on metadata-only requests. Returns the ScanResult and true if the scanner
+// was found, or a zero ScanResult and false if no typosquat scanner is
+// registered.
+func (e *Engine) PreScanTyposquat(ctx context.Context, name string, ecosystem Ecosystem) (ScanResult, bool) {
+	for _, s := range e.scanners {
+		if s.Name() != "builtin-typosquat" {
+			continue
+		}
+		artifact := Artifact{
+			Name:      name,
+			Ecosystem: ecosystem,
+		}
+		result, err := s.Scan(ctx, artifact)
+		if err != nil {
+			return ScanResult{
+				Verdict:   VerdictClean,
+				ScannerID: s.Name(),
+				Error:     err,
+			}, true
+		}
+		return result, true
+	}
+	return ScanResult{}, false
+}
+
 // HealthCheck runs HealthCheck on all registered scanners and returns a map of
 // scanner name to error (nil means healthy).
 func (e *Engine) HealthCheck(ctx context.Context) map[string]error {

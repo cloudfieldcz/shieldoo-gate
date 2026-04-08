@@ -2,7 +2,7 @@
 
 > Detect and block packages with names designed to impersonate popular libraries.
 
-**Status:** Proposed
+**Status:** Implemented (v1.2)
 **Priority:** High
 **Perspective:** CISO / Security Operations
 
@@ -52,8 +52,13 @@ scanners:
 
 ### How It Fits Into the Architecture
 
-- **Scanner:** New `BuiltinTyposquatScanner` in `internal/scanner/builtin/typosquat.go`. Implements the `Scanner` interface. Runs before content-based scanners (name check is nearly instant).
-- **Database:** New `popular_packages` table (ecosystem, name, rank, download_count, last_updated). New `internal_namespaces` table or config-based list.
+- **Scanner:** `BuiltinTyposquatScanner` in `internal/scanner/builtin/typosquat.go`. Implements the `Scanner` interface.
+- **Pre-scan gate:** The typosquat check runs as a **pre-scan before contacting upstream** via `Engine.PreScanTyposquat()`. This is critical because:
+  - For PyPI downloads, a typosquat package that doesn't exist upstream would cause a 502 if the proxy tried to fetch first.
+  - For npm metadata requests (`GET /{package}`), the scan pipeline doesn't run at all — only tarball downloads trigger full scanning. The pre-scan catches typosquats at the metadata level.
+  - Blocking before upstream fetch avoids leaking internal package queries to public registries.
+- **Adapter integration:** Both PyPI and npm adapters call `PreScanTyposquat()` before any upstream request. If the verdict is `SUSPICIOUS` or `MALICIOUS`, the adapter returns HTTP 403 immediately.
+- **Database:** `popular_packages` table (ecosystem, name, rank, download_count, last_updated). Seeded from embedded data on first run.
 - **Threat Feed synergy:** Typosquat detections can be auto-submitted to the threat feed contribution portal (when implemented).
 - **Performance:** Name-based checks add < 1ms latency. The popular package list is loaded into memory at startup.
 

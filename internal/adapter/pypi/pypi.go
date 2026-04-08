@@ -231,7 +231,31 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// 2. Acquire per-artifact lock to prevent concurrent download/scan races.
+	// 2. Pre-scan for typosquatting BEFORE contacting upstream.
+	// The typosquat scanner only needs the package name — no file content.
+	// Blocking here avoids 502s for non-existent typosquat packages and
+	// prevents the proxy from fetching known-bad names.
+	if result, ok := a.scanEngine.PreScanTyposquat(ctx, pkgName, scanner.EcosystemPyPI); ok {
+		if result.Verdict == scanner.VerdictSuspicious || result.Verdict == scanner.VerdictMalicious {
+			log.Warn().Str("artifact", artifactID).Str("verdict", string(result.Verdict)).
+				Float32("confidence", result.Confidence).Msg("typosquat pre-scan: blocked before upstream fetch")
+			adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+				Error:    "blocked",
+				Artifact: artifactID,
+				Reason:   "typosquatting detected: " + result.Findings[0].Description,
+			})
+			_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+				EventType:  model.EventBlocked,
+				ArtifactID: artifactID,
+				ClientIP:   r.RemoteAddr,
+				UserAgent:  r.UserAgent(),
+				Reason:     "typosquat pre-scan: " + string(result.Verdict),
+			})
+			return
+		}
+	}
+
+	// 3. Acquire per-artifact lock to prevent concurrent download/scan races.
 	unlock := adapter.ArtifactLocker.Lock(artifactID)
 	defer unlock()
 

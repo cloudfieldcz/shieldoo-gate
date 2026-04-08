@@ -134,6 +134,20 @@ scanners:
     network_policy: "none"           # "none" (no network) or "monitor" (DNS/HTTP logging)
     max_concurrent: 2                # Max concurrent sandbox executions
 
+  typosquat:
+    enabled: true                    # Enabled by default; no external dependencies
+    top_packages_count: 5000         # Protect top N packages per ecosystem (max 10000)
+    max_edit_distance: 2             # Flag names within this Levenshtein distance (1-3)
+    internal_namespaces: []          # e.g. ["@mycompany/", "mycompany-"]
+    combosquat_suffixes:             # Suffixes to check for combosquatting
+      - "-utils"
+      - "-helper"
+      - "-lib"
+      - "-dev"
+      - "-tool"
+      - "-sdk"
+    allowlist: []                    # Package names to skip (false positive suppression)
+
 # ─── Policy ────────────────────────────────────────────────────────
 policy:
   mode: ""                             # v1.2: "strict" (default) | "balanced" | "permissive"
@@ -351,12 +365,13 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 | `DatabaseConfig` | `database` | `Backend`, `SQLite`, `Postgres` |
 | `SQLiteConfig` | `database.sqlite` | `Path` |
 | `PostgresConfig` | `database.postgres` | `DSN`, `MaxOpenConns`, `MaxIdleConns`, `ConnMaxLifetime` |
-| `ScannersConfig` | `scanners` | `Parallel`, `Timeout`, `GuardDog`, `Trivy`, `OSV`, `Sandbox`, `AI` |
+| `ScannersConfig` | `scanners` | `Parallel`, `Timeout`, `GuardDog`, `Trivy`, `OSV`, `Sandbox`, `AI`, `Typosquat` |
 | `GuardDogConfig` | `scanners.guarddog` | `Enabled`, `BridgeSocket` |
 | `TrivyConfig` | `scanners.trivy` | `Enabled`, `Binary`, `CacheDir` |
 | `OSVConfig` | `scanners.osv` | `Enabled`, `APIURL` |
 | `SandboxConfig` | `scanners.sandbox` | `Enabled`, `RuntimeBinary`, `Timeout`, `NetworkPolicy`, `MaxConcurrent` |
 | `AIConfig` | `scanners.ai` | `Enabled`, `Provider`, `Model`, `APIKeyEnv`, `Timeout`, `MaxInputTokens`, `BridgeSocket`, `AzureEndpoint`, `AzureDeployment` |
+| `TyposquatConfig` | `scanners.typosquat` | `Enabled`, `TopPackagesCount`, `MaxEditDistance`, `InternalNamespaces`, `CombosquatSuffixes`, `Allowlist` |
 | `PolicyConfig` | `policy` | `Mode`, `BlockIfVerdict`, `QuarantineIfVerdict`, `MinimumConfidence`, `AITriage`, `Allowlist`, `TagMutability` |
 | `AITriageConfig` | `policy.ai_triage` | `Enabled`, `Timeout`, `MinConfidence`, `CacheTTL`, `RateLimit`, `CircuitBreakerThreshold`, `CircuitBreakerCooldown` |
 | `TagMutabilityConfig` | `policy.tag_mutability` | `Enabled`, `Action`, `ExcludeTags`, `CheckOnCacheHit` |

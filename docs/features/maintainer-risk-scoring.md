@@ -2,7 +2,7 @@
 
 > Assess the trustworthiness of packages based on maintainer history, project health signals, and behavioral patterns — catching compromised accounts and abandoned packages before they become attack vectors.
 
-**Status:** Proposed
+**Status:** Implemented (v1.2)
 **Priority:** High
 **Perspective:** Security Operations / CISO
 
@@ -121,3 +121,33 @@ scanners:
 - **Privacy:** Maintainer profiling raises privacy considerations. Store only publicly available metadata. Do not correlate across ecosystems by personal identity.
 - **Gaming:** Sophisticated attackers may build up legitimate-looking maintainer profiles before attacking. Reputation is a signal, not a guarantee. Always combine with content analysis.
 - **API stability:** Upstream registry APIs may change. Abstract registry metadata fetching behind per-ecosystem interfaces for easy adaptation.
+
+### V2 Improvements (Implemented)
+
+All V2 improvements identified during cross-check reviews have been implemented.
+
+#### High Priority
+
+| Improvement | Rationale | Source |
+|---|---|---|
+| Rate limiter (`golang.org/x/time/rate`) | Cold-start or cache wipe triggers burst of upstream API requests. Without throttling, PyPI/npm rate limits can ban the proxy's IP. Use per-ecosystem token-bucket limiter. | Perf, Security |
+| SSRF mitigation (redirect policy, hardcoded base URLs) | Upstream metadata fetches follow HTTP redirects by default. A compromised CDN could redirect to internal addresses (AWS IMDS, internal services). Reject redirects to non-HTTPS/private IPs. | Security |
+| `singleflight` deduplication for concurrent fetches | Multiple concurrent scans of different versions of the same package trigger identical metadata fetches. Use `golang.org/x/sync/singleflight` keyed by `ecosystem:name` to deduplicate. | Perf |
+
+#### Medium Priority
+
+| Improvement | Rationale | Source |
+|---|---|---|
+| Hash maintainer emails instead of plaintext | `maintainers_json` stores raw email addresses (PII). Replace with SHA-256 hashes — sufficient for ownership-change detection without GDPR exposure. | Security |
+| Signal weight validation in config | Weights outside (0.0, 1.0] produce invalid composite scores. Add validation in `validateReputation()`. Warn if all-signals-active score exceeds malicious threshold. | Security |
+| TTL jitter to prevent thundering herd | Fixed 24h TTL causes cache entries to expire simultaneously. Add `TTL + random(0, 2h)` jitter to spread expiry across time. | Perf |
+| Lazy warm-up (async first fetch) | First scan for a new package blocks on upstream HTTP. Return CLEAN immediately, fetch metadata asynchronously, use cached result on subsequent requests. Removes reputation scanner from critical latency path. | Perf |
+
+#### Low Priority
+
+| Improvement | Rationale | Source |
+|---|---|---|
+| Prometheus metrics for cache hit/miss | Add `shieldoo_reputation_cache_hits_total`, `shieldoo_reputation_cache_misses_total`, and `shieldoo_reputation_upstream_fetch_duration_seconds` for operational visibility. | Perf |
+| DB cleanup job for stale reputation entries | `package_reputation` table grows monotonically. Add periodic cleanup for rows where `last_checked < NOW() - 30d`. Align with existing `RescanScheduler` pattern. | Perf, Security |
+| 6 additional signals from feature spec | V1 implements 8 of 13 specified signals. Deferred: first-publication-by-maintainer, publication-from-new-IP, yanked-versions, repository-mismatch, maintainer-email-domain, unusual-version-numbering. Requires `maintainer_profiles` table for some. | BA |
+| Admin UI risk score gauge | Feature spec requires "Risk score gauge on artifact detail page, with expandable signal breakdown." The scan results API already exposes findings — UI needs to render them. | BA |

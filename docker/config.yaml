@@ -105,12 +105,49 @@ scanners:
     timeout: "30s"
     network_policy: "none"
     max_concurrent: 2
+  typosquat:
+    enabled: true
+    top_packages_count: 5000
+    max_edit_distance: 2
+    internal_namespaces: []
+    combosquat_suffixes:
+      - "-utils"
+      - "-helper"
+      - "-lib"
+      - "-dev"
+      - "-tool"
+      - "-sdk"
+    allowlist: []
+  version_diff:
+    enabled: true
+    max_artifact_size_mb: 20
+    max_extracted_size_mb: 200
+    max_extracted_files: 10000
+    scanner_timeout: "10s"
+    entropy_sample_bytes: 8192
+    allowlist: []
+    thresholds:
+      code_volume_ratio: 5.0
+      max_new_files: 20
+      entropy_delta: 2.0
+    sensitive_patterns: []
+  reputation:
+    enabled: true
+    cache_ttl: "24h"
+    cache_ttl_jitter: "2h"
+    timeout: "10s"
+    rate_limit: 30
+    retention_days: 30
+    thresholds:
+      suspicious: 0.5
+      malicious: 0.8
 
 policy:
   mode: "balanced"
   block_if_verdict: "MALICIOUS"
   quarantine_if_verdict: "SUSPICIOUS"
   minimum_confidence: 0.7
+  behavioral_minimum_confidence: 0.35  # Lower threshold for behavioral scanners (guarddog, ai-scanner, etc.)
   ai_triage:
     enabled: true
     timeout: "5s"

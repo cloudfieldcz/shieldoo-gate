@@ -57,7 +57,7 @@ type Artifact struct {
 
 ## Built-in Scanners (Go-native)
 
-Six scanners are always active. They are registered in `cmd/shieldoo-gate/main.go` at startup:
+Eight scanners are available built-in (six core + typosquatting + version diff). They are registered in `cmd/shieldoo-gate/main.go` at startup:
 
 | Scanner | ID | Ecosystems | What it detects |
 |---|---|---|---|
@@ -67,18 +67,54 @@ Six scanners are always active. They are registered in `cmd/shieldoo-gate/main.g
 | **Exfil Detector** | `exfil-detector` | PyPI, npm, NuGet, Docker | Detects HTTP/DNS calls to non-registry domains during install, data exfiltration patterns |
 | **PTH Inspector** | `pth-inspector` | PyPI | Detects `.pth` files with executable code — the exact attack vector from the LiteLLM incident |
 | **Threat Feed Checker** | `builtin-threat-feed` | PyPI, npm, NuGet, Docker | Fast-path SHA-256 lookup against the local threat feed database. If a match is found, immediately returns `MALICIOUS` |
+| **Typosquat Scanner** | `builtin-typosquat` | PyPI, npm, NuGet, Docker, Maven, RubyGems, Go | Detects typosquatting, homoglyph substitution, combosquatting, and namespace confusion by checking package names against popular packages |
+| **Version Diff Scanner** | `version-diff` | PyPI, npm, NuGet, Maven, RubyGems, Go | Compares new versions against cached previous versions to detect suspicious changes (install hooks, size anomaly, high entropy, new deps) |
 
-All built-in scanners are in `internal/scanner/builtin/`:
+All built-in scanners are in `internal/scanner/builtin/` (except version-diff in `internal/scanner/versiondiff/`):
 - `hash_verifier.go`
 - `install_hook.go`
 - `obfuscation.go`
 - `exfil_detector.go`
 - `pth_inspector.go`
 - `threat_feed_checker.go`
+- `typosquat.go` + `typosquat_data.go`
 
 ### Threat Feed Checker — Special Role
 
 The threat feed checker has a special fast-path in the [aggregation logic](#scan-result-aggregation): if it returns `MALICIOUS`, the aggregator immediately returns `MALICIOUS` regardless of confidence thresholds or other scanner results. This ensures that known-malicious packages from the community feed are blocked instantly.
+
+### Typosquat Scanner — Name-Based Detection
+
+The typosquat scanner (`builtin-typosquat`) detects supply chain attacks based on package naming patterns. It loads popular package names from the `popular_packages` database table into memory at startup and checks each artifact's name using four strategies:
+
+1. **Edit distance** — Levenshtein distance against top N packages per ecosystem. Flags packages within configurable distance (default: 2).
+2. **Homoglyph detection** — NFKC normalization + confusable character mapping (`l`→`1`, `o`→`0`, etc.). Catches Unicode substitution attacks.
+3. **Combosquatting** — Detects popular names concatenated with common suffixes (`-utils`, `-helper`, `-lib`, `-dev`, `-tool`, `-sdk`).
+4. **Namespace confusion** — Flags packages matching configured internal namespace prefixes fetched from public registries.
+
+The scanner seeds the `popular_packages` table from embedded data on first run. All checks run in <1ms with no file I/O. Configuration is under `scanners.typosquat` in `config.yaml` — see the [feature documentation](features/typosquatting-detection.md) for details.
+
+### Version Diff Scanner — Cross-Version Comparison
+
+The version diff scanner (`version-diff`) compares newly downloaded package versions against previously cached versions to detect suspicious changes. It lives in `internal/scanner/versiondiff/` (separate package due to cache dependency).
+
+**Supported ecosystems:** PyPI, npm, NuGet, Maven, RubyGems, Go (not Docker — handled by Trivy).
+
+**Detection strategies:**
+
+1. **File inventory diff** — Compares file lists between old and new version. Flags when many new files are added (threshold: `max_new_files`, default 20).
+2. **Size anomaly** — Computes ratio of new total extracted size to old. Flags when ratio exceeds `code_volume_ratio` (default 5.0x).
+3. **Sensitive file changes** — Per-ecosystem list of security-sensitive files (setup.py, postinstall, .pth, etc.). New or modified install hooks are CRITICAL findings.
+4. **Entropy analysis** — Shannon entropy for added/modified files. Samples first `entropy_sample_bytes` (default 8192) bytes. High entropy (>6.0 bits/byte) in code files suggests obfuscated/packed content. Skips known binary extensions.
+5. **New dependency detection** — Parses ecosystem metadata (package.json, setup.cfg, go.mod, etc.) to find newly added dependencies.
+
+**Scoring:** Critical findings → SUSPICIOUS (0.90), High → SUSPICIOUS (0.80), Medium → SUSPICIOUS (0.60). The scanner never produces MALICIOUS verdict (heuristic-based).
+
+**Operation:** Synchronous within the scan pipeline. Large artifacts (> `max_artifact_size_mb`, default 20 MB) are skipped. A sub-timeout (`scanner_timeout`, default 10s) prevents cloud cache latency from blocking other scanners. Fail-open on any error.
+
+**Security protections:** Decompression bomb limits, path traversal rejection, symlink/hardlink rejection, SHA256 verification of cached previous version (TOCTOU protection), stale temp dir cleanup on startup.
+
+**Configuration:** Under `scanners.version_diff` in `config.yaml`. Disabled by default (opt-in). See `config.example.yaml` for all options.
 
 ## External Scanners
 

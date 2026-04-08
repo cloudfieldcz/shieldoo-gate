@@ -26,6 +26,9 @@ source "${SCRIPT_DIR}/test_gomod.sh"
 source "${SCRIPT_DIR}/test_api.sh"
 source "${SCRIPT_DIR}/test_proxy_auth.sh"
 source "${SCRIPT_DIR}/test_policy_tiers.sh"
+source "${SCRIPT_DIR}/test_typosquat.sh"
+source "${SCRIPT_DIR}/test_version_diff.sh"
+source "${SCRIPT_DIR}/test_reputation.sh"
 
 _run_label=""
 if [ "${SGW_PROXY_AUTH_ENABLED:-false}" = "true" ]; then
@@ -116,6 +119,9 @@ test_gomod
 test_api
 test_proxy_auth
 test_policy_tiers
+test_typosquat
+test_version_diff
+test_reputation
 
 # ---------------------------------------------------------------------------
 # Summary and exit code
