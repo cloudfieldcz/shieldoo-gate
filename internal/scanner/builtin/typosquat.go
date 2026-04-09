@@ -287,9 +287,13 @@ func (s *TyposquatScanner) checkNamespaceConfusion(name string) []scanner.Findin
 // --- Helper functions ---
 
 // normalizeName lowercases, applies NFKC normalization, and normalizes separators.
+// For scoped npm packages (@scope/name), it strips the "@" and replaces "/" with "-"
+// so that e.g. "@babel/core" normalizes to "babel-core" (matching the unscoped name).
 func normalizeName(name string) string {
 	name = norm.NFKC.String(name)
 	name = strings.ToLower(name)
+	name = strings.ReplaceAll(name, "@", "")
+	name = strings.ReplaceAll(name, "/", "-")
 	name = strings.ReplaceAll(name, "_", "-")
 	name = strings.ReplaceAll(name, ".", "-")
 	return name

@@ -87,7 +87,7 @@ The threat feed checker has a special fast-path in the [aggregation logic](#scan
 
 The typosquat scanner (`builtin-typosquat`) detects supply chain attacks based on package naming patterns. It loads popular package names from the `popular_packages` database table into memory at startup and checks each artifact's name using four strategies:
 
-1. **Edit distance** — Levenshtein distance against top N packages per ecosystem. Flags packages within configurable distance (default: 2).
+1. **Edit distance** — Levenshtein distance against top N packages per ecosystem. Flags packages within configurable distance (default: 2). Name normalization strips npm scoped prefixes (`@scope/name` → `scope-name`) so that e.g. `@babel/core` correctly matches popular `babel-core` instead of being flagged as a typosquat.
 2. **Homoglyph detection** — NFKC normalization + confusable character mapping (`l`→`1`, `o`→`0`, etc.). Catches Unicode substitution attacks.
 3. **Combosquatting** — Detects popular names concatenated with common suffixes (`-utils`, `-helper`, `-lib`, `-dev`, `-tool`, `-sdk`).
 4. **Namespace confusion** — Flags packages matching configured internal namespace prefixes fetched from public registries.

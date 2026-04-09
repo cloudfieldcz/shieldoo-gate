@@ -109,6 +109,26 @@ func TestTyposquatScanner_NamespaceConfusion_ReturnsSuspicious(t *testing.T) {
 	assert.Equal(t, "namespace-confusion", result.Findings[0].Category)
 }
 
+func TestTyposquatScanner_ScopedNPM_ExactMatch_ReturnsClean(t *testing.T) {
+	s := newTestScanner(t, config.TyposquatConfig{})
+	// @babel/core is the modern scoped version of babel-core (rank #27 in seed data).
+	// normalizeName must strip "@" and replace "/" with "-" so that
+	// @babel/core normalizes to "babel-core" and matches exactly.
+	result, err := s.Scan(context.Background(), scanner.Artifact{
+		ID: "npm:babel_core:7.29.0", Ecosystem: scanner.EcosystemNPM, Name: "@babel/core",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, scanner.VerdictClean, result.Verdict,
+		"@babel/core must match popular babel-core, not be flagged as typosquat")
+}
+
+func TestNormalizeName_ScopedNPM_StripsAtAndSlash(t *testing.T) {
+	assert.Equal(t, "babel-core", normalizeName("@babel/core"))
+	assert.Equal(t, "types-node", normalizeName("@types/node"))
+	assert.Equal(t, "angular-core", normalizeName("@angular/core"))
+	assert.Equal(t, "vue-reactivity", normalizeName("@vue/reactivity"))
+}
+
 func TestTyposquatScanner_UnrelatedName_ReturnsClean(t *testing.T) {
 	s := newTestScanner(t, config.TyposquatConfig{})
 	result, err := s.Scan(context.Background(), scanner.Artifact{
