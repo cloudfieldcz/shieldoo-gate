@@ -366,7 +366,7 @@ npm config set //${npmHost}/:_auth $(printf "\${USER}:\${SGW_TOKEN}" | base64)
 echo \${SGW_TOKEN} | docker login ${dockerHost} -u \${USER} --password-stdin
 
 # NuGet
-dotnet nuget add source ${nuget}/v3/index.json -n shieldoo -u \${USER} -p \${SGW_TOKEN}
+dotnet nuget add source ${nuget}/v3/index.json -n shieldoo -u \${USER} -p \${SGW_TOKEN} --store-password-in-clear-text
 
 # Go modules
 GOPROXY=${gomod.replace(/^https?:\/\//, `${scheme}://\${USER}:\${SGW_TOKEN}@`)} go get <module>
