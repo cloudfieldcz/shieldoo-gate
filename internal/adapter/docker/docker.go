@@ -614,6 +614,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 			http.Error(w, "internal error reading cached manifest", http.StatusInternalServerError)
 			return
 		}
+		log.Info().Str("artifact", artifactID).Str("client", r.RemoteAddr).Msg("docker: serving from cache")
 		w.Header().Set("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
 		w.Header().Set("X-Shieldoo-Scanned", "true")
 		w.WriteHeader(http.StatusOK)
@@ -719,7 +720,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 	}
 
 	// 7. Scan via scan engine.
-	log.Info().Str("artifact", artifactID).Msg("docker: starting scan pipeline")
+	log.Info().Str("artifact", artifactID).Str("client", r.RemoteAddr).Msg("docker: starting scan pipeline")
 	scanResults, err := a.scanEngine.ScanAll(pctx, scanArtifact)
 	if err != nil {
 		log.Error().Err(err).Str("artifact", artifactID).Msg("docker: scan engine error, failing open")

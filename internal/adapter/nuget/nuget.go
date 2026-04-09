@@ -283,6 +283,7 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 			string(scanner.EcosystemNuGet), pkgID, version, artifactID, upstreamURL, r, w) {
 			return
 		}
+		log.Info().Str("artifact", artifactID).Str("client", r.RemoteAddr).Msg("nuget: serving from cache")
 		adapter.UpdateLastAccessedAt(a.db, artifactID)
 		http.ServeFile(w, r, cachedPath)
 		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
@@ -348,6 +349,7 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 	}
 
 	// 4. Scan.
+	log.Info().Str("artifact", artifactID).Str("client", r.RemoteAddr).Msg("nuget: starting scan pipeline")
 	scanResults, _ := a.scanEngine.ScanAll(pctx, scanArtifact)
 
 	// 5. Policy.

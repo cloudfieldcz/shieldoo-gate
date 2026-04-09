@@ -253,6 +253,7 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 			string(scanner.EcosystemNPM), pkgName, version, artifactID, upstreamURL, r, w) {
 			return
 		}
+		log.Info().Str("artifact", artifactID).Str("client", r.RemoteAddr).Msg("npm: serving from cache")
 		adapter.UpdateLastAccessedAt(a.db, artifactID)
 		http.ServeFile(w, r, cachedPath)
 		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
@@ -323,6 +324,7 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 	}
 
 	// 4. Scan.
+	log.Info().Str("artifact", artifactID).Str("client", r.RemoteAddr).Msg("npm: starting scan pipeline")
 	scanResults, _ := a.scanEngine.ScanAll(pctx, scanArtifact)
 
 	// 5. Policy.

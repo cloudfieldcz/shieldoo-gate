@@ -310,6 +310,7 @@ func (a *MavenAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 			})
 			return
 		}
+		log.Info().Str("artifact", artifactID).Str("client", r.RemoteAddr).Msg("maven: serving from cache")
 		adapter.UpdateLastAccessedAt(a.db, artifactID)
 		http.ServeFile(w, r, cachedPath)
 		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
@@ -382,7 +383,7 @@ func (a *MavenAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 	}
 
 	// 5. Scan.
-	log.Info().Str("artifact", artifactID).Msg("maven: starting scan pipeline")
+	log.Info().Str("artifact", artifactID).Str("client", r.RemoteAddr).Msg("maven: starting scan pipeline")
 	scanResults, err := a.scanEngine.ScanAll(pctx, scanArtifact)
 	if err != nil {
 		log.Error().Err(err).Str("artifact", artifactID).Msg("maven: scan engine error, failing open")

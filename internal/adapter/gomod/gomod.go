@@ -318,6 +318,7 @@ func (a *GoModAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 			})
 			return
 		}
+		log.Info().Str("artifact", artifactID).Str("client", r.RemoteAddr).Msg("gomod: serving from cache")
 		adapter.UpdateLastAccessedAt(a.db, artifactID)
 		w.Header().Set("Content-Type", "application/zip")
 		http.ServeFile(w, r, cachedPath)
@@ -391,7 +392,7 @@ func (a *GoModAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 	}
 
 	// 5. Scan.
-	log.Info().Str("artifact", artifactID).Msg("gomod: starting scan pipeline")
+	log.Info().Str("artifact", artifactID).Str("client", r.RemoteAddr).Msg("gomod: starting scan pipeline")
 	scanResults, err := a.scanEngine.ScanAll(pctx, scanArtifact)
 	if err != nil {
 		log.Error().Err(err).Str("artifact", artifactID).Msg("gomod: scan engine error, failing open")
