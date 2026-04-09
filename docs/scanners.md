@@ -254,6 +254,104 @@ The AI scanner follows **fail-open semantics**: if the LLM API is unreachable, t
 | Novel obfuscation patterns | Pattern-based (may miss) | Semantic understanding |
 | Fork bomb patterns | Not detected | Detected |
 
+## Reputation Scanner (Maintainer Risk Scoring)
+
+The reputation scanner (`internal/scanner/reputation/`) evaluates package trustworthiness based on upstream registry metadata — maintainer history, publication patterns, download counts — and produces a composite risk score.
+
+| | |
+|---|---|
+| **Package** | `internal/scanner/reputation/` |
+| **ID** | `builtin-reputation` |
+| **Ecosystems** | PyPI, npm, NuGet |
+| **Communication** | Direct HTTP to upstream registry APIs |
+| **Config key** | `scanners.reputation.enabled`, `scanners.reputation.cache_ttl` |
+
+### How It Works
+
+1. When a new artifact is scanned, the reputation scanner fetches package metadata from the upstream registry (PyPI JSON API, npm Registry API, NuGet Gallery API).
+2. Metadata is cached in the `package_reputation` database table with configurable TTL (default 24h + random jitter to prevent thundering herd).
+3. The scanner evaluates 14 configurable risk signals against the metadata.
+4. Each signal has a weight (0.0–1.0). Fired signals are combined into a composite risk score using the formula: `risk = 1 - ∏(1 - weight_i × signal_i)`.
+5. The composite score is compared against configurable thresholds to produce a verdict.
+
+### Risk Signals
+
+**V1 signals (core):**
+
+| # | Signal | Weight | What it detects |
+|---|--------|--------|-----------------|
+| 1 | `package_age` | 0.3 | Package less than 30 days old |
+| 2 | `low_downloads` | 0.2 | Fewer than 100 downloads |
+| 3 | `no_source_repo` | 0.3 | No source repository linked |
+| 4 | `dormant_reactivation` | 0.7 | No update for 12+ months, then new version |
+| 5 | `few_versions` | 0.15 | Only 1 version published |
+| 6 | `no_description` | 0.1 | No package description |
+| 7 | `version_count_spike` | 0.4 | 10+ versions published in last 7 days |
+| 8 | `ownership_change` | 0.8 | Maintainer list changed recently |
+
+**V2 signals (extended):**
+
+| # | Signal | Weight | What it detects |
+|---|--------|--------|-----------------|
+| 9 | `yanked_versions` | 0.6 | Previous versions were yanked/deleted |
+| 10 | `unusual_versioning` | 0.2 | Version numbers like 99.0.0 or 0.0.1 that skip semver conventions |
+| 11 | `maintainer_email_domain` | 0.15 | All maintainer emails use free providers (gmail, outlook) |
+| 12 | `first_publication` | 0.25 | Maintainer has published only this package |
+| 13 | `repo_mismatch` | 0.4 | Source repository name doesn't match package name |
+| 14 | `classifier_anomaly` | 0.15 | Package classifiers appear inconsistent |
+
+All signal weights are configurable via `config.yaml`. Signals can be individually enabled/disabled.
+
+### Scoring
+
+The composite risk score uses a multiplicative formula that allows multiple weak signals to add up to significant risk without any single weak signal dominating:
+
+```
+risk_score = 1 - ∏(1 - weight_i × signal_i)
+```
+
+where `signal_i` is 1.0 if the signal fired, 0.0 otherwise.
+
+**Thresholds:**
+- `suspicious` (default 0.5): score >= this → `SUSPICIOUS` verdict
+- `malicious` (default 0.8): score >= this → still capped at `SUSPICIOUS` by convention (the reputation scanner never produces `MALICIOUS` — it is heuristic-based)
+
+### Hardening
+
+- **Rate limiting:** Per-ecosystem token-bucket limiter (default 30 requests/min) prevents IP bans from upstream registries.
+- **SSRF mitigation:** HTTP client rejects redirects to non-HTTPS URLs and private IP addresses. TLS 1.2+ enforced.
+- **Singleflight deduplication:** Concurrent scans of different versions of the same package share a single metadata fetch via `golang.org/x/sync/singleflight`.
+- **TTL jitter:** Random jitter (default 0–2h) added to cache TTL to prevent thundering herd on cache expiry.
+- **Stale entry cleanup:** Background goroutine deletes reputation entries older than `retention_days` (default 30) at startup.
+- **Prometheus metrics:** `shieldoo_reputation_cache_hits_total`, `shieldoo_reputation_cache_misses_total`, `shieldoo_reputation_fetch_duration_seconds`, `shieldoo_reputation_fetch_errors_total`.
+
+### Failure Handling
+
+The reputation scanner follows **fail-open semantics**: if the upstream API is unreachable, rate-limited, or times out, the scanner returns `VerdictClean` with confidence 0 and logs the error. Metadata fetch failures never block package installation.
+
+### Configuration
+
+```yaml
+scanners:
+  reputation:
+    enabled: false                      # opt-in; queries upstream APIs for each new package
+    cache_ttl: "24h"                    # cache metadata for this long before re-fetching
+    cache_ttl_jitter: "2h"             # random jitter added to TTL (prevents thundering herd)
+    timeout: "10s"                      # per-upstream-API request timeout
+    rate_limit: 30                      # max upstream API requests per minute per ecosystem
+    retention_days: 30                  # delete stale reputation entries older than this
+    thresholds:
+      suspicious: 0.5                   # score >= this → SUSPICIOUS verdict
+      malicious: 0.8                    # score >= this (capped at SUSPICIOUS)
+    signals:
+      package_age:
+        enabled: true
+        weight: 0.3
+      # ... (14 signals total, see config.example.yaml for full list)
+```
+
+See [feature documentation](features/maintainer-risk-scoring.md) for design rationale and ecosystem metadata availability matrix.
+
 ## Scan Result Aggregation
 
 After all scanners complete, the **policy aggregator** (`internal/policy/aggregator.go`) combines multiple `ScanResult` values into a single verdict. The rules, applied in priority order:
@@ -322,6 +420,9 @@ The threat feed checker scanner (`builtin-threat-feed`) performs a fast-path SHA
 | Exfil Detector | x | x | x | x | | | |
 | PTH Inspector | x | | | | | | |
 | Threat Feed Checker | x | x | x | x | | | |
+| **Typosquat Scanner** | x | x | x | x | x | x | x |
+| **Version Diff Scanner** | x | x | x | | x | x | x |
+| **Reputation Scanner** | x | x | x | | | | |
 | GuardDog (bridge) | x | x | | | | | |
 | Trivy (subprocess) | x | x | x | x | | | |
 | OSV (API) | x | x | x | | | | |
@@ -330,14 +431,13 @@ The threat feed checker scanner (`builtin-threat-feed`) performs a fast-path SHA
 
 ### Scanner Coverage Gaps
 
-With the addition of the **AI Scanner**, Maven and RubyGems now have both static AI analysis (synchronous, before serving) and dynamic sandbox analysis (asynchronous, after serving). This significantly improves coverage for these ecosystems.
+With the **Typosquat Scanner** and **Version Diff Scanner** supporting all 7 ecosystems (including Go), and the **AI Scanner** and **Sandbox** covering Maven and RubyGems, most ecosystems now have comprehensive multi-layer coverage.
 
-**Go modules remain without scanner coverage** — neither built-in, external, AI, nor sandbox scanners support the Go ecosystem. Go modules have no install-time hooks, so there is no meaningful install-time behavior to analyze. Go modules are proxied and cached but pass through without any scan.
+**Go modules** have the lightest scanner coverage — only the Typosquat Scanner (name-based), Version Diff Scanner (cross-version comparison), and policy engine apply. Go modules have no install-time hooks, so content-based and behavioral scanners have no meaningful attack surface to analyze.
 
-For Go modules, the only protection mechanisms are:
+**Docker images** are primarily covered by Trivy (CVE/misconfiguration scanning), the built-in scanners (hash, obfuscation, exfil, threat feed), the Typosquat Scanner, and tag mutability detection. Version Diff and Reputation scanners do not apply to Docker.
 
-1. **Policy engine** — manual quarantine and overrides still work
-2. **Tag mutability detection** — detects upstream digest changes
+**Reputation Scanner** currently supports PyPI, npm, and NuGet — the ecosystems whose upstream APIs expose sufficient metadata (maintainers, download counts, publication history). Maven, RubyGems, and Go have limited upstream metadata availability.
 
 ## Dynamic Sandbox Scanner (gVisor)
 

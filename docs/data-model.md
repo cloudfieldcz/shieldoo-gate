@@ -22,7 +22,12 @@ Shieldoo Gate uses **SQLite** (default, WAL mode, foreign keys enabled) or **Pos
 - `012_idx_artifacts_filters.sql` — Add indexes for artifact list filtering
 - `013_unique_active_override.sql` — Partial unique index on active overrides (prevents duplicates)
 
-**PostgreSQL** (`internal/config/migrations/postgres/`) — same 13 migrations with PostgreSQL syntax.
+- `014_triage_cache.sql` — AI triage decision cache table + audit log composite index
+- `015_popular_packages.sql` — Popular packages table for typosquat scanner
+- `016_version_diff_results.sql` — Version diff results table + composite artifact index
+- `017_package_reputation.sql` — Package reputation scores table
+
+**PostgreSQL** (`internal/config/migrations/postgres/`) — same 17 migrations with PostgreSQL syntax.
 
 SQLite PRAGMAs applied at startup:
 ```sql
@@ -97,6 +102,27 @@ PRAGMA busy_timeout=5000;
                                                   │ last_used_at     │
                                                   │ expires_at       │
                                                   └──────────────────┘
+
+┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
+│    triage_cache      │  │  popular_packages    │  │ version_diff_results │
+│──────────────────────│  │──────────────────────│  │──────────────────────│
+│ PK cache_key (TEXT)  │  │ PK (ecosystem, name) │  │ PK id (INTEGER)      │
+│ ecosystem            │  │ rank                 │  │ artifact_id          │
+│ name                 │  │ download_count       │  │ FK previous_artifact │──▶ artifacts.id
+│ version              │  │ last_updated         │  │ diff_at              │
+│ decision             │  └──────────────────────┘  │ files_added/removed  │
+│ confidence           │                            │ size_ratio           │
+│ explanation          │  ┌──────────────────────┐  │ verdict              │
+│ model_used           │  │ package_reputation   │  │ findings_json        │
+│ created_at           │  │──────────────────────│  └──────────────────────┘
+│ expires_at           │  │ PK id (INTEGER)      │
+└──────────────────────┘  │ ecosystem            │
+                          │ name                 │
+                          │ maintainers_json     │
+                          │ risk_score           │
+                          │ signals_json         │
+                          │ last_checked         │
+                          └──────────────────────┘
 ```
 
 ## Tables
@@ -349,6 +375,90 @@ API keys for proxy endpoint authentication. Keys are either per-user PATs (gener
 **Go struct:** `model.APIKey` (`internal/model/apikey.go`)
 
 **Indexes:** `idx_api_keys_owner_email ON (owner_email)`
+
+### `triage_cache`
+
+Caches AI triage decisions for balanced policy mode. When the policy engine queries the AI triage service, the result is cached here to avoid redundant LLM calls for the same artifact.
+
+| Column | Type | Description |
+|---|---|---|
+| `cache_key` | TEXT PK | Hash-based cache key (ecosystem + name + version + findings hash) |
+| `ecosystem` | TEXT NOT NULL | Package ecosystem |
+| `name` | TEXT NOT NULL | Package name |
+| `version` | TEXT NOT NULL | Package version |
+| `decision` | TEXT NOT NULL | Triage decision (`ALLOW`, `BLOCK`, `QUARANTINE`) |
+| `confidence` | REAL NOT NULL | Decision confidence 0.0 to 1.0 |
+| `explanation` | TEXT NOT NULL | LLM-generated explanation for the decision |
+| `model_used` | TEXT NOT NULL | LLM model identifier used for the triage |
+| `created_at` | TIMESTAMP NOT NULL | When the triage decision was made |
+| `expires_at` | TIMESTAMP NOT NULL | TTL expiration (default 7 days) |
+
+**Indexes:** `idx_triage_cache_expires ON (expires_at)` — for efficient expired entry cleanup
+
+### `popular_packages`
+
+Stores popular package names per ecosystem, used by the typosquat scanner for name-based attack detection. Seeded from embedded data on first run.
+
+| Column | Type | Description |
+|---|---|---|
+| `ecosystem` | TEXT NOT NULL | Package ecosystem |
+| `name` | TEXT NOT NULL | Popular package name |
+| `rank` | INTEGER NOT NULL | Popularity rank within ecosystem |
+| `download_count` | INTEGER | Download count (when available) |
+| `last_updated` | DATETIME NOT NULL | When the entry was last refreshed |
+
+**Primary Key:** `(ecosystem, name)`
+
+**Indexes:** `idx_popular_packages_ecosystem ON (ecosystem, rank)` — for efficient top-N queries
+
+### `version_diff_results`
+
+Stores the results of cross-version comparison analysis performed by the version diff scanner.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER PK AUTOINCREMENT | Result ID |
+| `artifact_id` | TEXT NOT NULL | Artifact being analyzed |
+| `previous_artifact` | TEXT NOT NULL FK | References `artifacts.id` — the previously cached version |
+| `diff_at` | DATETIME NOT NULL | When the diff was performed |
+| `files_added` | INTEGER NOT NULL | Number of new files in new version |
+| `files_removed` | INTEGER NOT NULL | Number of removed files |
+| `files_modified` | INTEGER NOT NULL | Number of modified files |
+| `size_ratio` | REAL NOT NULL | Ratio of new version size to old version size |
+| `max_entropy_delta` | REAL NOT NULL | Maximum Shannon entropy increase across files |
+| `new_dependencies` | TEXT | JSON array of newly added dependencies |
+| `sensitive_changes` | TEXT | JSON array of changed security-sensitive files |
+| `verdict` | TEXT NOT NULL | Scanner verdict (`CLEAN` or `SUSPICIOUS`) |
+| `findings_json` | TEXT NOT NULL | JSON array of `Finding` objects |
+
+**Indexes:**
+- `idx_version_diff_artifact ON (artifact_id)`
+- `idx_artifacts_eco_name_cached ON artifacts(ecosystem, name, cached_at DESC)` — composite index for efficient previous-version lookup
+
+### `package_reputation`
+
+Caches upstream registry metadata and risk scores for the reputation scanner.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER PK AUTOINCREMENT | Entry ID |
+| `ecosystem` | TEXT NOT NULL | Package ecosystem |
+| `name` | TEXT NOT NULL | Package name |
+| `maintainers_json` | TEXT | JSON array of maintainer objects |
+| `first_published` | DATETIME | When the package was first published |
+| `latest_published` | DATETIME | When the latest version was published |
+| `version_count` | INTEGER | Total number of published versions |
+| `download_count` | INTEGER | Download count (when available) |
+| `has_source_repo` | BOOLEAN NOT NULL DEFAULT 0 | Whether a source repository is linked |
+| `source_repo_url` | TEXT | URL of the source repository |
+| `description` | TEXT | Package description |
+| `risk_score` | REAL NOT NULL DEFAULT 0.0 | Composite risk score (0.0–1.0) |
+| `signals_json` | TEXT NOT NULL DEFAULT '{}' | JSON object of evaluated signal results |
+| `last_checked` | DATETIME NOT NULL | When metadata was last fetched from upstream |
+
+**Unique index:** `idx_package_reputation_eco_name ON (ecosystem, name)`
+
+Entries older than `retention_days` (default 30) are cleaned up by a background goroutine at scanner startup.
 
 ### `schema_migrations`
 

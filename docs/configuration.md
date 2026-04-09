@@ -11,7 +11,7 @@ Configuration is loaded by `internal/config/config.go` using [Viper](https://git
 ## Full Configuration Reference
 
 ```yaml
-# config.yaml — Shieldoo Gate v1.1
+# config.yaml — Shieldoo Gate v0.4
 
 # ─── Server ────────────────────────────────────────────────────────
 server:
@@ -147,6 +147,82 @@ scanners:
       - "-tool"
       - "-sdk"
     allowlist: []                    # Package names to skip (false positive suppression)
+
+  # Version diff analysis. Compares new package versions against previous cached
+  # versions to detect suspicious changes (new install hooks, size anomalies,
+  # high-entropy additions, new dependencies). Opt-in; requires cached previous versions.
+  version_diff:
+    enabled: false                      # opt-in; no value when cache is empty
+    max_artifact_size_mb: 20            # skip diff for artifacts larger than this (compressed)
+    max_extracted_size_mb: 200          # abort extraction if decompressed size exceeds this
+    max_extracted_files: 10000          # abort extraction if file count exceeds this
+    scanner_timeout: "10s"              # per-scan sub-timeout (for cloud cache latency)
+    entropy_sample_bytes: 8192          # sample first N bytes per file for entropy (0 = full file)
+    allowlist: []                       # package names to skip (false positive suppression)
+    thresholds:
+      code_volume_ratio: 5.0            # flag if new version is Nx larger
+      max_new_files: 20                 # flag if more than N new files added
+      entropy_delta: 2.0                # flag high-entropy additions
+    sensitive_patterns: []              # additional sensitive file globs (beyond built-in)
+
+  # Maintainer reputation & package risk scoring. Queries upstream registry APIs
+  # for metadata (maintainer history, publication patterns, download counts) and
+  # produces a composite risk score. Fail-open: metadata fetch errors never block.
+  reputation:
+    enabled: false                      # opt-in; queries upstream APIs for each new package
+    cache_ttl: "24h"                    # cache metadata for this long before re-fetching
+    cache_ttl_jitter: "2h"             # random jitter added to TTL (prevents thundering herd)
+    timeout: "10s"                      # per-upstream-API request timeout
+    rate_limit: 30                      # max upstream API requests per minute per ecosystem
+    retention_days: 30                  # delete stale reputation entries older than this
+    thresholds:
+      suspicious: 0.5                   # score >= this → SUSPICIOUS verdict
+      malicious: 0.8                    # score >= this (capped at SUSPICIOUS per convention)
+    signals:
+      # V1 signals
+      package_age:
+        enabled: true
+        weight: 0.3                     # packages less than 30 days old
+      low_downloads:
+        enabled: true
+        weight: 0.2                     # fewer than 100 downloads
+      no_source_repo:
+        enabled: true
+        weight: 0.3                     # no source repository linked
+      dormant_reactivation:
+        enabled: true
+        weight: 0.7                     # 12+ months inactive, then new version
+      few_versions:
+        enabled: true
+        weight: 0.15                    # only 1 version published
+      no_description:
+        enabled: true
+        weight: 0.1                     # no package description
+      version_count_spike:
+        enabled: true
+        weight: 0.4                     # 10+ versions in 7 days
+      ownership_change:
+        enabled: true
+        weight: 0.8                     # maintainer list changed recently
+      # V2 signals
+      yanked_versions:
+        enabled: true
+        weight: 0.6                     # previous versions were yanked/deleted
+      unusual_versioning:
+        enabled: true
+        weight: 0.2                     # version numbers like 99.0.0 or 0.0.1
+      maintainer_email_domain:
+        enabled: true
+        weight: 0.15                    # all maintainer emails use free providers
+      first_publication:
+        enabled: true
+        weight: 0.25                    # maintainer has published only this package
+      repo_mismatch:
+        enabled: false                  # source repo name doesn't match package (requires tuning)
+        weight: 0.4
+      classifier_anomaly:
+        enabled: false                  # package classifiers appear inconsistent (requires tuning)
+        weight: 0.15
 
 # ─── Policy ────────────────────────────────────────────────────────
 policy:

@@ -145,9 +145,9 @@ All V2 improvements identified during cross-check reviews have been implemented.
 
 #### Low Priority
 
-| Improvement | Rationale | Source |
+| Improvement | Rationale | Status |
 |---|---|---|
-| Prometheus metrics for cache hit/miss | Add `shieldoo_reputation_cache_hits_total`, `shieldoo_reputation_cache_misses_total`, and `shieldoo_reputation_upstream_fetch_duration_seconds` for operational visibility. | Perf |
-| DB cleanup job for stale reputation entries | `package_reputation` table grows monotonically. Add periodic cleanup for rows where `last_checked < NOW() - 30d`. Align with existing `RescanScheduler` pattern. | Perf, Security |
-| 6 additional signals from feature spec | V1 implements 8 of 13 specified signals. Deferred: first-publication-by-maintainer, publication-from-new-IP, yanked-versions, repository-mismatch, maintainer-email-domain, unusual-version-numbering. Requires `maintainer_profiles` table for some. | BA |
-| Admin UI risk score gauge | Feature spec requires "Risk score gauge on artifact detail page, with expandable signal breakdown." The scan results API already exposes findings — UI needs to render them. | BA |
+| Prometheus metrics for cache hit/miss | `shieldoo_reputation_cache_hits_total`, `shieldoo_reputation_cache_misses_total`, `shieldoo_reputation_fetch_duration_seconds`, `shieldoo_reputation_fetch_errors_total`. | **Implemented** |
+| DB cleanup job for stale reputation entries | Background goroutine at scanner startup deletes rows where `last_checked` > `retention_days` (default 30). | **Implemented** |
+| 6 additional V2 signals | All 14 signals implemented: yanked_versions, unusual_versioning, maintainer_email_domain, first_publication, repo_mismatch, classifier_anomaly. See `internal/scanner/reputation/signals.go`. | **Implemented** |
+| Admin UI risk score gauge | Feature spec requires "Risk score gauge on artifact detail page, with expandable signal breakdown." The scan results API already exposes findings — UI needs to render them. | Planned |
