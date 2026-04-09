@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"regexp"
 	"sync"
@@ -25,6 +26,22 @@ var globalAlerter atomic.Pointer[alert.Alerter]
 
 // globalAsyncScanner holds the package-level async scanner (e.g. sandbox) set during initialization.
 var globalAsyncScanner atomic.Pointer[scanner.AsyncScanner]
+
+// NewProxyHTTPClient returns an *http.Client with connection pooling tuned for
+// high-concurrency upstream proxying. All adapters should use this instead of
+// creating bare http.Client instances.
+func NewProxyHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			DialContext:         (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+			MaxIdleConns:        128,
+			MaxIdleConnsPerHost: 64,
+			MaxConnsPerHost:     64,
+			IdleConnTimeout:     90 * time.Second,
+		},
+	}
+}
 
 // SetAlerter stores the alerter for use by WriteAuditLog and DispatchAlert.
 func SetAlerter(a alert.Alerter) {

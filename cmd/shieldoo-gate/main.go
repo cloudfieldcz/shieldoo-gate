@@ -207,8 +207,8 @@ func main() {
 
 	// Init scanner engine
 	scanTimeout := parseDuration(cfg.Scanners.Timeout, 30*time.Second)
-	scanEngine := scanner.NewEngine(scanners, scanTimeout, 8)
-	log.Info().Int("scanner_count", len(scanners)).Int64("max_concurrent_scans", 8).Msg("scanner engine initialized")
+	scanEngine := scanner.NewEngine(scanners, scanTimeout, 32)
+	log.Info().Int("scanner_count", len(scanners)).Int64("max_concurrent_scans", 32).Msg("scanner engine initialized")
 
 	// Optional: Sandbox scanner (async, runs outside the synchronous scan path)
 	var sandboxScanner *sandboxscanner.SandboxScanner

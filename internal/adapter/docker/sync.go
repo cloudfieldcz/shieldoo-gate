@@ -54,7 +54,7 @@ func NewSyncService(
 	if err != nil {
 		rescanInterval = 24 * time.Hour
 	}
-	httpClient := &http.Client{Timeout: 10 * time.Minute}
+	httpClient := adapter.NewProxyHTTPClient(10 * time.Minute)
 	return &SyncService{
 		db:             db,
 		cache:          cacheStore,

@@ -59,7 +59,7 @@ func NewDockerAdapter(
 	policyEngine *policy.Engine,
 	cfg config.DockerUpstreamConfig,
 ) *DockerAdapter {
-	httpClient := &http.Client{Timeout: 10 * time.Minute}
+	httpClient := adapter.NewProxyHTTPClient(10 * time.Minute)
 	a := &DockerAdapter{
 		db:         db,
 		cache:      cacheStore,
@@ -89,7 +89,7 @@ func NewDockerAdapterWithPush(
 	cfg config.DockerUpstreamConfig,
 	blobStore *BlobStore,
 ) *DockerAdapter {
-	httpClient := &http.Client{Timeout: 10 * time.Minute}
+	httpClient := adapter.NewProxyHTTPClient(10 * time.Minute)
 	a := &DockerAdapter{
 		db:         db,
 		cache:      cacheStore,

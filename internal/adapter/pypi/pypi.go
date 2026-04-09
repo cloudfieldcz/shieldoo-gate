@@ -57,7 +57,7 @@ func NewPyPIAdapter(
 		policyEngine:     policyEngine,
 		upstreamURL:      strings.TrimRight(upstreamURL, "/"),
 		filesHost:        pypiFilesHost,
-		httpClient:        &http.Client{Timeout: 5 * time.Minute},
+		httpClient:        adapter.NewProxyHTTPClient(5 * time.Minute),
 		tagMutabilityCfg: tagMutabilityCfg,
 	}
 	a.router = a.buildRouter()

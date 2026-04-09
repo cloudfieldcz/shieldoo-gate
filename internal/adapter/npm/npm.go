@@ -54,7 +54,7 @@ func NewNPMAdapter(
 		scanEngine:       scanEngine,
 		policyEngine:     policyEngine,
 		upstreamURL:      strings.TrimRight(upstreamURL, "/"),
-		httpClient:        &http.Client{Timeout: 5 * time.Minute},
+		httpClient:        adapter.NewProxyHTTPClient(5 * time.Minute),
 		tagMutabilityCfg: tagMutabilityCfg,
 	}
 	a.router = a.buildRouter()

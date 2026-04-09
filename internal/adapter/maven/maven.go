@@ -75,7 +75,7 @@ func NewMavenAdapter(
 		scanEngine:   scanEngine,
 		policyEngine: policyEngine,
 		upstream:     strings.TrimRight(upstream, "/"),
-		httpClient:   &http.Client{Timeout: 5 * time.Minute},
+		httpClient:   adapter.NewProxyHTTPClient(5 * time.Minute),
 	}
 	a.router = a.buildRouter()
 	return a
