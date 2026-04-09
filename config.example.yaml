@@ -247,7 +247,7 @@ public_urls:
 
 log:
   level: "info"
-  format: "json"
+  format: "text"    # "text" for human-readable, "json" for structured logging
 
 # OIDC authentication for admin API (opt-in, disabled by default).
 # When disabled, the admin API is fully open — suitable for development/testing.

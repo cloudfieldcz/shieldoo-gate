@@ -1,0 +1,121 @@
+# Shieldoo Gate — Example production configuration
+# Secrets are injected via environment variables (see .env)
+
+server:
+  host: "0.0.0.0"
+
+ports:
+  pypi: 5000
+  npm: 4873
+  nuget: 5001
+  docker: 5002
+  maven: 8085
+  rubygems: 8086
+  gomod: 8087
+  admin: 8080
+
+upstreams:
+  pypi: "https://pypi.org"
+  npm: "https://registry.npmjs.org"
+  nuget: "https://api.nuget.org"
+  maven: "https://repo1.maven.org/maven2"
+  rubygems: "https://rubygems.org"
+  gomod: "https://proxy.golang.org"
+  docker:
+    default_registry: "https://registry-1.docker.io"
+    allowed_registries:
+      - host: "ghcr.io"
+        url: "https://ghcr.io"
+      - host: "quay.io"
+        url: "https://quay.io"
+    sync:
+      enabled: false
+    push:
+      enabled: false
+
+cache:
+  backend: "local"
+  local:
+    path: "/var/cache/shieldoo-gate"
+    max_size_gb: 50
+  ttl:
+    pypi: "168h"
+    npm: "168h"
+    nuget: "168h"
+    docker: "720h"
+
+database:
+  backend: "postgres"
+  postgres:
+    dsn: ""
+    max_open_conns: 25
+    max_idle_conns: 5
+    conn_max_lifetime: "5m"
+
+scanners:
+  parallel: true
+  timeout: "60s"
+  guarddog:
+    enabled: true
+    bridge_socket: "/tmp/shieldoo-bridge.sock"
+  trivy:
+    enabled: true
+    binary: "trivy"
+    cache_dir: "/var/cache/trivy"
+  osv:
+    enabled: true
+    api_url: "https://api.osv.dev"
+  sandbox:
+    enabled: false
+
+policy:
+  mode: "balanced"
+  block_if_verdict: "MALICIOUS"
+  quarantine_if_verdict: "SUSPICIOUS"
+  minimum_confidence: 0.7
+  ai_triage:
+    enabled: true
+    timeout: "5s"
+    min_confidence: 0.7
+    cache_ttl: "168h"
+    rate_limit: 10
+    circuit_breaker_threshold: 5
+    circuit_breaker_cooldown: "60s"
+  allowlist: []
+  tag_mutability:
+    enabled: true
+    action: "block"
+    exclude_tags: ["latest", "nightly", "dev"]
+    check_on_cache_hit: false
+
+threat_feed:
+  enabled: true
+  url: "https://feed.shieldoo.io/malicious-packages.json"
+  refresh_interval: "1h"
+
+rescan:
+  enabled: true
+  interval: "6h"
+  batch_size: 100
+  max_concurrent: 5
+
+public_urls:
+  # Public-facing URLs for each ecosystem proxy, displayed in the admin UI.
+  # Override via env vars: SGW_PUBLIC_URLS_PYPI, SGW_PUBLIC_URLS_NPM, etc.
+  pypi: ""
+  npm: ""
+  nuget: ""
+  docker: ""
+  maven: ""
+  rubygems: ""
+  gomod: ""
+
+log:
+  level: "info"
+  format: "text"
+
+auth:
+  enabled: false
+
+proxy_auth:
+  enabled: false

@@ -80,7 +80,10 @@ func main() {
 		logWriter = io.MultiWriter(os.Stderr, f)
 	}
 	if cfg.Log.Format == "text" {
-		log.Logger = log.Output(zerolog.ConsoleWriter{Out: logWriter})
+		log.Logger = log.Output(zerolog.ConsoleWriter{
+			Out:        logWriter,
+			TimeFormat: "2006-01-02 15:04:05",
+		})
 	} else {
 		log.Logger = log.Output(logWriter)
 	}

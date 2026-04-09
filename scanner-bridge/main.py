@@ -12,7 +12,11 @@ import grpc
 import proto.scanner_pb2 as scanner_pb2
 import proto.scanner_pb2_grpc as scanner_pb2_grpc
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-5s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 logger = logging.getLogger(__name__)
 
 GUARDDOG_VERSION = "2.9.0"

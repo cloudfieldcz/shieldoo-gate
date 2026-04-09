@@ -177,7 +177,7 @@ rescan:
 
 log:
   level: "debug"
-  format: "json"
+  format: "text"
 
 # OIDC authentication for admin API (opt-in, disabled by default).
 # When disabled, the admin API is fully open — suitable for development/testing.
