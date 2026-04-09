@@ -145,10 +145,13 @@ func sensitiveFileChanges(ecosystem scanner.Ecosystem, modified, added []string,
 			matched, _ := filepath.Match(pattern, base)
 			if matched {
 				changed = append(changed, f)
-				// New install hook is critical; other sensitive file changes are high
+				// Install hooks are critical; MSBuild metadata is medium
+				// (standard in NuGet packages); other sensitive files are high.
 				sev := scanner.SeverityHigh
 				if isInstallHook(ecosystem, base) {
 					sev = scanner.SeverityCritical
+				} else if isMSBuildMetadata(ecosystem, base) {
+					sev = scanner.SeverityMedium
 				}
 				findings = append(findings, scanner.Finding{
 					Severity:    sev,
@@ -161,6 +164,17 @@ func sensitiveFileChanges(ecosystem scanner.Ecosystem, modified, added []string,
 		}
 	}
 	return
+}
+
+// isMSBuildMetadata returns true if the file is a standard NuGet MSBuild metadata file
+// (.targets, .props). These are present in virtually every NuGet package and change
+// between versions as a matter of course — they are NOT executable install hooks.
+func isMSBuildMetadata(ecosystem scanner.Ecosystem, base string) bool {
+	if ecosystem != scanner.EcosystemNuGet {
+		return false
+	}
+	lower := strings.ToLower(base)
+	return strings.HasSuffix(lower, ".targets") || strings.HasSuffix(lower, ".props")
 }
 
 // isInstallHook returns true if the filename is an install-time hook for the ecosystem.

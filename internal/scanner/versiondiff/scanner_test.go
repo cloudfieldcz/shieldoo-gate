@@ -202,6 +202,39 @@ func TestSensitiveFileChanges_NPM_PostInstall_ReturnsCritical(t *testing.T) {
 	assert.Equal(t, scanner.SeverityCritical, findings[0].Severity)
 }
 
+func TestSensitiveFileChanges_NuGet_TargetsFile_ReturnsMedium(t *testing.T) {
+	modified := []string{}
+	added := []string{"buildTransitive/net6.0/System.Text.Json.targets"}
+	changed, findings := sensitiveFileChanges(scanner.EcosystemNuGet, modified, added, nil)
+
+	assert.Contains(t, changed, "buildTransitive/net6.0/System.Text.Json.targets")
+	require.NotEmpty(t, findings)
+	assert.Equal(t, scanner.SeverityMedium, findings[0].Severity,
+		".targets files are standard MSBuild metadata, not executable hooks — should be MEDIUM, not HIGH")
+}
+
+func TestSensitiveFileChanges_NuGet_PropsFile_ReturnsMedium(t *testing.T) {
+	modified := []string{"build/Foo.props"}
+	added := []string{}
+	changed, findings := sensitiveFileChanges(scanner.EcosystemNuGet, modified, added, nil)
+
+	assert.Contains(t, changed, "build/Foo.props")
+	require.NotEmpty(t, findings)
+	assert.Equal(t, scanner.SeverityMedium, findings[0].Severity,
+		".props files are standard MSBuild metadata, not executable hooks — should be MEDIUM, not HIGH")
+}
+
+func TestSensitiveFileChanges_NuGet_InstallPs1_ReturnsCritical(t *testing.T) {
+	modified := []string{}
+	added := []string{"tools/install.ps1"}
+	changed, findings := sensitiveFileChanges(scanner.EcosystemNuGet, modified, added, nil)
+
+	assert.Contains(t, changed, "tools/install.ps1")
+	require.NotEmpty(t, findings)
+	assert.Equal(t, scanner.SeverityCritical, findings[0].Severity,
+		"install.ps1 is a PowerShell install hook — must stay CRITICAL")
+}
+
 func TestShannonEntropy_HighEntropy_ReturnsAbove6(t *testing.T) {
 	// Random data has high entropy (~8 bits/byte)
 	data := make([]byte, 1024)
