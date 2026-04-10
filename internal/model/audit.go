@@ -15,6 +15,8 @@ const (
 	EventTagMutated      EventType = "TAG_MUTATED"
 	EventRescanQueued       EventType = "RESCAN_QUEUED"
 	EventAllowedWithWarning EventType = "ALLOWED_WITH_WARNING"
+	EventIntegrityViolation EventType = "INTEGRITY_VIOLATION"
+	EventArtifactDeleted    EventType = "ARTIFACT_DELETED"
 )
 
 type AuditEntry struct {

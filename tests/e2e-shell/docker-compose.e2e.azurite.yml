@@ -64,5 +64,6 @@ services:
   test-runner:
     environment:
       SGW_CACHE_BACKEND: "azure_blob"
+      SGW_DATABASE_BACKEND: "postgres"
       # Policy mode (test-runner needs to know current mode for adaptive assertions)
       SGW_POLICY_MODE: "permissive"

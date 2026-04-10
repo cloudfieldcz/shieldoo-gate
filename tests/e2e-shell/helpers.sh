@@ -224,3 +224,22 @@ print_summary() {
     fi
     return 0
 }
+
+# ---------------------------------------------------------------------------
+# Database access (for integrity e2e tests)
+# ---------------------------------------------------------------------------
+# db_exec runs SQL against the test database.
+# Only works in PostgreSQL passes (Run 2/3). Returns 1 in SQLite passes.
+db_exec() {
+    local sql="$1"
+    if [ "${SGW_DATABASE_BACKEND:-sqlite}" = "postgres" ]; then
+        PGPASSWORD=shieldoo_e2e_pass psql -h postgres -U shieldoo -d shieldoo_e2e -tAc "$sql" 2>/dev/null
+    else
+        return 1
+    fi
+}
+
+# db_available returns 0 if the test-runner can manipulate the DB directly.
+db_available() {
+    [ "${SGW_DATABASE_BACKEND:-sqlite}" = "postgres" ] && db_exec "SELECT 1" >/dev/null 2>&1
+}

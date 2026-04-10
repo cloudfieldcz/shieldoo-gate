@@ -122,6 +122,7 @@ func (s *Server) Routes() chi.Router {
 			r.Post("/artifacts/{id}/quarantine", s.handleQuarantineArtifact)
 			r.Post("/artifacts/{id}/release", s.handleReleaseArtifact)
 			r.Post("/artifacts/{id}/override", s.handleCreateArtifactOverride)
+			r.Delete("/artifacts/{id}", s.handleDeleteArtifact)
 
 			// Audit log
 			r.Get("/audit", s.handleListAudit)

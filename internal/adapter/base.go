@@ -2,11 +2,15 @@ package adapter
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"os"
 	"regexp"
 	"sync"
 	"sync/atomic"
@@ -308,6 +312,97 @@ func InsertArtifact(db *config.GateDB, artifactID string, artifact model.Artifac
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("adapter: committing artifact insert for %s: %w", artifactID, err)
+	}
+	return nil
+}
+
+// ComputeSHA256 returns the hex-encoded SHA256 hash of the file at the given path.
+func ComputeSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("integrity: opening file %s: %w", path, err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", fmt.Errorf("integrity: reading file %s: %w", path, err)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// VerifyCacheIntegrity verifies that the cached file at localPath matches
+// the SHA256 stored in the artifacts table. FAIL-CLOSED: returns error on
+// any failure (DB error, IO error, mismatch). On SHA256 mismatch, the
+// artifact is automatically quarantined and an INTEGRITY_VIOLATION audit
+// event is written.
+func VerifyCacheIntegrity(db *config.GateDB, artifactID, localPath string) error {
+	var dbSHA256 string
+	err := db.Get(&dbSHA256, `SELECT sha256 FROM artifacts WHERE id = ?`, artifactID)
+	if err != nil {
+		return fmt.Errorf("integrity: reading SHA256 for %s: %w", artifactID, err)
+	}
+
+	fileSHA256, err := ComputeSHA256(localPath)
+	if err != nil {
+		return fmt.Errorf("integrity: computing SHA256 for %s: %w", artifactID, err)
+	}
+
+	if dbSHA256 != fileSHA256 {
+		reason := fmt.Sprintf("INTEGRITY VIOLATION: cached file SHA256 mismatch (expected=%s, got=%s)", dbSHA256, fileSHA256)
+		now := time.Now().UTC()
+		if _, qErr := db.Exec(
+			`UPDATE artifact_status SET status = ?, quarantine_reason = ?, quarantined_at = ? WHERE artifact_id = ?`,
+			string(model.StatusQuarantined), reason, now, artifactID,
+		); qErr != nil {
+			log.Error().Err(qErr).Str("artifact", artifactID).Msg("CRITICAL: failed to quarantine after integrity violation")
+		}
+		if aErr := WriteAuditLog(db, model.AuditEntry{
+			EventType:    model.EventIntegrityViolation,
+			ArtifactID:   artifactID,
+			Reason:       reason,
+			MetadataJSON: fmt.Sprintf(`{"expected_sha256":%q,"actual_sha256":%q,"source":"cache"}`, dbSHA256, fileSHA256),
+		}); aErr != nil {
+			log.Error().Err(aErr).Str("artifact", artifactID).Msg("CRITICAL: failed to write integrity violation audit log")
+		}
+		return fmt.Errorf("%s", reason)
+	}
+	return nil
+}
+
+// VerifyUpstreamIntegrity checks whether a newly downloaded artifact's SHA256
+// matches a previously recorded SHA256 in the DB. If the artifact is unknown
+// (no DB record), returns nil — this is a first download. On mismatch, the
+// artifact is quarantined and an INTEGRITY_VIOLATION event is written.
+// FAIL-CLOSED: DB errors return an error (do not serve).
+func VerifyUpstreamIntegrity(db *config.GateDB, artifactID, newSHA256 string) error {
+	var existingSHA256 string
+	err := db.Get(&existingSHA256, `SELECT sha256 FROM artifacts WHERE id = ?`, artifactID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			// No prior record — first download, nothing to compare.
+			return nil
+		}
+		return fmt.Errorf("integrity: reading SHA256 for %s: %w", artifactID, err)
+	}
+
+	if existingSHA256 != newSHA256 {
+		reason := fmt.Sprintf("INTEGRITY VIOLATION: upstream content changed (known=%s, downloaded=%s)", existingSHA256, newSHA256)
+		now := time.Now().UTC()
+		if _, qErr := db.Exec(
+			`UPDATE artifact_status SET status = ?, quarantine_reason = ?, quarantined_at = ? WHERE artifact_id = ?`,
+			string(model.StatusQuarantined), reason, now, artifactID,
+		); qErr != nil {
+			log.Error().Err(qErr).Str("artifact", artifactID).Msg("CRITICAL: failed to quarantine after upstream integrity violation")
+		}
+		if aErr := WriteAuditLog(db, model.AuditEntry{
+			EventType:    model.EventIntegrityViolation,
+			ArtifactID:   artifactID,
+			Reason:       reason,
+			MetadataJSON: fmt.Sprintf(`{"known_sha256":%q,"upstream_sha256":%q,"source":"upstream"}`, existingSHA256, newSHA256),
+		}); aErr != nil {
+			log.Error().Err(aErr).Str("artifact", artifactID).Msg("CRITICAL: failed to write upstream integrity violation audit log")
+		}
+		return fmt.Errorf("%s", reason)
 	}
 	return nil
 }

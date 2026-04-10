@@ -29,6 +29,7 @@ source "${SCRIPT_DIR}/test_policy_tiers.sh"
 source "${SCRIPT_DIR}/test_typosquat.sh"
 source "${SCRIPT_DIR}/test_version_diff.sh"
 source "${SCRIPT_DIR}/test_reputation.sh"
+source "${SCRIPT_DIR}/test_integrity.sh"
 
 _run_label=""
 if [ "${SGW_PROXY_AUTH_ENABLED:-false}" = "true" ]; then
@@ -122,6 +123,7 @@ test_policy_tiers
 test_typosquat
 test_version_diff
 test_reputation
+test_integrity
 
 # ---------------------------------------------------------------------------
 # Summary and exit code

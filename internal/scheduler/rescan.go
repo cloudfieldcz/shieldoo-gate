@@ -205,7 +205,15 @@ func (s *RescanScheduler) rescanArtifact(ctx context.Context, art artifactRow) {
 		return
 	}
 
-	// 2. Build scanner.Artifact.
+	// 2. SHA256 integrity verification — FAIL-CLOSED.
+	// If the cached file has been tampered with, quarantine immediately.
+	if err := adapter.VerifyCacheIntegrity(s.db, art.ID, localPath); err != nil {
+		log.Error().Err(err).Str("artifact", art.ID).Msg("SECURITY: rescan integrity violation — cached file tampered")
+		// VerifyCacheIntegrity already quarantined the artifact and wrote audit log.
+		return
+	}
+
+	// 3. Build scanner.Artifact.
 	scanArtifact := scanner.Artifact{
 		ID:          art.ID,
 		Ecosystem:   scanner.Ecosystem(art.Ecosystem),

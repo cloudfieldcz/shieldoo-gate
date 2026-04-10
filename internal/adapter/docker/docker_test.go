@@ -1,6 +1,8 @@
 package docker_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -121,12 +123,16 @@ func TestDockerAdapter_Manifest_CachedClean_ServesFromCache(t *testing.T) {
 	require.NoError(t, os.WriteFile(tmpFile, []byte(manifestContent), 0644))
 	require.NoError(t, cacheStore.Put(nil, art, tmpFile))
 
+	// Compute real SHA256 of manifest content for integrity verification.
+	manifestSHA := sha256.Sum256([]byte(manifestContent))
+	manifestSHAHex := hex.EncodeToString(manifestSHA[:])
+
 	now := time.Now().UTC()
 	_, err := db.Exec(
 		`INSERT INTO artifacts (id, ecosystem, name, version, upstream_url, sha256, size_bytes, cached_at, last_accessed_at, storage_path)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		artifactID, "docker", "library/alpine", "3.20", "https://registry-1.docker.io/v2/library/alpine/manifests/3.20",
-		"abc123", len(manifestContent), now, now, tmpFile,
+		manifestSHAHex, len(manifestContent), now, now, tmpFile,
 	)
 	require.NoError(t, err)
 	_, err = db.Exec(

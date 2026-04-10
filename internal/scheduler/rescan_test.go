@@ -2,6 +2,8 @@ package scheduler
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -29,13 +31,20 @@ func setupTestDB(t *testing.T) *config.GateDB {
 }
 
 // insertTestArtifact inserts a test artifact and status into the database.
+// sha256 should match the actual file content that the stub cache returns.
 func insertTestArtifact(t *testing.T, db *config.GateDB, id, ecosystem, name, version string, status model.Status, rescanDueAt *time.Time) {
+	t.Helper()
+	insertTestArtifactWithSHA(t, db, id, ecosystem, name, version, status, rescanDueAt, testContentSHA256)
+}
+
+// insertTestArtifactWithSHA inserts a test artifact with a specific SHA256.
+func insertTestArtifactWithSHA(t *testing.T, db *config.GateDB, id, ecosystem, name, version string, status model.Status, rescanDueAt *time.Time, sha256 string) {
 	t.Helper()
 	now := time.Now().UTC()
 	_, err := db.Exec(
 		`INSERT INTO artifacts (id, ecosystem, name, version, upstream_url, sha256, size_bytes, cached_at, last_accessed_at, storage_path)
-		 VALUES (?, ?, ?, ?, '', 'abc123', 100, ?, ?, '')`,
-		id, ecosystem, name, version, now, now,
+		 VALUES (?, ?, ?, ?, '', ?, 100, ?, ?, '')`,
+		id, ecosystem, name, version, sha256, now, now,
 	)
 	require.NoError(t, err)
 
@@ -102,12 +111,22 @@ func (s *stubScanner) Scan(_ context.Context, _ scanner.Artifact) (scanner.ScanR
 }
 func (s *stubScanner) HealthCheck(_ context.Context) error { return nil }
 
+// testContent is the fixed content written by createTempFile.
+const testContent = "test artifact content"
+
+// testContentSHA256 is the SHA256 hex digest of testContent.
+// Must match createTempFile content for VerifyCacheIntegrity to pass.
+var testContentSHA256 = func() string {
+	h := sha256.Sum256([]byte(testContent))
+	return hex.EncodeToString(h[:])
+}()
+
 // createTempFile creates a temporary file for the test and returns its path.
 func createTempFile(t *testing.T) string {
 	t.Helper()
 	f, err := os.CreateTemp("", "rescan-test-*.tmp")
 	require.NoError(t, err)
-	_, _ = f.WriteString("test artifact content")
+	_, _ = f.WriteString(testContent)
 	f.Close()
 	t.Cleanup(func() { os.Remove(f.Name()) })
 	return f.Name()

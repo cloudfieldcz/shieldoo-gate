@@ -145,6 +145,12 @@ scanners:
       suspicious: 0.8               # higher threshold in E2E to avoid false positives
       malicious: 0.95               # from limited NuGet metadata (pagination inflates scores)
 
+rescan:
+  enabled: true
+  interval: "5s"
+  batch_size: 10
+  max_concurrent: 2
+
 policy:
   # mode is overridden via SGW_POLICY_MODE env var per E2E pass
   mode: "strict"

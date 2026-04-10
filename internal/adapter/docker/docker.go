@@ -533,6 +533,8 @@ func (a *DockerAdapter) serveInternalManifest(w http.ResponseWriter, r *http.Req
 	}
 
 	// Fetch manifest from BlobStore.
+	// Note: BlobStore is content-addressable (digest-keyed), so integrity
+	// is inherent — the digest IS the content hash. No separate SHA256 check needed.
 	manifestBytes, err := a.pushHandler.blobStore.Get(tag.ManifestDigest)
 	if err != nil {
 		log.Debug().Err(err).Str("digest", tag.ManifestDigest).Msg("docker: internal manifest not in blobstore, falling through")
@@ -606,6 +608,16 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 			})
 			return
 		}
+		// SHA256 integrity verification — FAIL-CLOSED.
+		if err := adapter.VerifyCacheIntegrity(a.db, artifactID, cachedPath); err != nil {
+			log.Error().Err(err).Str("artifact", artifactID).Msg("SECURITY: cache integrity violation")
+			adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+				Error:    "integrity_violation",
+				Artifact: artifactID,
+				Reason:   "cached artifact integrity check failed",
+			})
+			return
+		}
 		// Serve cached manifest.
 		adapter.UpdateLastAccessedAt(a.db, artifactID)
 		manifestBytes, err := os.ReadFile(cachedPath)
@@ -653,6 +665,16 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 				Error:    "quarantined",
 				Artifact: artifactID,
 				Reason:   status.QuarantineReason,
+			})
+			return
+		}
+		// SHA256 integrity verification on race-condition cache hit.
+		if err := adapter.VerifyCacheIntegrity(a.db, artifactID, cachedPath); err != nil {
+			log.Error().Err(err).Str("artifact", artifactID).Msg("SECURITY: cache integrity violation (post-lock)")
+			adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+				Error:    "integrity_violation",
+				Artifact: artifactID,
+				Reason:   "cached artifact integrity check failed",
 			})
 			return
 		}
@@ -705,6 +727,17 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 	// Compute SHA256 of manifest for the artifact record.
 	manifestHash := sha256.Sum256(manifestBytes)
 	manifestSHA := hex.EncodeToString(manifestHash[:])
+
+	// Upstream integrity check — detect content mutation for known artifacts.
+	if err := adapter.VerifyUpstreamIntegrity(a.db, artifactID, manifestSHA); err != nil {
+		log.Error().Err(err).Str("artifact", artifactID).Msg("SECURITY: upstream content mutation detected")
+		adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+			Error:    "integrity_violation",
+			Artifact: artifactID,
+			Reason:   "upstream content changed since last scan — artifact quarantined, admin must delete and re-approve",
+		})
+		return
+	}
 
 	// 6. Build scanner.Artifact (point at tarball for scanning).
 	// IMPORTANT: Name is set to safeName (not imagePath) so model.Artifact.ID() matches artifactID.

@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { artifactsApi } from '../api/client'
 import StatusBadge from './StatusBadge'
 import ScanResultCard from './ScanResultCard'
-import { X, RefreshCw, ShieldX, ShieldCheck } from 'lucide-react'
+import { X, RefreshCw, ShieldX, ShieldCheck, Trash2 } from 'lucide-react'
 import { formatBytes } from '../utils/format'
 
 interface ArtifactDetailByIdProps {
@@ -23,6 +23,7 @@ type ArtifactDetailPanelProps = ArtifactDetailByIdProps | ArtifactDetailBySearch
 export default function ArtifactDetailPanel({ artifactId, search, onClose }: ArtifactDetailPanelProps) {
   const qc = useQueryClient()
   const [showScanHistory, setShowScanHistory] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   // When search props are provided, resolve the real artifact ID via list API.
   const searchQuery = useQuery({
@@ -62,6 +63,15 @@ export default function ArtifactDetailPanel({ artifactId, search, onClose }: Art
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['artifacts'] })
       void qc.invalidateQueries({ queryKey: ['artifact-detail', resolvedId] })
+    },
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => artifactsApi.delete(id),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['artifacts'] })
+      setConfirmDelete(false)
+      onClose()
     },
   })
 
@@ -212,6 +222,33 @@ export default function ArtifactDetailPanel({ artifactId, search, onClose }: Art
               <ShieldCheck className="w-3.5 h-3.5" />
               Release
             </button>
+          )}
+
+          {!confirmDelete ? (
+            <button
+              onClick={() => setConfirmDelete(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-red-300 text-red-700 hover:bg-red-50 ml-auto"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Delete
+            </button>
+          ) : (
+            <div className="flex items-center gap-2 ml-auto">
+              <span className="text-xs text-red-600">Confirm?</span>
+              <button
+                onClick={() => deleteMutation.mutate(resolvedId!)}
+                disabled={deleteMutation.isPending}
+                className="px-2 py-1 text-xs font-medium rounded-md bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                Yes, delete
+              </button>
+              <button
+                onClick={() => setConfirmDelete(false)}
+                className="px-2 py-1 text-xs font-medium rounded-md border border-gray-300 text-gray-600 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+            </div>
           )}
         </div>
 

@@ -331,30 +331,47 @@ func HandleTagMutability(
 		return false
 	}
 
-	// Get the cached SHA256 for comparison.
-	cachedSHA256, err := GetCachedArtifactSHA256(db, artifactID)
-	if err != nil {
-		log.Warn().Err(err).Str("artifact", artifactID).Msg("mutability: cannot get cached sha256, skipping check")
-		return false
-	}
+	// Get the LAST OBSERVED upstream digest from tag_digest_history.
+	// On first encounter this will be empty — we record and move on.
+	var lastDigest string
+	_ = db.Get(&lastDigest,
+		`SELECT digest FROM tag_digest_history
+		 WHERE ecosystem = ? AND name = ? AND tag_or_version = ?
+		 ORDER BY first_seen_at DESC LIMIT 1`,
+		ecosystem, name, version)
 
-	changed, newDigest, err := CheckDigestChanged(ctx, ecosystem, upstreamURL, cachedSHA256, httpClient)
+	// Fetch current upstream digest (ecosystem-specific format: SRI, ETag, etc.).
+	// We pass lastDigest so the headCache comparison is meaningful.
+	_, currentDigest, err := CheckDigestChanged(ctx, ecosystem, upstreamURL, lastDigest, httpClient)
 	if err != nil {
 		// Fail-open: log and continue serving from cache.
 		log.Warn().Err(err).Str("artifact", artifactID).Msg("mutability: upstream check failed, failing open")
 		return false
 	}
-
-	if !changed {
+	if currentDigest == "" {
+		// No usable signal from upstream.
 		return false
 	}
 
-	// Digest changed! Record history and audit log.
-	if recordErr := RecordDigestHistory(db, ecosystem, name, version, newDigest); recordErr != nil {
-		log.Error().Err(recordErr).Str("artifact", artifactID).Msg("mutability: failed to record digest history")
+	// First encounter: record the upstream digest and proceed (no alarm).
+	if lastDigest == "" {
+		if recordErr := RecordDigestHistory(db, ecosystem, name, version, currentDigest); recordErr != nil {
+			log.Error().Err(recordErr).Str("artifact", artifactID).Msg("mutability: failed to record initial digest")
+		}
+		return false
 	}
 
-	metaJSON := fmt.Sprintf(`{"old_digest":%q,"new_digest":%q}`, cachedSHA256, newDigest)
+	// Same digest as last time — no change.
+	if currentDigest == lastDigest {
+		return false
+	}
+
+	// DIGEST CHANGED — upstream content mutation detected!
+	if recordErr := RecordDigestHistory(db, ecosystem, name, version, currentDigest); recordErr != nil {
+		log.Error().Err(recordErr).Str("artifact", artifactID).Msg("mutability: failed to record new digest")
+	}
+
+	metaJSON := fmt.Sprintf(`{"old_digest":%q,"new_digest":%q}`, lastDigest, currentDigest)
 	_ = WriteAuditLog(db, model.AuditEntry{
 		EventType:    model.EventTagMutated,
 		ArtifactID:   artifactID,
@@ -366,8 +383,8 @@ func HandleTagMutability(
 
 	log.Warn().
 		Str("artifact", artifactID).
-		Str("old_digest", cachedSHA256).
-		Str("new_digest", newDigest).
+		Str("old_digest", lastDigest).
+		Str("new_digest", currentDigest).
 		Str("action", cfg.Action).
 		Msg("mutability: tag mutation detected")
 

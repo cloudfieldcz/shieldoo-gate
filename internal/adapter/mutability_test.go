@@ -214,7 +214,14 @@ func TestHandleTagMutability_Block_Returns403(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	// Upstream returns a different ETag.
+	// Seed tag_digest_history with a prior observation (simulates a previous cache hit).
+	_, err = db.Exec(
+		`INSERT INTO tag_digest_history (ecosystem, name, tag_or_version, digest, first_seen_at) VALUES (?, ?, ?, ?, ?)`,
+		"pypi", "testpkg", "1.0.0", `etag:"old-etag";cl:100`, time.Now().UTC().Add(-time.Hour),
+	)
+	require.NoError(t, err)
+
+	// Upstream returns a different ETag — simulates content change.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("ETag", `"new-etag"`)
 		w.Header().Set("Content-Length", "200")
@@ -257,6 +264,13 @@ func TestHandleTagMutability_Warn_ServesNormally(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	// Seed tag_digest_history with a prior observation.
+	_, err = db.Exec(
+		`INSERT INTO tag_digest_history (ecosystem, name, tag_or_version, digest, first_seen_at) VALUES (?, ?, ?, ?, ?)`,
+		"pypi", "warnpkg", "1.0.0", `etag:"old-etag";cl:100`, time.Now().UTC().Add(-time.Hour),
+	)
+	require.NoError(t, err)
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("ETag", `"changed-etag"`)
 		w.Header().Set("Content-Length", "300")
@@ -282,10 +296,10 @@ func TestHandleTagMutability_Warn_ServesNormally(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, count, "TAG_MUTATED audit entry should exist")
 
-	// Verify digest history was recorded.
+	// Verify digest history was recorded (1 seeded + 1 new observation).
 	err = db.Get(&count, "SELECT COUNT(*) FROM tag_digest_history WHERE ecosystem = 'pypi' AND name = 'warnpkg'")
 	require.NoError(t, err)
-	assert.Equal(t, 1, count, "digest history should be recorded")
+	assert.Equal(t, 2, count, "digest history should have prior + new observation")
 }
 
 func TestCheckDigestChanged_UnknownEcosystem_NoChange(t *testing.T) {

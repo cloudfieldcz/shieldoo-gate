@@ -283,6 +283,35 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/v1/artifacts/{id}:
+    parameters:
+      - $ref: "#/components/parameters/artifactId"
+    delete:
+      summary: Delete artifact (cache + DB)
+      description: |
+        Permanently removes an artifact from cache and database, including all
+        associated scan results and status records. This is the only resolution
+        for SHA256 integrity violations — delete the artifact, next request
+        re-fetches fresh from upstream.
+      operationId: deleteArtifact
+      tags: [artifacts]
+      responses:
+        "200":
+          description: Artifact deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: deleted
+                  artifact:
+                    type: string
+                    example: "npm:lodash:4.17.21"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/v1/audit:
     get:
       summary: List audit log entries
@@ -297,7 +326,7 @@ paths:
           description: Filter by event type
           schema:
             type: string
-            enum: [SERVED, BLOCKED, QUARANTINED, RELEASED, SCANNED, OVERRIDE_CREATED, OVERRIDE_REVOKED, TAG_MUTATED, RESCAN_QUEUED, ALLOWED_WITH_WARNING]
+            enum: [SERVED, BLOCKED, QUARANTINED, RELEASED, SCANNED, OVERRIDE_CREATED, OVERRIDE_REVOKED, TAG_MUTATED, RESCAN_QUEUED, ALLOWED_WITH_WARNING, INTEGRITY_VIOLATION, ARTIFACT_DELETED]
       responses:
         "200":
           description: Paginated list of audit log entries

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/auth"
@@ -586,6 +587,65 @@ func (s *Server) handleReleaseArtifact(w http.ResponseWriter, r *http.Request) {
 		"status":      "CLEAN",
 		"artifact_id": id,
 		"override_id": overrideID,
+	})
+}
+
+// handleDeleteArtifact handles DELETE /api/v1/artifacts/{id}.
+// Purges the artifact from cache and DB (scan_results, artifact_status, artifacts).
+// This is the only resolution for SHA256 integrity violations.
+func (s *Server) handleDeleteArtifact(w http.ResponseWriter, r *http.Request) {
+	id := artifactID(r)
+
+	// 1. Check artifact exists (before transaction, using GateDB with rebind).
+	var count int
+	if err := s.db.QueryRowContext(r.Context(), s.db.Rebind(`SELECT COUNT(*) FROM artifacts WHERE id = ?`), id).Scan(&count); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check artifact existence")
+		return
+	}
+	if count == 0 {
+		writeError(w, http.StatusNotFound, "artifact not found")
+		return
+	}
+
+	// 2. Delete from cache (non-fatal if not found).
+	if err := s.cacheStore.Delete(r.Context(), id); err != nil {
+		log.Warn().Err(err).Str("artifact", id).Msg("delete: cache delete failed (may already be evicted)")
+	}
+
+	// 3. Delete from DB in transaction.
+	tx, err := s.db.BeginTxx(r.Context(), nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to begin transaction")
+		return
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	// Delete in FK order: referencing tables first, then artifacts.
+	_, _ = tx.ExecContext(r.Context(), s.db.Rebind(`DELETE FROM version_diff_results WHERE artifact_id = ? OR previous_artifact = ?`), id, id)
+	_, _ = tx.ExecContext(r.Context(), s.db.Rebind(`UPDATE docker_tags SET artifact_id = NULL WHERE artifact_id = ?`), id)
+	_, _ = tx.ExecContext(r.Context(), s.db.Rebind(`DELETE FROM scan_results WHERE artifact_id = ?`), id)
+	_, _ = tx.ExecContext(r.Context(), s.db.Rebind(`DELETE FROM artifact_status WHERE artifact_id = ?`), id)
+	_, err = tx.ExecContext(r.Context(), s.db.Rebind(`DELETE FROM artifacts WHERE id = ?`), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete artifact")
+		return
+	}
+
+	// Audit log.
+	userEmail := userEmailFromRequest(r)
+	_, _ = tx.ExecContext(r.Context(), s.db.Rebind(
+		`INSERT INTO audit_log (ts, event_type, artifact_id, reason, user_email)
+		 VALUES (?, ?, ?, ?, ?)`),
+		time.Now().UTC(), string(model.EventArtifactDeleted), id, "admin deletion", userEmail)
+
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit deletion")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":   "deleted",
+		"artifact": id,
 	})
 }
 

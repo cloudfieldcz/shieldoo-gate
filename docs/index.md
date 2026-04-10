@@ -33,10 +33,13 @@ Client (pip / docker / npm / dotnet)
     ▼
 Shieldoo Gate Protocol Adapter
     │
-    ├── Cached & clean? → serve immediately
+    ├── Cached? → quarantine check → SHA256 integrity check → serve
+    │                                → mismatch? → INTEGRITY_VIOLATION → quarantine (403)
     │
-    └── Not cached → download → scan → clean? → cache & serve
-                                      → malicious? → block (403)
+    └── Not cached → download → upstream integrity check → scan → policy
+                                → SHA256 changed? → INTEGRITY_VIOLATION → quarantine (403)
+                                                    → clean? → cache & serve
+                                                    → malicious? → block (403)
 ```
 
 ### Core Components
@@ -49,6 +52,7 @@ Shieldoo Gate Protocol Adapter
 | **Policy Engine** | Block / quarantine / warn / allow rules with allowlists and policy tiers (strict/balanced/permissive) |
 | **Policy Overrides** | Dynamic false-positive management and audit trail via UI/API |
 | **Threat Feed** | Periodic threat feed refresh + manual rescan via API |
+| **Integrity Gate** | SHA256 verification on every cache serve and upstream re-download — fail-closed, auto-quarantine on mismatch |
 | **Rescan Scheduler** | Background re-scanning of cached artifacts to detect newly discovered threats |
 | **Alerting** | Real-time notifications via webhook, Slack, and email for security events (v1.1) |
 | **Authentication** | OIDC admin API authentication with Authorization Code + PKCE flow (v1.1) |
@@ -90,6 +94,7 @@ Shieldoo Gate Protocol Adapter
 | — | Typosquatting & namespace confusion detection | Done |
 | — | Version diff analysis | Done |
 | — | Maintainer reputation risk scoring | Done |
+| — | SHA256 integrity verification gate | Done |
 
 ## Getting Started
 

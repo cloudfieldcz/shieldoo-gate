@@ -278,6 +278,16 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 			})
 			return
 		}
+		// SHA256 integrity verification — FAIL-CLOSED.
+		if err := adapter.VerifyCacheIntegrity(a.db, artifactID, cachedPath); err != nil {
+			log.Error().Err(err).Str("artifact", artifactID).Msg("SECURITY: cache integrity violation")
+			adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+				Error:    "integrity_violation",
+				Artifact: artifactID,
+				Reason:   "cached artifact integrity check failed",
+			})
+			return
+		}
 		// Tag mutability check on cache hit.
 		if adapter.HandleTagMutability(ctx, a.tagMutabilityCfg, a.db, a.httpClient,
 			string(scanner.EcosystemNuGet), pkgID, version, artifactID, upstreamURL, r, w) {
@@ -323,6 +333,16 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 			})
 			return
 		}
+		// SHA256 integrity verification on race-condition cache hit.
+		if err := adapter.VerifyCacheIntegrity(a.db, artifactID, cachedPath); err != nil {
+			log.Error().Err(err).Str("artifact", artifactID).Msg("SECURITY: cache integrity violation (post-lock)")
+			adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+				Error:    "integrity_violation",
+				Artifact: artifactID,
+				Reason:   "cached artifact integrity check failed",
+			})
+			return
+		}
 		http.ServeFile(w, r, cachedPath)
 		return
 	}
@@ -334,6 +354,17 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	defer os.Remove(tmpPath)
+
+	// Upstream integrity check — detect content mutation for known artifacts.
+	if err := adapter.VerifyUpstreamIntegrity(a.db, artifactID, sha); err != nil {
+		log.Error().Err(err).Str("artifact", artifactID).Msg("SECURITY: upstream content mutation detected")
+		adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+			Error:    "integrity_violation",
+			Artifact: artifactID,
+			Reason:   "upstream content changed since last scan — artifact quarantined, admin must delete and re-approve",
+		})
+		return
+	}
 
 	// 3. Build scanner artifact.
 	scanArtifact := scanner.Artifact{

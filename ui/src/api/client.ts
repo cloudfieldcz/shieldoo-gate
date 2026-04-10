@@ -55,6 +55,9 @@ export const artifactsApi = {
 
   release: (id: string) =>
     api.post(`/artifacts/${encodeURIComponent(id)}/release`).then((r) => r.data),
+
+  delete: (id: string) =>
+    api.delete(`/artifacts/${encodeURIComponent(id)}`).then((r) => r.data),
 }
 
 export const statsApi = {
