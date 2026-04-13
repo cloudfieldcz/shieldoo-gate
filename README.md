@@ -1,17 +1,93 @@
 # Shieldoo Gate
 
-> Open-source supply chain security proxy for Docker, PyPI, npm, NuGet, Maven, RubyGems, Go Modules, and more.
+> **The supply chain firewall for every package your developers and CI pull.**
+> Open-source, self-hosted, multi-ecosystem. Docker, PyPI, npm, NuGet, Maven, RubyGems, Go Modules — one proxy, one policy, one audit trail.
 
-Shieldoo Gate acts as a transparent caching proxy for all major package ecosystems, scanning every artifact before it is served and blocking delivery of malicious content in real time.
+Shieldoo Gate sits between your developers, CI runners, and the public package registries. Every artifact — every Python wheel, every npm tarball, every Docker layer, every NuGet `.nupkg` — is intercepted, scanned, and only then served. Malicious packages are blocked before they ever touch a developer laptop, a build agent, or a production image.
+
+---
+
+## Why This Matters
+
+Modern software is built from public packages. A typical service pulls **thousands** of third-party dependencies, transitively, from registries that anyone on the internet can publish to. The attackers noticed.
+
+Recent real-world attacks that Shieldoo Gate is built to stop:
+
+- **Shai-Hulud (npm, 2025)** — a self-replicating worm infected ~180+ npm packages, ran credential-stealing `postinstall` scripts, exfiltrated npm/GitHub/cloud tokens, and used the stolen credentials to publish further trojanized releases. Victims included packages with **millions of weekly downloads**. A single `npm install` was enough to get compromised.
+- **XZ Utils backdoor (CVE-2024-3094)** — a multi-year social-engineering operation planted a sophisticated backdoor in a core Linux dependency used by OpenSSH.
+- **PyTorch `torchtriton` (2022)** — dependency-confusion attack pushed a malicious package with the same name as a private internal dep to PyPI; it ran on every install.
+- **`ctx` / `phpass` takeover (PyPI, 2022)** — abandoned package names were re-registered and weaponized to exfiltrate environment variables (AWS keys, tokens) on install.
+- **`event-stream` / `ua-parser-js` / `colors.js`** — maintainer compromise or malicious insider injected credential stealers and crypto-miners into packages used by millions.
+- **LLM tooling & scanner-chain compromises** — the AI/DevSecOps ecosystem is itself a target. Supply-chain incidents affecting LiteLLM, Trivy plugins, and popular MLOps libraries have shown that **even the security tools you install are attack surface**.
+
+What these attacks have in common: the malicious code runs **the moment the package is installed** — long before any runtime firewall, EDR, or WAF gets a chance. By then it's too late. The only effective defense is to stop the artifact from being installed in the first place.
+
+That's what Shieldoo Gate does.
+
+---
+
+## How It Works
+
+Shieldoo Gate is a **transparent, caching, scanning proxy**. You point your package managers at it instead of at the public registry. Nothing else changes in your tooling.
+
+```
+    ┌─────────────┐      ┌──────────────────────┐      ┌────────────────┐
+    │  developer  │      │                      │      │ PyPI / npm /   │
+    │  or CI job  │─────▶│   Shieldoo Gate      │─────▶│ Docker Hub /   │
+    │             │◀─────│   (proxy + scanner)  │◀─────│ NuGet / Maven  │
+    └─────────────┘      │                      │      └────────────────┘
+                         │   ┌──────────────┐   │
+                         │   │  scan cache  │   │
+                         │   │  quarantine  │   │
+                         │   │  audit log   │   │
+                         │   └──────────────┘   │
+                         └──────────────────────┘
+```
+
+For every request:
+
+1. **Intercept** — the Gate speaks the native protocol of each ecosystem (PEP 503, npm registry API, OCI distribution spec, NuGet V3, etc.). Clients see a normal registry.
+2. **Fetch & verify** — artifact is pulled from upstream, SHA-256 integrity is verified.
+3. **Scan** — the artifact runs through a **layered scanning pipeline** (threat-feed hash lookup → heuristics → typosquat detection → version-diff → reputation scoring → GuardDog → Trivy → OSV → LLM-powered AI scanner → optional sandbox). A `malicious` verdict at **any** stage blocks delivery immediately.
+4. **Cache** — clean artifacts are cached locally. Second pull is served instantly from disk, with no upstream hit and no re-scan.
+5. **Quarantine & alert** — malicious artifacts are quarantined, never served, and surface in the admin UI with full scan detail and audit trail.
+6. **Audit** — every request, verdict, block, and override is recorded in an append-only audit log.
+
+Fail-closed on malicious. Fail-open on scanner outage (with full logging) — your developers are never blocked by a scanner bug, but nothing known-bad ever gets through.
+
+---
+
+## Who It's For
+
+Shieldoo Gate is built for teams that take software supply chain seriously:
+
+- **Platform / DevOps teams** — give every developer, every CI runner, every build farm a single safe package mirror. One config change, zero client-side agents, zero per-project setup.
+- **Security & AppSec teams** — enforce allow/block policy centrally, get an audit trail of every dependency ever pulled, and block known-bad packages across the whole org in seconds.
+- **Regulated industries (fintech, health, gov)** — meet supply-chain provenance requirements (SLSA, SSDF, EO 14028, NIS2, DORA) with a self-hostable, air-gap-friendly, open-source solution.
+- **AI / ML teams** — the PyPI + Docker dependency graph under a modern LLM stack is enormous and fast-moving. Shieldoo Gate's AI scanner is built specifically to reason about obfuscated install-time code in this ecosystem.
+- **Enterprises under egress control** — the Gate can be your **only allowed path** to public registries. Everything else on the network gets no internet access to package mirrors.
+
+### Typical Use Cases
+
+- Replace the raw PyPI/npm/Docker Hub endpoint on every dev laptop and CI runner.
+- Mirror public packages behind a corporate firewall with full scan + quarantine.
+- Enforce a "no install-time code from unreviewed maintainers" policy at the proxy layer.
+- Get instant org-wide protection when a new supply-chain attack (like Shai-Hulud) breaks — push the malicious hashes into the threat feed and you're covered within minutes.
+- Produce the forensic audit trail ("what exactly did we install, when, from where, with which scan verdict") regulators and incident responders now expect.
+
+---
 
 ## Key Features
 
 - **Transparent proxy** — zero client-side changes beyond pointing at the Gate URL
 - **Multi-ecosystem** — Docker, PyPI, npm, NuGet, Maven, RubyGems, Go Modules
-- **Deep scanning pipeline** — every artifact passes through multiple scanner layers (see below)
-- **Block & quarantine** — malicious packages never reach your developers or CI
-- **Community threat feed** — fast-path blocking of known malicious package hashes
-- **Self-hostable** — single Docker Compose or Helm chart
+- **Deep, layered scanning pipeline** — hash feed, static heuristics, typosquat detection, version-diff, reputation, GuardDog, Trivy, OSV, LLM-powered AI analysis, optional sandbox
+- **Block & quarantine** — malicious packages never reach developers, CI, or production
+- **Community threat feed** — fast-path blocking of known malicious package hashes, updated continuously
+- **Append-only audit log** — every request, scan verdict, and override is recorded
+- **Admin UI** — browse artifacts, review verdicts, manage quarantine, override with justification
+- **Self-hostable** — single Docker Compose stack, Helm chart, air-gap friendly
+- **Open source, Apache 2.0** — no vendor lock-in, auditable code, community-driven
 
 ## Scanners
 
