@@ -104,7 +104,9 @@ The version diff scanner (`version-diff`) compares newly downloaded package vers
 
 1. **File inventory diff** — Compares file lists between old and new version. Flags when many new files are added (threshold: `max_new_files`, default 20).
 2. **Size anomaly** — Computes ratio of new total extracted size to old. Flags when ratio exceeds `code_volume_ratio` (default 5.0x).
-3. **Sensitive file changes** — Per-ecosystem list of security-sensitive files (setup.py, postinstall, .pth, etc.). New or modified install hooks are CRITICAL findings. NuGet MSBuild metadata files (`.targets`, `.props`) are MEDIUM — they are standard in NuGet packages and change between versions as a matter of course; only PowerShell hooks (`install.ps1`, `init.ps1`) are CRITICAL.
+3. **Sensitive file changes** — Per-ecosystem list of security-sensitive files (setup.py, postinstall, .pth, etc.). New or modified install hooks are CRITICAL findings. Non-executable metadata that changes on virtually every release is MEDIUM (not HIGH) to avoid noise:
+   - **NuGet:** MSBuild metadata (`.targets`, `.props`) — standard build glue. Only PowerShell hooks (`install.ps1`, `init.ps1`) are CRITICAL.
+   - **PyPI:** `__init__.py` (import-time module code, not an install hook), `pyproject.toml`, `setup.cfg` (declarative metadata; new deps are detected by strategy #5). Only `setup.py` and `*.pth` are CRITICAL.
 4. **Entropy analysis** — Shannon entropy for added/modified files. Samples first `entropy_sample_bytes` (default 8192) bytes. High entropy (>6.0 bits/byte) in code files suggests obfuscated/packed content. Skips known binary extensions.
 5. **New dependency detection** — Parses ecosystem metadata (package.json, setup.cfg, go.mod, etc.) to find newly added dependencies.
 

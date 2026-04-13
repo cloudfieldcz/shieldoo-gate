@@ -20,7 +20,7 @@ Add a version diff scanner that compares each newly downloaded artifact against 
 
 1. **File-level diff:** New files added, files removed, files modified. Flag unexpected additions (e.g., new `.pth` file in a Python package, new `postinstall` script in npm).
 2. **Code volume anomaly:** If a minor version bump adds 10× more code than the previous release, flag it. Normalize by historical release patterns for that package.
-3. **Sensitive area changes:** Special attention to install-time scripts (`setup.py`, `postinstall`, `.pth`, `__init__.py`), build scripts, and configuration files.
+3. **Sensitive area changes:** Special attention to install-time scripts (`setup.py`, `postinstall`, `.pth`), build scripts, and configuration files. Non-executable metadata that changes on every release (Python `__init__.py`, `pyproject.toml`, `setup.cfg`; NuGet `.targets`, `.props`) is tracked at MEDIUM severity to avoid noise on routine version bumps.
 4. **New dependency introduction:** If a new version adds a dependency that was never present before, flag it (especially if the new dependency is young, unpopular, or has typosquat characteristics).
 5. **Entropy analysis:** High-entropy additions (packed/encrypted blobs, base64 chunks) in files that previously had low entropy.
 6. **Behavioral delta:** If the sandbox scanner is enabled, compare syscall profiles between old and new versions. New network activity or file writes are strong signals.
@@ -45,13 +45,19 @@ scanners:
       code_volume_ratio: 5.0          # Flag if new version is 5x larger
       max_new_files: 20               # Flag if more than 20 new files added
       entropy_delta: 2.0              # Flag high-entropy additions
-    sensitive_patterns:               # Glob patterns for install-time scripts
-      - "setup.py"
-      - "setup.cfg"
-      - "*.pth"
-      - "postinstall*"
-      - "__init__.py"
+    sensitive_patterns: []            # Extra glob patterns to flag (beyond built-in per-ecosystem list)
 ```
+
+Built-in sensitive file severity (per ecosystem):
+
+| Ecosystem | CRITICAL (install hooks) | MEDIUM (metadata / module code) | HIGH (other sensitive) |
+|---|---|---|---|
+| PyPI | `setup.py`, `*.pth` | `__init__.py`, `pyproject.toml`, `setup.cfg` | — |
+| NPM | `preinstall*`, `postinstall*`, `install*` | — | `package.json` |
+| NuGet | `install.ps1`, `init.ps1` | `*.targets`, `*.props` | — |
+| Maven | — | — | `pom.xml`, `*.sh` |
+| RubyGems | `extconf.rb` | — | `Rakefile` |
+| Go | — | — | `go.mod` |
 
 ### How It Fits Into the Architecture
 

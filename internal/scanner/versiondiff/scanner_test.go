@@ -192,6 +192,53 @@ func TestSensitiveFileChanges_PyPI_SetupPy_ReturnsCritical(t *testing.T) {
 	assert.Equal(t, scanner.SeverityCritical, findings[0].Severity)
 }
 
+func TestSensitiveFileChanges_PyPI_PthFile_ReturnsCritical(t *testing.T) {
+	modified := []string{}
+	added := []string{"site-packages/evil.pth"}
+	changed, findings := sensitiveFileChanges(scanner.EcosystemPyPI, modified, added, nil)
+
+	assert.Contains(t, changed, "site-packages/evil.pth")
+	require.NotEmpty(t, findings)
+	assert.Equal(t, scanner.SeverityCritical, findings[0].Severity,
+		".pth files execute at site-packages import time — must stay CRITICAL")
+}
+
+func TestSensitiveFileChanges_PyPI_InitPy_ReturnsMedium(t *testing.T) {
+	modified := []string{"python_multipart/__init__.py"}
+	added := []string{"multipart/__init__.py"}
+	changed, findings := sensitiveFileChanges(scanner.EcosystemPyPI, modified, added, nil)
+
+	assert.Contains(t, changed, "python_multipart/__init__.py")
+	assert.Contains(t, changed, "multipart/__init__.py")
+	require.Len(t, findings, 2)
+	for _, f := range findings {
+		assert.Equal(t, scanner.SeverityMedium, f.Severity,
+			"__init__.py is import-time module code, not an install hook — should be MEDIUM, not HIGH")
+	}
+}
+
+func TestSensitiveFileChanges_PyPI_PyprojectToml_ReturnsMedium(t *testing.T) {
+	modified := []string{"pyproject.toml"}
+	added := []string{}
+	changed, findings := sensitiveFileChanges(scanner.EcosystemPyPI, modified, added, nil)
+
+	assert.Contains(t, changed, "pyproject.toml")
+	require.NotEmpty(t, findings)
+	assert.Equal(t, scanner.SeverityMedium, findings[0].Severity,
+		"pyproject.toml is metadata (version, deps) — should be MEDIUM, not HIGH")
+}
+
+func TestSensitiveFileChanges_PyPI_SetupCfg_ReturnsMedium(t *testing.T) {
+	modified := []string{"setup.cfg"}
+	added := []string{}
+	changed, findings := sensitiveFileChanges(scanner.EcosystemPyPI, modified, added, nil)
+
+	assert.Contains(t, changed, "setup.cfg")
+	require.NotEmpty(t, findings)
+	assert.Equal(t, scanner.SeverityMedium, findings[0].Severity,
+		"setup.cfg is metadata — should be MEDIUM, not HIGH")
+}
+
 func TestSensitiveFileChanges_NPM_PostInstall_ReturnsCritical(t *testing.T) {
 	modified := []string{}
 	added := []string{"postinstall.sh"}
