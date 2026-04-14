@@ -145,14 +145,15 @@ func sensitiveFileChanges(ecosystem scanner.Ecosystem, modified, added []string,
 			matched, _ := filepath.Match(pattern, base)
 			if matched {
 				changed = append(changed, f)
-				// Install hooks are critical; non-executable metadata
-				// (NuGet .targets/.props, Python __init__.py/pyproject.toml/setup.cfg)
-				// is medium — these change on virtually every release. Other
-				// sensitive files are high.
+				// Install hooks are critical; non-executable package
+				// metadata (version bumps, deps, build glue) is medium —
+				// these change on virtually every release and new deps are
+				// already caught by newDependencyDetection. Everything else
+				// stays high.
 				sev := scanner.SeverityHigh
 				if isInstallHook(ecosystem, base) {
 					sev = scanner.SeverityCritical
-				} else if isMSBuildMetadata(ecosystem, base) || isPythonModuleMetadata(ecosystem, base) {
+				} else if isPackageMetadata(ecosystem, base) {
 					sev = scanner.SeverityMedium
 				}
 				findings = append(findings, scanner.Finding{
@@ -168,35 +169,35 @@ func sensitiveFileChanges(ecosystem scanner.Ecosystem, modified, added []string,
 	return
 }
 
-// isMSBuildMetadata returns true if the file is a standard NuGet MSBuild metadata file
-// (.targets, .props). These are present in virtually every NuGet package and change
-// between versions as a matter of course — they are NOT executable install hooks.
-func isMSBuildMetadata(ecosystem scanner.Ecosystem, base string) bool {
-	if ecosystem != scanner.EcosystemNuGet {
+// isPackageMetadata returns true if the file is declarative package metadata
+// or regular module code that changes on virtually every release. These are
+// flagged at MEDIUM severity to avoid noisy HIGH findings on routine version
+// bumps. New dependencies are already detected by newDependencyDetection.
+//
+// Real install hooks (setup.py, *.pth, postinstall, install.ps1, extconf.rb)
+// are handled by isInstallHook and stay CRITICAL.
+func isPackageMetadata(ecosystem scanner.Ecosystem, base string) bool {
+	lower := strings.ToLower(base)
+	switch ecosystem {
+	case scanner.EcosystemPyPI:
+		// __init__.py = import-time module code, not install hook
+		// pyproject.toml / setup.cfg = declarative metadata
+		return lower == "__init__.py" || lower == "pyproject.toml" || lower == "setup.cfg"
+	case scanner.EcosystemNPM:
+		// package.json = version, deps, description — changes every release
+		return lower == "package.json"
+	case scanner.EcosystemNuGet:
+		// .targets / .props = MSBuild build glue, standard in NuGet packages
+		return strings.HasSuffix(lower, ".targets") || strings.HasSuffix(lower, ".props")
+	case scanner.EcosystemMaven:
+		// pom.xml = declarative build/dependency metadata
+		return lower == "pom.xml"
+	case scanner.EcosystemGo:
+		// go.mod = dependency metadata
+		return lower == "go.mod"
+	default:
 		return false
 	}
-	lower := strings.ToLower(base)
-	return strings.HasSuffix(lower, ".targets") || strings.HasSuffix(lower, ".props")
-}
-
-// isPythonModuleMetadata returns true if the file is Python metadata / regular
-// module code that changes on virtually every release and is not executed at
-// install time. These are flagged at MEDIUM severity so routine version bumps
-// do not produce noisy HIGH findings.
-//
-// - __init__.py runs at *import* time, not install time — it is the module's
-//   own source code and touching it is normal.
-// - pyproject.toml / setup.cfg are declarative metadata (version, deps).
-//   New dependencies are already detected by newDependencyDetection.
-//
-// Real install hooks (setup.py, *.pth) are handled by isInstallHook and stay
-// CRITICAL.
-func isPythonModuleMetadata(ecosystem scanner.Ecosystem, base string) bool {
-	if ecosystem != scanner.EcosystemPyPI {
-		return false
-	}
-	lower := strings.ToLower(base)
-	return lower == "__init__.py" || lower == "pyproject.toml" || lower == "setup.cfg"
 }
 
 // isInstallHook returns true if the filename is an install-time hook for the ecosystem.

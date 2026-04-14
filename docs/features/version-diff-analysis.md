@@ -53,11 +53,11 @@ Built-in sensitive file severity (per ecosystem):
 | Ecosystem | CRITICAL (install hooks) | MEDIUM (metadata / module code) | HIGH (other sensitive) |
 |---|---|---|---|
 | PyPI | `setup.py`, `*.pth` | `__init__.py`, `pyproject.toml`, `setup.cfg` | — |
-| NPM | `preinstall*`, `postinstall*`, `install*` | — | `package.json` |
+| npm | `preinstall*`, `postinstall*`, `install*` | `package.json` | — |
 | NuGet | `install.ps1`, `init.ps1` | `*.targets`, `*.props` | — |
-| Maven | — | — | `pom.xml`, `*.sh` |
+| Maven | — | `pom.xml` | `*.sh` |
 | RubyGems | `extconf.rb` | — | `Rakefile` |
-| Go | — | — | `go.mod` |
+| Go | — | `go.mod` | — |
 
 ### How It Fits Into the Architecture
 

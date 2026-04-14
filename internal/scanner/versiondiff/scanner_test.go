@@ -239,6 +239,17 @@ func TestSensitiveFileChanges_PyPI_SetupCfg_ReturnsMedium(t *testing.T) {
 		"setup.cfg is metadata — should be MEDIUM, not HIGH")
 }
 
+func TestSensitiveFileChanges_NPM_PackageJson_ReturnsMedium(t *testing.T) {
+	modified := []string{"types-registry/package.json"}
+	added := []string{}
+	changed, findings := sensitiveFileChanges(scanner.EcosystemNPM, modified, added, nil)
+
+	assert.Contains(t, changed, "types-registry/package.json")
+	require.NotEmpty(t, findings)
+	assert.Equal(t, scanner.SeverityMedium, findings[0].Severity,
+		"package.json is metadata (version, deps) — should be MEDIUM, not HIGH")
+}
+
 func TestSensitiveFileChanges_NPM_PostInstall_ReturnsCritical(t *testing.T) {
 	modified := []string{}
 	added := []string{"postinstall.sh"}
@@ -269,6 +280,39 @@ func TestSensitiveFileChanges_NuGet_PropsFile_ReturnsMedium(t *testing.T) {
 	require.NotEmpty(t, findings)
 	assert.Equal(t, scanner.SeverityMedium, findings[0].Severity,
 		".props files are standard MSBuild metadata, not executable hooks — should be MEDIUM, not HIGH")
+}
+
+func TestSensitiveFileChanges_Maven_PomXml_ReturnsMedium(t *testing.T) {
+	modified := []string{"pom.xml"}
+	added := []string{}
+	changed, findings := sensitiveFileChanges(scanner.EcosystemMaven, modified, added, nil)
+
+	assert.Contains(t, changed, "pom.xml")
+	require.NotEmpty(t, findings)
+	assert.Equal(t, scanner.SeverityMedium, findings[0].Severity,
+		"pom.xml is declarative build metadata — should be MEDIUM, not HIGH")
+}
+
+func TestSensitiveFileChanges_Maven_ShellScript_ReturnsHigh(t *testing.T) {
+	modified := []string{}
+	added := []string{"scripts/build.sh"}
+	changed, findings := sensitiveFileChanges(scanner.EcosystemMaven, modified, added, nil)
+
+	assert.Contains(t, changed, "scripts/build.sh")
+	require.NotEmpty(t, findings)
+	assert.Equal(t, scanner.SeverityHigh, findings[0].Severity,
+		"shell scripts in Maven packages are suspicious — should stay HIGH")
+}
+
+func TestSensitiveFileChanges_Go_GoMod_ReturnsMedium(t *testing.T) {
+	modified := []string{"go.mod"}
+	added := []string{}
+	changed, findings := sensitiveFileChanges(scanner.EcosystemGo, modified, added, nil)
+
+	assert.Contains(t, changed, "go.mod")
+	require.NotEmpty(t, findings)
+	assert.Equal(t, scanner.SeverityMedium, findings[0].Severity,
+		"go.mod is dependency metadata — should be MEDIUM, not HIGH")
 }
 
 func TestSensitiveFileChanges_NuGet_InstallPs1_ReturnsCritical(t *testing.T) {
