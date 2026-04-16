@@ -266,39 +266,44 @@ function HowToSection({ urls }: { urls?: PublicURLs }) {
               <h3 className="text-sm font-semibold text-gray-900">Connect your package managers</h3>
               <p className="text-sm text-gray-600 mt-1 mb-2">
                 Generate an API key in <strong>Profile → API Keys</strong>, then configure your tools.
-                All ecosystems use HTTP Basic Auth (your username + the token as password).
+                All ecosystems use HTTP Basic Auth — <strong>project label</strong> as username, token as password.
+                The project label segments audit events, usage tracking, and per-project license policy.
+                Use any label (e.g. <code className="px-1 bg-gray-100 rounded text-xs">myteam</code>, <code className="px-1 bg-gray-100 rounded text-xs">backend-svc</code>) or <code className="px-1 bg-gray-100 rounded text-xs">default</code> if you don't need segmentation.
+                In <strong>strict</strong> mode, an admin must create the project first in <strong>Projects</strong>.
               </p>
               <pre className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-xs font-mono text-gray-800 overflow-x-auto whitespace-pre">
 {`export SGW_TOKEN="your-token-here"
+# Project label = your team/service name, or 'default'
+PROJECT=myteam
 
 # PyPI — pip
-pip install --index-url ${scheme}://\${USER}:\${SGW_TOKEN}@${pypi.replace(/^https?:\/\//, '')}/simple/ <package>
+pip install --index-url ${scheme}://\${PROJECT}:\${SGW_TOKEN}@${pypi.replace(/^https?:\/\//, '')}/simple/ <package>
 
 # PyPI — uv
-UV_DEFAULT_INDEX=${scheme}://\${USER}:\${SGW_TOKEN}@${pypi.replace(/^https?:\/\//, '')}/simple/ uv pip install <package>
+UV_DEFAULT_INDEX=${scheme}://\${PROJECT}:\${SGW_TOKEN}@${pypi.replace(/^https?:\/\//, '')}/simple/ uv pip install <package>
 
 # PyPI — pipenv
-PIPENV_PYPI_MIRROR=${scheme}://\${USER}:\${SGW_TOKEN}@${pypi.replace(/^https?:\/\//, '')}/simple/ pipenv install <package>
+PIPENV_PYPI_MIRROR=${scheme}://\${PROJECT}:\${SGW_TOKEN}@${pypi.replace(/^https?:\/\//, '')}/simple/ pipenv install <package>
 
 # npm (Node.js)
 npm config set registry ${npm}/
-npm config set //${npmHost}/:_auth $(printf "\${USER}:\${SGW_TOKEN}" | base64)
+npm config set //${npmHost}/:_auth $(printf "\${PROJECT}:\${SGW_TOKEN}" | base64)
 
 # Docker
-echo \${SGW_TOKEN} | docker login ${dockerHost} -u \${USER} --password-stdin
+echo \${SGW_TOKEN} | docker login ${dockerHost} -u \${PROJECT} --password-stdin
 
 # NuGet (.NET)
-dotnet nuget add source ${nuget}/v3/index.json -n shieldoo -u \${USER} -p \${SGW_TOKEN} --store-password-in-clear-text
+dotnet nuget add source ${nuget}/v3/index.json -n shieldoo -u \${PROJECT} -p \${SGW_TOKEN} --store-password-in-clear-text
 
 # Go modules
-GOPROXY=${gomod.replace(/^https?:\/\//, `${scheme}://\${USER}:\${SGW_TOKEN}@`)} go get <module>
+GOPROXY=${gomod.replace(/^https?:\/\//, `${scheme}://\${PROJECT}:\${SGW_TOKEN}@`)} go get <module>
 
 # Maven (Java) — add to ~/.m2/settings.xml
-# <server><id>shieldoo</id><username>\${USER}</username><password>\${SGW_TOKEN}</password></server>
+# <server><id>shieldoo</id><username>\${PROJECT}</username><password>\${SGW_TOKEN}</password></server>
 # <mirror><id>shieldoo</id><url>${maven}/repository/</url><mirrorOf>central</mirrorOf></mirror>
 
 # RubyGems
-gem sources --add ${rubygems.replace(/^https?:\/\//, `${scheme}://\${USER}:\${SGW_TOKEN}@`)}/`}
+gem sources --add ${rubygems.replace(/^https?:\/\//, `${scheme}://\${PROJECT}:\${SGW_TOKEN}@`)}/`}
               </pre>
             </div>
           </div>

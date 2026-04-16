@@ -185,3 +185,89 @@ export interface APIKeyCreateResponse {
   created_at: string
   token: string
 }
+
+// ---- v1.2+ projects & license policy ------------------------------------
+
+export interface Project {
+  id: number
+  label: string
+  display_name: string
+  description?: string
+  created_at: string
+  created_via: 'lazy' | 'api' | 'seed'
+  enabled: boolean
+}
+
+export interface ProjectsListResponse {
+  projects: Project[]
+}
+
+export interface ProjectArtifact {
+  id: string
+  ecosystem: string
+  name: string
+  version: string
+  first_used_at: string
+  last_used_at: string
+  use_count: number
+}
+
+export interface ProjectArtifactsResponse {
+  artifacts: ProjectArtifact[] | null
+}
+
+export type LicensePolicyMode = 'inherit' | 'override' | 'disabled'
+export type LicenseAction = 'allow' | 'warn' | 'block'
+export type OrSemantics = 'any_allowed' | 'all_allowed'
+
+export interface ProjectLicensePolicyView {
+  project_id: number
+  mode: LicensePolicyMode
+  blocked?: string[]
+  warned?: string[]
+  allowed?: string[]
+  unknown_action?: LicenseAction | ''
+  updated_at?: string
+  updated_by?: string
+  effective_source?: string
+  strict_required?: boolean
+}
+
+export interface ProjectLicensePolicyUpdate {
+  mode: LicensePolicyMode
+  blocked: string[]
+  warned: string[]
+  allowed: string[]
+  unknown_action: LicenseAction | ''
+}
+
+export interface GlobalLicensePolicyView {
+  enabled: boolean
+  blocked: string[]
+  warned: string[]
+  allowed: string[]
+  unknown_action: LicenseAction | ''
+  on_sbom_error: LicenseAction | ''
+  or_semantics: OrSemantics
+  updated_at?: string
+  updated_by?: string
+  source: 'db' | 'config'
+}
+
+export interface GlobalLicensePolicyUpdate {
+  enabled?: boolean
+  blocked: string[]
+  warned: string[]
+  allowed: string[]
+  unknown_action: LicenseAction
+  on_sbom_error: LicenseAction
+  or_semantics: OrSemantics
+}
+
+export interface ArtifactLicenses {
+  artifact_id: string
+  licenses: string[]
+  component_count?: number
+  generator?: string
+  generated_at?: string
+}

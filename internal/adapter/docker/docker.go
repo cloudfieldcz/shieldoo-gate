@@ -204,7 +204,7 @@ func (a *DockerAdapter) handleV2Wildcard(w http.ResponseWriter, r *http.Request)
 				Error:  "registry not allowed",
 				Reason: err.Error(),
 			})
-			_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+			_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 				EventType:  model.EventBlocked,
 				ArtifactID: fmt.Sprintf("docker:%s:%s", name, ref),
 				ClientIP:   r.RemoteAddr,
@@ -421,7 +421,7 @@ func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request
 
 	// Scan BEFORE returning success (Security Invariant #2).
 	// Detach from the HTTP request context so client disconnect doesn't cancel the pipeline.
-	pctx, pcancel := adapter.PipelineContext()
+	pctx, pcancel := adapter.PipelineContextFrom(r.Context())
 	defer pcancel()
 	scanResults, scanErr := a.scanEngine.ScanAll(pctx, scanArtifact)
 	if scanErr != nil {
@@ -446,7 +446,7 @@ func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request
 			Artifact: artifactID,
 			Reason:   policyResult.Reason,
 		})
-		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventBlocked,
 			ArtifactID: artifactID,
 			Reason:     policyResult.Reason,
@@ -462,7 +462,7 @@ func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request
 			Artifact: artifactID,
 			Reason:   policyResult.Reason,
 		})
-		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventQuarantined,
 			ArtifactID: artifactID,
 			Reason:     policyResult.Reason,
@@ -473,7 +473,7 @@ func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request
 
 	case policy.ActionAllowWithWarning:
 		_ = a.persistArtifact(artifactID, scanArtifact, hex.EncodeToString(h[:]), int64(len(body)), model.StatusClean, "", nil, scanResults)
-		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventAllowedWithWarning,
 			ArtifactID: artifactID,
 			ClientIP:   r.RemoteAddr,
@@ -548,7 +548,7 @@ func (a *DockerAdapter) serveInternalManifest(w http.ResponseWriter, r *http.Req
 	w.Header().Set("X-Shieldoo-Scanned", "true")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(manifestBytes)
-	_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+	_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 		EventType:  model.EventServed,
 		ArtifactID: artifactID,
 		ClientIP:   r.RemoteAddr,
@@ -599,7 +599,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 				Artifact: artifactID,
 				Reason:   status.QuarantineReason,
 			})
-			_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+			_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 				EventType:  model.EventBlocked,
 				ArtifactID: artifactID,
 				ClientIP:   r.RemoteAddr,
@@ -619,6 +619,9 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 			return
 		}
 		// Serve cached manifest.
+		if adapter.CheckCacheHitLicensePolicy(w, r.Context(), a.policyEng, a.db, artifactID) {
+			return
+		}
 		adapter.UpdateLastAccessedAt(a.db, artifactID)
 		manifestBytes, err := os.ReadFile(cachedPath)
 		if err != nil {
@@ -631,7 +634,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 		w.Header().Set("X-Shieldoo-Scanned", "true")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(manifestBytes)
-		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventServed,
 			ArtifactID: artifactID,
 			ClientIP:   r.RemoteAddr,
@@ -649,7 +652,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 	defer unlock()
 
 	// Detach from the HTTP request context — see PyPI adapter for rationale.
-	pctx, pcancel := adapter.PipelineContext()
+	pctx, pcancel := adapter.PipelineContextFrom(r.Context())
 	defer pcancel()
 
 	// 3. Re-check cache after acquiring lock — another request may have completed the pipeline.
@@ -676,6 +679,9 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 				Artifact: artifactID,
 				Reason:   "cached artifact integrity check failed",
 			})
+			return
+		}
+		if adapter.CheckCacheHitLicensePolicy(w, r.Context(), a.policyEng, a.db, artifactID) {
 			return
 		}
 		manifestBytes, err := os.ReadFile(cachedPath)
@@ -788,7 +794,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 	case policy.ActionBlock:
 		now := time.Now().UTC()
 		_ = a.persistArtifact(artifactID, scanArtifact, manifestSHA, int64(len(manifestBytes)), model.StatusQuarantined, policyResult.Reason, &now, scanResults)
-		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventBlocked,
 			ArtifactID: artifactID,
 			ClientIP:   r.RemoteAddr,
@@ -805,7 +811,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 	case policy.ActionQuarantine:
 		now := time.Now().UTC()
 		_ = a.persistArtifact(artifactID, scanArtifact, manifestSHA, int64(len(manifestBytes)), model.StatusQuarantined, policyResult.Reason, &now, scanResults)
-		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventQuarantined,
 			ArtifactID: artifactID,
 			ClientIP:   r.RemoteAddr,
@@ -821,7 +827,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 
 	case policy.ActionAllowWithWarning:
 		_ = a.persistArtifact(artifactID, scanArtifact, manifestSHA, int64(len(manifestBytes)), model.StatusClean, "", nil, scanResults)
-		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventAllowedWithWarning,
 			ArtifactID: artifactID,
 			ClientIP:   r.RemoteAddr,
@@ -884,7 +890,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 		_ = a.persistArtifact(artifactID, scanArtifact, manifestSHA, int64(len(manifestBytes)), model.StatusClean, "", nil, scanResults)
 	}
 
-	_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+	_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 		EventType:  model.EventServed,
 		ArtifactID: artifactID,
 		ClientIP:   r.RemoteAddr,
@@ -902,6 +908,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 
 	// Trigger async sandbox scan (non-blocking).
 	adapter.TriggerAsyncScan(r.Context(), scanArtifact, scanArtifact.LocalPath, a.db, a.policyEng)
+	adapter.TriggerAsyncSBOMWrite(r.Context(), artifactID, scanResults)
 }
 
 // fetchManifest downloads the manifest from the upstream registry.

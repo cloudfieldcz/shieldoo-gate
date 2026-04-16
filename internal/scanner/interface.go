@@ -45,6 +45,11 @@ type Artifact struct {
 	SHA256      string
 	SizeBytes   int64
 	UpstreamURL string
+	// ExtraLicenses holds additional license strings discovered outside the
+	// normal scan path (e.g. Maven effective-POM parent chain resolution).
+	// Populated by the adapter before ScanAll; merged into ScanResult.Licenses
+	// by the Trivy scanner alongside its own extraction results.
+	ExtraLicenses []string
 }
 
 type Finding struct {
@@ -64,6 +69,15 @@ type ScanResult struct {
 	Duration       time.Duration
 	ScannedAt      time.Time
 	Error          error
+
+	// SBOMContent is the serialized SBOM produced by the scanner (e.g. Trivy
+	// in CycloneDX mode). Empty for scanners that do not produce SBOMs.
+	SBOMContent []byte
+	// SBOMFormat is the format string (e.g. "cyclonedx-json").
+	SBOMFormat string
+	// Licenses is a pre-extracted, deduplicated list of SPDX IDs from the SBOM.
+	// Used by the license evaluator so the blob does not need to be re-parsed.
+	Licenses []string
 }
 
 type Scanner interface {

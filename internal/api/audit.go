@@ -38,7 +38,8 @@ func (s *Server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 				 COALESCE(user_agent, '') AS user_agent,
 				 COALESCE(reason, '') AS reason,
 				 COALESCE(metadata_json, '') AS metadata_json,
-				 COALESCE(user_email, '') AS user_email`
+				 COALESCE(user_email, '') AS user_email,
+				 project_id`
 	if eventType != "" {
 		query = `SELECT ` + cols + `
 				 FROM audit_log

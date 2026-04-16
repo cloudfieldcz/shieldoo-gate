@@ -19,8 +19,9 @@ const (
 
 // PolicyResult is the outcome of evaluating a policy against an artifact.
 type PolicyResult struct {
-	Action Action
-	Reason string
+	Action   Action
+	Reason   string
+	Warnings []string // non-blocking notes surfaced to audit + response headers
 }
 
 // AllowlistEntry represents a parsed allowlist specification.

@@ -1,6 +1,12 @@
-# Gemfile — RubyGems example for Shieldoo Gate
-# Point the source at the Shieldoo Gate RubyGems proxy.
+# Gemfile — RubyGems example for Shieldoo Gate.
+#
+# Basic auth is embedded as userinfo in the source URL:
+#   username = project label (rubygems-demo)
+#   password = the well-known dev token defined in docker/docker-compose.yml
+#
+# For production, replace the token with a PAT + a credential helper such as
+# `bundle config set --local http://proxy.example.com/ user:token`.
 
-source "http://localhost:8086"
+source "http://rubygems-demo:test-token-123@localhost:8086"
 
 gem "rake", "~> 13.1"

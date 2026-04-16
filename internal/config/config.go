@@ -25,6 +25,31 @@ type Config struct {
 	Auth       AuthConfig       `mapstructure:"auth"`
 	ProxyAuth  ProxyAuthConfig  `mapstructure:"proxy_auth"`
 	PublicURLs PublicURLsConfig `mapstructure:"public_urls"`
+	Projects   ProjectsConfig   `mapstructure:"projects"`
+	SBOM       SBOMConfig       `mapstructure:"sbom"`
+}
+
+// ProjectsConfig controls project registry behavior.
+// In lazy mode, unknown Basic auth labels auto-create projects (rate-limited, capped).
+// In strict mode, unknown labels are rejected at auth time.
+type ProjectsConfig struct {
+	Mode             string   `mapstructure:"mode"`               // "lazy" | "strict" (default: "lazy")
+	DefaultLabel     string   `mapstructure:"default_label"`      // fallback for empty username (default: "default")
+	LabelRegex       string   `mapstructure:"label_regex"`        // optional custom validation regex
+	MaxCount         int      `mapstructure:"max_count"`          // hard cap on total projects (default: 1000, 0 = unlimited)
+	LazyCreateRate   int      `mapstructure:"lazy_create_rate"`   // new projects per hour per identity (default: 10)
+	CacheSize        int      `mapstructure:"cache_size"`         // LRU cache entries (default: 512)
+	CacheTTL         string   `mapstructure:"cache_ttl"`          // LRU entry TTL (default: "5m")
+	UsageFlushPeriod string   `mapstructure:"usage_flush_period"` // debounced usage upsert interval (default: "30s")
+	BootstrapLabels  []string `mapstructure:"bootstrap_labels"`   // labels guaranteed to exist on startup; idempotent. Required for strict mode pre-provisioning.
+}
+
+// SBOMConfig controls CycloneDX SBOM generation and storage.
+type SBOMConfig struct {
+	Enabled    bool   `mapstructure:"enabled"`     // default false
+	Format     string `mapstructure:"format"`      // "cyclonedx-json" (only option in v1.2)
+	AsyncWrite bool   `mapstructure:"async_write"` // write blob asynchronously, default true
+	TTL        string `mapstructure:"ttl"`         // retention duration, default "30d"
 }
 
 // PublicURLsConfig holds the public-facing URLs for each ecosystem proxy.
@@ -77,6 +102,11 @@ var knownEventTypes = map[string]bool{
 	"TAG_MUTATED":      true,
 	"RESCAN_QUEUED":          true,
 	"ALLOWED_WITH_WARNING":   true,
+	"LICENSE_BLOCKED":        true,
+	"LICENSE_WARNED":         true,
+	"LICENSE_CHECK_SKIPPED":  true,
+	"PROJECT_NOT_FOUND":      true,
+	"SBOM_GENERATED":         true,
 }
 
 type ServerConfig struct {
@@ -95,13 +125,27 @@ type PortsConfig struct {
 }
 
 type UpstreamsConfig struct {
-	PyPI   string               `mapstructure:"pypi"`
-	NPM    string               `mapstructure:"npm"`
-	NuGet  string               `mapstructure:"nuget"`
-	Docker DockerUpstreamConfig `mapstructure:"docker"`
-	Maven    string               `mapstructure:"maven"`
-	RubyGems string               `mapstructure:"rubygems"`
-	GoMod    string               `mapstructure:"gomod"`
+	PyPI          string               `mapstructure:"pypi"`
+	NPM           string               `mapstructure:"npm"`
+	NuGet         string               `mapstructure:"nuget"`
+	Docker        DockerUpstreamConfig `mapstructure:"docker"`
+	Maven         string               `mapstructure:"maven"`
+	MavenResolver MavenResolverConfig  `mapstructure:"maven_resolver"`
+	RubyGems      string               `mapstructure:"rubygems"`
+	GoMod         string               `mapstructure:"gomod"`
+}
+
+// MavenResolverConfig controls the effective-POM parent chain resolver.
+// When enabled (default), the resolver fetches standalone .pom files from
+// the upstream Maven repository and walks the parent chain to discover
+// licenses that are inherited rather than declared inline.
+type MavenResolverConfig struct {
+	Enabled         bool   `mapstructure:"enabled"`
+	CacheSize       int    `mapstructure:"cache_size"`
+	CacheTTL        string `mapstructure:"cache_ttl"`
+	MaxDepth        int    `mapstructure:"max_depth"`
+	FetchTimeout    string `mapstructure:"fetch_timeout"`
+	ResolverTimeout string `mapstructure:"resolver_timeout"`
 }
 
 type DockerUpstreamConfig struct {
@@ -334,6 +378,19 @@ type PolicyConfig struct {
 	AITriage                    AITriageConfig      `mapstructure:"ai_triage"`
 	Allowlist                   []string            `mapstructure:"allowlist"`
 	TagMutability               TagMutabilityConfig `mapstructure:"tag_mutability"`
+	Licenses                    LicensePolicyConfig `mapstructure:"licenses"`
+}
+
+// LicensePolicyConfig controls SPDX-based license policy enforcement.
+// When Enabled is false, license evaluation is skipped entirely.
+type LicensePolicyConfig struct {
+	Enabled       bool     `mapstructure:"enabled"`
+	Blocked       []string `mapstructure:"blocked"`        // SPDX ids to always block
+	Warned        []string `mapstructure:"warned"`         // allow + warning
+	Allowed       []string `mapstructure:"allowed"`        // whitelist mode if non-empty
+	UnknownAction string   `mapstructure:"unknown_action"` // "allow" | "warn" | "block" (default: "allow")
+	OnSBOMError   string   `mapstructure:"on_sbom_error"`  // "allow" | "warn" | "block" (default: "allow")
+	OrSemantics   string   `mapstructure:"or_semantics"`   // "any_allowed" | "all_allowed" (default: "any_allowed")
 }
 
 // AITriageConfig holds configuration for AI-assisted triage in balanced mode.
@@ -425,6 +482,31 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("policy.ai_triage.rate_limit", 10)
 	v.SetDefault("policy.ai_triage.circuit_breaker_threshold", 5)
 	v.SetDefault("policy.ai_triage.circuit_breaker_cooldown", "60s")
+
+	v.SetDefault("projects.mode", "lazy")
+	v.SetDefault("projects.default_label", "default")
+	v.SetDefault("projects.max_count", 1000)
+	v.SetDefault("projects.lazy_create_rate", 10)
+	v.SetDefault("projects.cache_size", 512)
+	v.SetDefault("projects.cache_ttl", "5m")
+	v.SetDefault("projects.usage_flush_period", "30s")
+
+	v.SetDefault("sbom.enabled", false)
+	v.SetDefault("sbom.format", "cyclonedx-json")
+	v.SetDefault("sbom.async_write", true)
+	v.SetDefault("sbom.ttl", "30d")
+
+	v.SetDefault("upstreams.maven_resolver.enabled", true)
+	v.SetDefault("upstreams.maven_resolver.cache_size", 4096)
+	v.SetDefault("upstreams.maven_resolver.cache_ttl", "24h")
+	v.SetDefault("upstreams.maven_resolver.max_depth", 5)
+	v.SetDefault("upstreams.maven_resolver.fetch_timeout", "3s")
+	v.SetDefault("upstreams.maven_resolver.resolver_timeout", "5s")
+
+	v.SetDefault("policy.licenses.enabled", false)
+	v.SetDefault("policy.licenses.unknown_action", "allow")
+	v.SetDefault("policy.licenses.on_sbom_error", "allow")
+	v.SetDefault("policy.licenses.or_semantics", "any_allowed")
 
 	v.SetDefault("scanners.typosquat.enabled", true)
 	v.SetDefault("scanners.typosquat.max_edit_distance", 2)
@@ -559,7 +641,90 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if err := c.validateProjects(); err != nil {
+		return err
+	}
+
+	if err := c.validateLicenses(); err != nil {
+		return err
+	}
+
+	if err := c.validateSBOM(); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func (c *Config) validateProjects() error {
+	switch c.Projects.Mode {
+	case "", "lazy", "strict":
+	default:
+		return fmt.Errorf("config: projects.mode must be 'lazy' or 'strict', got %q", c.Projects.Mode)
+	}
+	if c.Projects.MaxCount < 0 {
+		return fmt.Errorf("config: projects.max_count must be >= 0, got %d", c.Projects.MaxCount)
+	}
+	if c.Projects.LazyCreateRate < 0 {
+		return fmt.Errorf("config: projects.lazy_create_rate must be >= 0, got %d", c.Projects.LazyCreateRate)
+	}
+	if c.Projects.CacheTTL != "" {
+		if _, err := time.ParseDuration(c.Projects.CacheTTL); err != nil {
+			return fmt.Errorf("config: projects.cache_ttl %q: %w", c.Projects.CacheTTL, err)
+		}
+	}
+	if c.Projects.UsageFlushPeriod != "" {
+		if _, err := time.ParseDuration(c.Projects.UsageFlushPeriod); err != nil {
+			return fmt.Errorf("config: projects.usage_flush_period %q: %w", c.Projects.UsageFlushPeriod, err)
+		}
+	}
+	return nil
+}
+
+func (c *Config) validateLicenses() error {
+	lic := c.Policy.Licenses
+	if !lic.Enabled {
+		return nil
+	}
+	allowed := map[string]bool{"": true, "allow": true, "warn": true, "block": true}
+	if !allowed[lic.UnknownAction] {
+		return fmt.Errorf("config: policy.licenses.unknown_action must be 'allow'|'warn'|'block', got %q", lic.UnknownAction)
+	}
+	if !allowed[lic.OnSBOMError] {
+		return fmt.Errorf("config: policy.licenses.on_sbom_error must be 'allow'|'warn'|'block', got %q", lic.OnSBOMError)
+	}
+	orOK := map[string]bool{"": true, "any_allowed": true, "all_allowed": true}
+	if !orOK[lic.OrSemantics] {
+		return fmt.Errorf("config: policy.licenses.or_semantics must be 'any_allowed'|'all_allowed', got %q", lic.OrSemantics)
+	}
+	return nil
+}
+
+func (c *Config) validateSBOM() error {
+	if !c.SBOM.Enabled {
+		return nil
+	}
+	if c.SBOM.Format != "" && c.SBOM.Format != "cyclonedx-json" {
+		return fmt.Errorf("config: sbom.format must be 'cyclonedx-json', got %q", c.SBOM.Format)
+	}
+	if c.SBOM.TTL != "" {
+		if _, err := parseTTL(c.SBOM.TTL); err != nil {
+			return fmt.Errorf("config: sbom.ttl %q: %w", c.SBOM.TTL, err)
+		}
+	}
+	return nil
+}
+
+// parseTTL supports "Nd" (days) and time.ParseDuration formats.
+func parseTTL(s string) (time.Duration, error) {
+	// Support "30d" style.
+	if n := len(s); n > 1 && s[n-1] == 'd' {
+		var days int
+		if _, err := fmt.Sscanf(s, "%dd", &days); err == nil {
+			return time.Duration(days) * 24 * time.Hour, nil
+		}
+	}
+	return time.ParseDuration(s)
 }
 
 // validatePolicy checks policy configuration including mode and AI triage settings.

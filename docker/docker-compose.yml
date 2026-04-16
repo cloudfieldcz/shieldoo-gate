@@ -24,6 +24,11 @@ services:
       - gate-cache:/var/cache/shieldoo-gate
       - trivy-cache:/var/cache/trivy
       - ./config.yaml:/etc/shieldoo-gate/config.yaml:ro
+    environment:
+      # Well-known shared token used by the examples/ smoke-test projects.
+      # This is a DEVELOPMENT default only — rotate (or switch to per-user PATs
+      # via the admin UI) before pointing any non-test client at this proxy.
+      SGW_PROXY_TOKEN: "test-token-123"
     env_file:
       - .env
     restart: unless-stopped

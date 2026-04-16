@@ -2,6 +2,8 @@ package policy
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -9,6 +11,9 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/license"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/project"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/sbom"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
 )
 
@@ -63,6 +68,13 @@ type Engine struct {
 	circuitBreaker *CircuitBreaker
 	rateLimiter    *TriageRateLimiter
 	cacheTTL       time.Duration
+
+	// license + SBOM integration (Phase 3). nil when disabled.
+	licenseEval     license.Evaluator
+	licenseResolver *license.Resolver
+	sbomStore       sbom.Storage
+	onSBOMError     license.Action // allow | warn | block
+	licenseEnabled  bool
 }
 
 // NewEngine creates a new Engine with the supplied configuration.
@@ -125,6 +137,54 @@ func WithCacheTTL(ttl time.Duration) EngineOption {
 	return func(e *Engine) { e.cacheTTL = ttl }
 }
 
+// WithLicenseEvaluator wires SPDX-based license policy evaluation.
+// resolver provides the effective policy per project; sbomStore provides the
+// pre-extracted license list for each artifact. Both are required — passing
+// nil for either disables license enforcement entirely.
+func WithLicenseEvaluator(eval license.Evaluator, resolver *license.Resolver, sbomStore sbom.Storage, onSBOMError license.Action) EngineOption {
+	return func(e *Engine) {
+		if eval == nil || resolver == nil || sbomStore == nil {
+			return
+		}
+		e.licenseEval = eval
+		e.licenseResolver = resolver
+		e.sbomStore = sbomStore
+		if onSBOMError == "" {
+			onSBOMError = license.ActionAllow
+		}
+		e.onSBOMError = onSBOMError
+		e.licenseEnabled = true
+	}
+}
+
+// LicenseResolver exposes the wired resolver so callers (e.g. the admin API)
+// can push runtime-mutable global-policy changes in without reaching into
+// private fields. Returns nil when license enforcement is not enabled.
+func (e *Engine) LicenseResolver() *license.Resolver {
+	return e.licenseResolver
+}
+
+// OnSBOMError returns the configured behavior for artifacts that lack SBOM
+// data. Thread-safe.
+func (e *Engine) OnSBOMError() license.Action {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.onSBOMError
+}
+
+// SetOnSBOMError updates the on_sbom_error action at runtime. Thread-safe.
+// Accepts the three license.Action values; any other value is ignored.
+func (e *Engine) SetOnSBOMError(a license.Action) {
+	switch a {
+	case license.ActionAllow, license.ActionWarn, license.ActionBlock:
+	default:
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.onSBOMError = a
+}
+
 // hasDBOverride checks if there is an active, non-revoked, non-expired override
 // in the database for the given artifact.
 func (e *Engine) hasDBOverride(ctx context.Context, artifact scanner.Artifact) bool {
@@ -177,26 +237,124 @@ func (e *Engine) Evaluate(ctx context.Context, artifact scanner.Artifact, scanRe
 		}
 	}
 
+	// License policy check (between allowlist and verdict aggregation). License
+	// violations are authoritative — they short-circuit the rest of the policy
+	// evaluation because a legally-blocked license is not something that scan
+	// findings can override. Warnings (non-blocking) are merged into the final
+	// PolicyResult at the end.
+	licResult, licHandled := e.evaluateLicenses(ctx, artifact, scanResults)
+	if licHandled {
+		return licResult
+	}
+	licWarnings := licResult.Warnings
+
 	aggCfg := AggregationConfig{
 		MinConfidence:           e.cfg.MinimumConfidence,
 		BehavioralMinConfidence: e.cfg.BehavioralMinimumConfidence,
 	}
 	agg := Aggregate(scanResults, aggCfg)
 
+	var result PolicyResult
 	switch {
 	case agg.Verdict == scanner.VerdictMalicious:
-		return PolicyResult{
+		result = PolicyResult{
 			Action: ActionBlock,
 			Reason: fmt.Sprintf("verdict %s meets block threshold", agg.Verdict),
 		}
 	case agg.Verdict == scanner.VerdictSuspicious:
-		return e.evaluateSuspicious(ctx, artifact, &agg)
+		result = e.evaluateSuspicious(ctx, artifact, &agg)
 	default:
-		return PolicyResult{
+		result = PolicyResult{
 			Action: ActionAllow,
 			Reason: fmt.Sprintf("verdict %s is below action thresholds", agg.Verdict),
 		}
 	}
+	if len(licWarnings) > 0 {
+		result.Warnings = append(licWarnings, result.Warnings...)
+	}
+	return result
+}
+
+// EvaluateLicensesOnly checks stored SBOM licenses against the current policy
+// without requiring scan results. Designed for the cache-hit serve path where
+// a full scan is not performed. Returns ActionBlock when the artifact has a
+// license that is blocked by the current policy.
+//
+// FAIL-CLOSED: returns ActionBlock on DB/resolver errors so that a broken
+// metadata lookup cannot silently bypass license enforcement. This is stricter
+// than evaluateLicenses() (used on fresh-scan path) which fails open.
+func (e *Engine) EvaluateLicensesOnly(ctx context.Context, artifactID string) PolicyResult {
+	if !e.licenseEnabled {
+		return PolicyResult{Action: ActionAllow}
+	}
+
+	// Resolve project from context.
+	proj := project.FromContext(ctx)
+	projectID := int64(0)
+	projectLabel := ""
+	if proj != nil {
+		projectID = proj.ID
+		projectLabel = proj.Label
+	}
+
+	pol, err := e.licenseResolver.ResolveForProject(ctx, projectID, projectLabel)
+	if err != nil {
+		// FAIL-CLOSED: resolver error blocks the request.
+		log.Error().Err(err).Int64("project_id", projectID).Str("artifact_id", artifactID).
+			Msg("policy: cache-hit license check: resolver error — blocking (fail-closed)")
+		return PolicyResult{
+			Action: ActionBlock,
+			Reason: fmt.Sprintf("license: policy resolver error for %s (fail-closed)", artifactID),
+		}
+	}
+	if license.IsDisabled(pol) {
+		return PolicyResult{Action: ActionAllow}
+	}
+
+	// Load licenses from sbom_metadata.
+	var licenses []string
+	if e.sbomStore != nil {
+		meta, err := e.sbomStore.GetMetadata(ctx, artifactID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			// FAIL-CLOSED: DB error blocks the request.
+			log.Error().Err(err).Str("artifact_id", artifactID).
+				Msg("policy: cache-hit license check: metadata read error — blocking (fail-closed)")
+			return PolicyResult{
+				Action: ActionBlock,
+				Reason: fmt.Sprintf("license: metadata read error for %s (fail-closed)", artifactID),
+			}
+		}
+		if meta != nil {
+			licenses = meta.Licenses()
+		}
+	}
+
+	if len(licenses) == 0 {
+		// No license data — apply on_sbom_error.
+		switch e.onSBOMError {
+		case license.ActionBlock:
+			return PolicyResult{
+				Action: ActionBlock,
+				Reason: fmt.Sprintf("license: SBOM unavailable for %s, on_sbom_error=block", artifactID),
+			}
+		case license.ActionWarn:
+			return PolicyResult{
+				Action:   ActionAllow,
+				Warnings: []string{"license: SBOM unavailable — policy check skipped"},
+			}
+		default:
+			return PolicyResult{Action: ActionAllow}
+		}
+	}
+
+	decision := e.licenseEval.Evaluate(ctx, pol, licenses)
+	switch decision.Action {
+	case license.ActionBlock:
+		return PolicyResult{Action: ActionBlock, Reason: decision.Reason}
+	case license.ActionWarn:
+		return PolicyResult{Action: ActionAllow, Warnings: []string{decision.Reason}}
+	}
+	return PolicyResult{Action: ActionAllow}
 }
 
 // evaluateSuspicious handles SUSPICIOUS verdicts based on the configured policy mode.
@@ -257,6 +415,94 @@ func (e *Engine) evaluateSuspicious(ctx context.Context, artifact scanner.Artifa
 			Reason: fmt.Sprintf("unknown mode: verdict SUSPICIOUS, falling back to quarantine"),
 		}
 	}
+}
+
+// evaluateLicenses applies license policy. Returns (result, true) if the
+// license policy makes a definitive decision (block or warn with a message);
+// returns (zero, false) if the evaluator is disabled / not applicable and the
+// caller should continue to verdict aggregation.
+//
+// Warnings are accumulated on the returned result and flow through to the
+// adapter serve path so downstream can emit X-Shieldoo-Warning headers.
+//
+// Source-of-license design:
+//   - Prefer Trivy's pre-extracted ScanResult.Licenses when any scanner
+//     populated it. This avoids a DB round-trip on the hot scan path.
+//   - Fall back to sbom_metadata.licenses_json when the scan did not emit
+//     licenses (e.g. version-diff or cache-hit re-evaluation paths).
+//   - If no licenses are available anywhere, apply on_sbom_error policy.
+func (e *Engine) evaluateLicenses(ctx context.Context, artifact scanner.Artifact, scanResults []scanner.ScanResult) (PolicyResult, bool) {
+	if !e.licenseEnabled {
+		return PolicyResult{}, false
+	}
+
+	// Resolve project from context (Phase 1 middleware puts it there).
+	proj := project.FromContext(ctx)
+	projectID := int64(0)
+	projectLabel := ""
+	if proj != nil {
+		projectID = proj.ID
+		projectLabel = proj.Label
+	}
+
+	pol, err := e.licenseResolver.ResolveForProject(ctx, projectID, projectLabel)
+	if err != nil {
+		log.Warn().Err(err).Int64("project_id", projectID).Msg("policy: resolve license policy failed — allowing")
+		return PolicyResult{}, false
+	}
+
+	// "disabled" mode for this project → skip.
+	if license.IsDisabled(pol) {
+		return PolicyResult{}, false
+	}
+
+	// Gather licenses: scan results first, then sbom_metadata fallback.
+	var licenses []string
+	for _, sr := range scanResults {
+		if len(sr.Licenses) > 0 {
+			licenses = append(licenses, sr.Licenses...)
+		}
+	}
+	if len(licenses) == 0 {
+		meta, err := e.sbomStore.GetMetadata(ctx, artifact.ID)
+		if err == nil && meta != nil {
+			licenses = meta.Licenses()
+		} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			log.Warn().Err(err).Str("artifact_id", artifact.ID).Msg("policy: sbom metadata read failed")
+		}
+	}
+
+	if len(licenses) == 0 {
+		// No license data available — apply on_sbom_error.
+		switch e.onSBOMError {
+		case license.ActionBlock:
+			return PolicyResult{
+				Action: ActionBlock,
+				Reason: fmt.Sprintf("license: SBOM unavailable for %s, on_sbom_error=block", artifact.ID),
+			}, true
+		case license.ActionWarn:
+			return PolicyResult{
+				Warnings: []string{"license: SBOM unavailable — policy check skipped"},
+			}, false // allow the rest of pipeline to run; just carry the warning forward
+		default: // allow
+			return PolicyResult{}, false
+		}
+	}
+
+	decision := e.licenseEval.Evaluate(ctx, pol, licenses)
+	switch decision.Action {
+	case license.ActionBlock:
+		return PolicyResult{
+			Action: ActionBlock,
+			Reason: decision.Reason,
+		}, true
+	case license.ActionWarn:
+		// Non-terminal — attach warning and defer to verdict rules.
+		return PolicyResult{
+			Warnings: []string{decision.Reason},
+		}, false
+	}
+	return PolicyResult{}, false
 }
 
 // triageSuspicious handles AI triage for balanced mode MEDIUM severity findings.

@@ -82,6 +82,9 @@ Shieldoo Gate is built for teams that take software supply chain seriously:
 - **Transparent proxy** — zero client-side changes beyond pointing at the Gate URL
 - **Multi-ecosystem** — Docker, PyPI, npm, NuGet, Maven, RubyGems, Go Modules
 - **Deep, layered scanning pipeline** — hash feed, static heuristics, typosquat detection, version-diff, reputation, GuardDog, Trivy, OSV, LLM-powered AI analysis, optional sandbox
+- **License policy enforcement (v1.2+)** — block GPL/AGPL or any other SPDX license at the proxy layer; per-project overrides; runtime-editable from the admin UI with one-click "License Groups" presets (strong copyleft, network copyleft, weak copyleft, permissive…)
+- **Project segmentation (v1.2+)** — per-team / per-service audit trail and policy, derived from the HTTP Basic-auth username, zero client changes
+- **CycloneDX SBOM (v1.2+)** — every scanned artifact gets a CycloneDX 1.5 SBOM persisted alongside the cache, accessible via API and admin UI
 - **Block & quarantine** — malicious packages never reach developers, CI, or production
 - **Community threat feed** — fast-path blocking of known malicious package hashes, updated continuously
 - **Append-only audit log** — every request, scan verdict, and override is recorded
@@ -111,21 +114,46 @@ The **AI Scanner** is a key differentiator: most supply chain security tools rel
 ## Quick Start
 
 ```bash
-# 1. Copy and customise the example config
-cp config.example.yaml docker/config.yaml
-
-# 2. Start the full stack (Shieldoo Gate + GuardDog scanner bridge)
+# 1. Start the full stack (Shieldoo Gate + GuardDog scanner bridge).
+#    docker/config.yaml ships with proxy auth ENABLED and a well-known dev
+#    token (test-token-123) so the examples/ projects work out of the box.
 docker compose -f docker/docker-compose.yml up -d
 
-# 3. Point your package managers at the proxy
-pip config set global.index-url http://localhost:5010/simple/
-npm config set registry http://localhost:4873/
-# NuGet:  dotnet nuget add source http://localhost:5001/v3/index.json
-# Docker: configure daemon mirror to http://localhost:5002
-
-# 4. Check the Admin API
+# 2. Check the Admin API
 curl http://localhost:8080/api/v1/health
+
+# 3. Try one of the smoke-test examples
+cd examples/npm-chalk && npm install && node index.mjs
 ```
+
+The bundled `docker/config.yaml` is a **dev-friendly reference** — auth is on,
+the token is hard-coded (`test-token-123`), and SBOM + project registry are
+enabled. For a clean template, start from `config.example.yaml` (which has
+safer defaults: auth off, SBOM off). Do not deploy the dev token to any
+shared environment.
+
+### Authenticating through the proxy (v1.2+)
+
+When `proxy_auth.enabled: true`, every request uses HTTP Basic Auth. The
+**username is interpreted as a project label** (used for audit segmentation
+and per-project license policy); the **password** carries the PAT (or the
+global shared token).
+
+```bash
+# Using the dev token shipped in docker/docker-compose.yml:
+export SGW_TOKEN="test-token-123"
+PROJECT="default"     # or your team/service name: backend-team, data-pipeline…
+
+# pip / uv
+pip install --index-url http://$PROJECT:$SGW_TOKEN@localhost:5010/simple/ requests
+
+# docker
+echo $SGW_TOKEN | docker login localhost:5002 -u $PROJECT --password-stdin
+```
+
+In **lazy** mode (default) a new label auto-creates a project. In **strict** mode the
+project must be pre-created via `POST /api/v1/projects`. Full details:
+[docs/features/projects.md](docs/features/projects.md).
 
 Port reference:
 

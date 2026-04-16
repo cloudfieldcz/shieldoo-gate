@@ -18,6 +18,8 @@ upstreams:
   npm: "https://registry.npmjs.org"
   nuget: "https://api.nuget.org"
   maven: "https://repo1.maven.org/maven2"
+  maven_resolver:
+    enabled: true
   rubygems: "https://rubygems.org"
   gomod: "https://proxy.golang.org"
   docker:
@@ -163,6 +165,17 @@ policy:
     action: "warn"
     exclude_tags: ["latest", "nightly", "dev"]
     check_on_cache_hit: false
+  # SPDX-based license policy (v1.2+). YAML here is the startup fallback; the
+  # effective policy can be edited at runtime from the admin UI (License Policy)
+  # and persisted to the global_license_policy DB row (overrides these values).
+  licenses:
+    enabled: true
+    blocked: []              # seed empty — populate from the UI (group presets)
+    warned: []
+    allowed: []
+    unknown_action: "allow"  # allow | warn | block
+    on_sbom_error: "allow"   # allow | warn | block
+    or_semantics: "any_allowed"
 
 threat_feed:
   enabled: true
@@ -191,12 +204,50 @@ auth:
   scopes: ["openid", "email", "profile"]
 
 # API key authentication for proxy endpoints (pip, npm, docker, nuget, gem, go).
-# When disabled (default), proxy endpoints are open — protected by network segmentation only.
+# When disabled, proxy endpoints are open — protected by network segmentation only.
 # When enabled, all proxy requests require a valid API key via HTTP Basic Auth.
 # Keys are either per-user PATs (generated via admin API) or a global shared token.
+#
+# This reference config has auth ENABLED + a well-known test token so the
+# examples/ projects can exercise the full Basic-auth → project-label flow
+# without any extra setup. For production, switch to PATs (or rotate the
+# global token) and never hard-code the token in a committed config.
 proxy_auth:
-  enabled: false
-  global_token_env: "SGW_PROXY_TOKEN"  # Env var holding the global shared token (optional)
+  enabled: true
+  global_token_env: "SGW_PROXY_TOKEN"  # Env var holding the global shared token
+
+# Project registry — derives a project label from the HTTP Basic-auth username.
+# This dev config runs in **strict** mode so per-project license-policy overrides
+# are honoured (the S-01 anti-spoofing guard requires strict). Bootstrap labels
+# below are pre-provisioned on every startup so the examples/ smoke-tests, the
+# self-build (shieldoo-gate), and CI (ci-bot) can authenticate immediately
+# without an admin POST /projects.
+projects:
+  mode: strict              # lazy | strict
+  default_label: default    # fallback when Basic-auth username is empty
+  max_count: 1000
+  lazy_create_rate: 10
+  cache_size: 512
+  cache_ttl: 5m
+  usage_flush_period: 30s
+  bootstrap_labels:
+    - default
+    - shieldoo-gate    # used by docker/Dockerfile (SGW_USER) for self-build dogfood
+    - python-demo      # examples/python-requests
+    - npm-demo         # examples/npm-chalk
+    - dotnet-demo      # examples/dotnet-json
+    - maven-demo       # examples/maven-example
+    - rubygems-demo    # examples/rubygems-example
+    - go-demo          # examples/go-example
+    - ci-bot           # tests/e2e-shell — generic CI/E2E identity
+
+# SBOM generation — CycloneDX JSON produced from the single-run Trivy scan
+# and persisted asynchronously to the active blob backend.
+sbom:
+  enabled: true
+  format: cyclonedx-json
+  async_write: true
+  ttl: 90d
 
 alerts:
   webhook:

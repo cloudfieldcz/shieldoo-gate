@@ -70,3 +70,5 @@ helm/charts/
 
 config.yaml
 .deploy/
+# Claude Code local state
+.claude/

@@ -30,6 +30,9 @@ source "${SCRIPT_DIR}/test_typosquat.sh"
 source "${SCRIPT_DIR}/test_version_diff.sh"
 source "${SCRIPT_DIR}/test_reputation.sh"
 source "${SCRIPT_DIR}/test_integrity.sh"
+source "${SCRIPT_DIR}/test_projects.sh"
+source "${SCRIPT_DIR}/test_sbom.sh"
+source "${SCRIPT_DIR}/test_license_policy.sh"
 
 _run_label=""
 if [ "${SGW_PROXY_AUTH_ENABLED:-false}" = "true" ]; then
@@ -124,6 +127,19 @@ test_typosquat
 test_version_diff
 test_reputation
 test_integrity
+test_projects
+test_sbom
+
+# License policy: API guards + per-ecosystem enforcement.
+# All ecosystem tests skip themselves when SGW_PROJECTS_MODE != strict
+# OR proxy auth is disabled (see tests/e2e-shell/test_license_policy.sh).
+test_license_policy
+test_license_pypi
+test_license_npm
+test_license_nuget
+test_license_maven
+test_license_rubygems
+test_license_cache_hit
 
 # ---------------------------------------------------------------------------
 # Summary and exit code

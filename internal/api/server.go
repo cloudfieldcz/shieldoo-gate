@@ -15,7 +15,10 @@ import (
 	"github.com/cloudfieldcz/shieldoo-gate/internal/auth"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/cache"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/license"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/policy"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/project"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/sbom"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
 )
 
@@ -34,6 +37,10 @@ type Server struct {
 	proxyAuthEnabled bool
 	publicURLs       config.PublicURLsConfig
 	onRescanQueued   func()
+	projectSvc       project.Service
+	projectsMode     string // "lazy" | "strict" (informational; enforcement is per request)
+	sbomStore        sbom.Storage
+	licenseResolver  *license.Resolver
 }
 
 // NewServer creates a new Server with the given dependencies.
@@ -82,6 +89,17 @@ func (s *Server) SetSyncService(svc *docker.SyncService) {
 	s.syncSvc = svc
 }
 
+// SetProjectService wires the project registry for admin API routes.
+func (s *Server) SetProjectService(svc project.Service) {
+	s.projectSvc = svc
+}
+
+// SetProjectsMode stores the active mode so handlers can enforce rules
+// (e.g. per-project license policy overrides are rejected in lazy mode).
+func (s *Server) SetProjectsMode(mode string) {
+	s.projectsMode = mode
+}
+
 // Routes returns a chi.Router with all API routes registered.
 // When auth is enabled, admin API routes require a valid OIDC token.
 // Health, metrics, and auth flow endpoints remain unauthenticated.
@@ -118,6 +136,10 @@ func (s *Server) Routes() chi.Router {
 			r.Get("/artifacts", s.handleListArtifacts)
 			r.Get("/artifacts/{id}", s.handleGetArtifact)
 			r.Get("/artifacts/{id}/scan-results", s.handleGetArtifactScanResults)
+			if s.sbomStore != nil {
+				r.Get("/artifacts/{id}/sbom", s.handleGetArtifactSBOM)
+				r.Get("/artifacts/{id}/licenses", s.handleGetArtifactLicenses)
+			}
 			r.Post("/artifacts/{id}/rescan", s.handleRescanArtifact)
 			r.Post("/artifacts/{id}/quarantine", s.handleQuarantineArtifact)
 			r.Post("/artifacts/{id}/release", s.handleReleaseArtifact)
@@ -155,6 +177,26 @@ func (s *Server) Routes() chi.Router {
 
 			// Public URLs for usage instructions
 			r.Get("/public-urls", s.handlePublicURLs)
+
+			// Project registry
+			if s.projectSvc != nil {
+				r.Get("/projects", s.handleListProjects)
+				r.Post("/projects", s.handleCreateProject)
+				r.Get("/projects/{id}", s.handleGetProject)
+				r.Patch("/projects/{id}", s.handleUpdateProject)
+				r.Delete("/projects/{id}", s.handleDisableProject)
+				r.Get("/projects/{id}/artifacts", s.handleListProjectArtifacts)
+				r.Get("/projects/{id}/license-policy", s.handleGetProjectLicensePolicy)
+				r.Put("/projects/{id}/license-policy", s.handlePutProjectLicensePolicy)
+				r.Delete("/projects/{id}/license-policy", s.handleDeleteProjectLicensePolicy)
+			}
+
+			// Global license policy (runtime-mutable; overrides YAML).
+			if s.licenseResolver != nil {
+				r.Get("/policy/licenses", s.handleGetGlobalLicensePolicy)
+				r.Put("/policy/licenses", s.handlePutGlobalLicensePolicy)
+				r.Delete("/policy/licenses", s.handleDeleteGlobalLicensePolicy)
+			}
 
 			// API key management (only when auth + proxy_auth are both enabled)
 			if s.proxyAuthEnabled {

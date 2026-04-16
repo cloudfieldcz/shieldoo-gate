@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/docker"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/gomod"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/maven"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/maven/effectivepom"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/npm"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/nuget"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/pypi"
@@ -35,7 +37,10 @@ import (
 	s3cache "github.com/cloudfieldcz/shieldoo-gate/internal/cache/s3"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/license"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/policy"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/project"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/sbom"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scheduler"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner/builtin"
@@ -95,22 +100,44 @@ func main() {
 	}
 	defer db.Close()
 
-	// Init cache store
-	var cacheStore cache.CacheStore
+	// Init cache store. The blob-store interface is implemented by the same
+	// struct (local/s3/azureblob/gcs all satisfy both cache.CacheStore and
+	// cache.BlobStore) so SBOM storage reuses the active backend.
+	var (
+		cacheStore cache.CacheStore
+		blobStore  cache.BlobStore
+	)
 	switch cfg.Cache.Backend {
 	case "s3":
-		cacheStore, err = s3cache.NewS3CacheStore(cfg.Cache.S3)
+		store, err := s3cache.NewS3CacheStore(cfg.Cache.S3)
+		if err != nil {
+			log.Fatal().Err(err).Msg("failed to initialize S3 cache store")
+		}
+		cacheStore = store
+		blobStore = store
 	case "azure_blob":
-		cacheStore, err = azureblobcache.NewAzureBlobStore(cfg.Cache.AzureBlob)
+		store, err := azureblobcache.NewAzureBlobStore(cfg.Cache.AzureBlob)
+		if err != nil {
+			log.Fatal().Err(err).Msg("failed to initialize Azure Blob cache store")
+		}
+		cacheStore = store
+		blobStore = store
 	case "gcs":
-		cacheStore, err = gcscache.NewGCSCacheStore(cfg.Cache.GCS)
+		store, err := gcscache.NewGCSCacheStore(cfg.Cache.GCS)
+		if err != nil {
+			log.Fatal().Err(err).Msg("failed to initialize GCS cache store")
+		}
+		cacheStore = store
+		blobStore = store
 	case "local", "":
-		cacheStore, err = local.NewLocalCacheStore(cfg.Cache.Local.Path, cfg.Cache.Local.MaxSizeGB)
+		store, err := local.NewLocalCacheStore(cfg.Cache.Local.Path, cfg.Cache.Local.MaxSizeGB)
+		if err != nil {
+			log.Fatal().Err(err).Msg("failed to initialize local cache store")
+		}
+		cacheStore = store
+		blobStore = store
 	default:
-		err = fmt.Errorf("unknown cache backend: %s", cfg.Cache.Backend)
-	}
-	if err != nil {
-		log.Fatal().Err(err).Msg("failed to initialize cache store")
+		log.Fatal().Str("backend", cfg.Cache.Backend).Msg("unknown cache backend")
 	}
 
 	// Init scanners: 6 built-in scanners + optional typosquat
@@ -134,12 +161,21 @@ func main() {
 		}
 	}
 
-	// Optional: Trivy scanner
+	// Optional: Trivy scanner.
+	// When sbom.enabled is true, Trivy runs in single-run CycloneDX mode
+	// (vuln+license in one subprocess) so SBOMs are a free byproduct of
+	// vulnerability scanning. Otherwise, fall back to legacy native JSON.
 	if cfg.Scanners.Trivy.Enabled {
 		timeout := parseDuration(cfg.Scanners.Timeout, 30*time.Second)
-		trivy := trivyscanner.NewTrivyScanner(cfg.Scanners.Trivy.Binary, cfg.Scanners.Trivy.CacheDir, timeout)
+		var trivy *trivyscanner.TrivyScanner
+		if cfg.SBOM.Enabled {
+			trivy = trivyscanner.NewTrivyScannerWithSBOM(cfg.Scanners.Trivy.Binary, cfg.Scanners.Trivy.CacheDir, timeout)
+			log.Info().Str("binary", cfg.Scanners.Trivy.Binary).Msg("trivy scanner enabled (CycloneDX SBOM mode)")
+		} else {
+			trivy = trivyscanner.NewTrivyScanner(cfg.Scanners.Trivy.Binary, cfg.Scanners.Trivy.CacheDir, timeout)
+			log.Info().Str("binary", cfg.Scanners.Trivy.Binary).Msg("trivy scanner enabled (legacy vuln-only mode)")
+		}
 		scanners = append(scanners, trivy)
-		log.Info().Str("binary", cfg.Scanners.Trivy.Binary).Msg("trivy scanner enabled")
 	}
 
 	// Optional: OSV scanner
@@ -275,6 +311,34 @@ func main() {
 			log.Info().Msg("AI triage infrastructure initialized")
 		}
 	}
+	// License policy wiring (only if enabled and SBOM is enabled).
+	var licenseResolver *license.Resolver
+	if cfg.Policy.Licenses.Enabled && cfg.SBOM.Enabled {
+		globalPolicy := license.Policy{
+			Blocked:       cfg.Policy.Licenses.Blocked,
+			Warned:        cfg.Policy.Licenses.Warned,
+			Allowed:       cfg.Policy.Licenses.Allowed,
+			UnknownAction: license.UnknownAction(orDefault(cfg.Policy.Licenses.UnknownAction, "allow")),
+			OrSemantics:   license.OrSemantics(orDefault(cfg.Policy.Licenses.OrSemantics, "any_allowed")),
+			Source:        "global",
+		}
+		licenseResolver = license.NewResolver(db, license.ResolverConfig{
+			Global:     globalPolicy,
+			StrictMode: cfg.Projects.Mode == "strict",
+		})
+		onErr := license.Action(orDefault(cfg.Policy.Licenses.OnSBOMError, "allow"))
+		engineOpts = append(engineOpts, policy.WithLicenseEvaluator(
+			license.NewEvaluator(), licenseResolver, sbom.NewStorage(db, blobStore, cfg.Cache.Local.Path), onErr,
+		))
+		log.Info().
+			Int("blocked", len(globalPolicy.Blocked)).
+			Int("warned", len(globalPolicy.Warned)).
+			Int("allowed", len(globalPolicy.Allowed)).
+			Str("unknown_action", string(globalPolicy.UnknownAction)).
+			Str("strict", fmt.Sprintf("%v", cfg.Projects.Mode == "strict")).
+			Msg("license policy enabled")
+	}
+
 	policyEngine := policy.NewEngine(policy.EngineConfig{
 		Mode:                        policyMode,
 		BlockIfVerdict:              scanner.Verdict(cfg.Policy.BlockIfVerdict),
@@ -353,7 +417,27 @@ func main() {
 	npmAdapter := npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine, npmUpstream, tagMutCfg)
 	nugetAdapter := nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, nugetUpstream, tagMutCfg)
 	dockerAdapter := docker.NewDockerAdapter(db, cacheStore, scanEngine, policyEngine, cfg.Upstreams.Docker)
-	mavenAdapter := maven.NewMavenAdapter(db, cacheStore, scanEngine, policyEngine, mavenUpstream)
+	// Init effective-POM resolver for Maven license enrichment (if enabled).
+	var pomResolver *effectivepom.Resolver
+	if cfg.Upstreams.MavenResolver.Enabled {
+		pomResolverCfg := effectivepom.Config{
+			Enabled:         true,
+			CacheSize:       cfg.Upstreams.MavenResolver.CacheSize,
+			MaxDepth:        cfg.Upstreams.MavenResolver.MaxDepth,
+		}
+		if d, err := time.ParseDuration(cfg.Upstreams.MavenResolver.CacheTTL); err == nil {
+			pomResolverCfg.CacheTTL = d
+		}
+		if d, err := time.ParseDuration(cfg.Upstreams.MavenResolver.FetchTimeout); err == nil {
+			pomResolverCfg.FetchTimeout = d
+		}
+		if d, err := time.ParseDuration(cfg.Upstreams.MavenResolver.ResolverTimeout); err == nil {
+			pomResolverCfg.ResolverTimeout = d
+		}
+		pomResolver = effectivepom.NewResolver(mavenUpstream, adapter.NewProxyHTTPClient(5*time.Minute), pomResolverCfg)
+		log.Info().Str("upstream", mavenUpstream).Msg("maven effective-POM resolver enabled")
+	}
+	mavenAdapter := maven.NewMavenAdapter(db, cacheStore, scanEngine, policyEngine, mavenUpstream, pomResolver)
 	rubygemsAdapter := rubygems.NewRubyGemsAdapter(db, cacheStore, scanEngine, policyEngine, rubygemsUpstream)
 	gomodAdapter := gomod.NewGoModAdapter(db, cacheStore, scanEngine, policyEngine, gomodUpstream)
 
@@ -386,6 +470,78 @@ func main() {
 		log.Warn().Msg("Admin API is UNAUTHENTICATED. Set auth.enabled=true for production.")
 	}
 
+	// Init project registry service.
+	projectCfg := project.Config{
+		Mode:           project.Mode(cfg.Projects.Mode),
+		DefaultLabel:   cfg.Projects.DefaultLabel,
+		LabelRegex:     cfg.Projects.LabelRegex,
+		MaxCount:       cfg.Projects.MaxCount,
+		LazyCreateRate: cfg.Projects.LazyCreateRate,
+		CacheSize:      cfg.Projects.CacheSize,
+	}
+	if cfg.Projects.CacheTTL != "" {
+		if d, err := time.ParseDuration(cfg.Projects.CacheTTL); err == nil {
+			projectCfg.CacheTTL = d
+		}
+	}
+	if cfg.Projects.UsageFlushPeriod != "" {
+		if d, err := time.ParseDuration(cfg.Projects.UsageFlushPeriod); err == nil {
+			projectCfg.UsageFlushPeriod = d
+		}
+	}
+	projectSvc, err := project.NewService(projectCfg, db)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to initialize project service")
+	}
+	defer projectSvc.Stop()
+	log.Info().Str("mode", string(projectCfg.Mode)).Msg("project registry initialized")
+
+	// Idempotent bootstrap of well-known labels (config-driven). Required for
+	// strict mode + ad-hoc clients (examples/, CI). Lazy mode would auto-create
+	// these on first use anyway, but bootstrap also makes lazy deployments
+	// discoverable in the admin UI before any traffic flows.
+	for _, label := range cfg.Projects.BootstrapLabels {
+		label = strings.TrimSpace(label)
+		if label == "" {
+			continue
+		}
+		if existing, err := projectSvc.GetByLabel(label); err == nil && existing != nil {
+			continue // already present — leave its display_name/description alone
+		}
+		if _, err := projectSvc.Create(label, "", "Bootstrapped from config.yaml projects.bootstrap_labels"); err != nil {
+			log.Warn().Err(err).Str("label", label).Msg("project bootstrap: create failed (continuing)")
+			continue
+		}
+		log.Info().Str("label", label).Msg("project bootstrap: created")
+	}
+
+	// Expose project registry to admin API.
+	apiServer.SetProjectService(projectSvc)
+	apiServer.SetProjectsMode(string(projectCfg.Mode))
+	if licenseResolver != nil {
+		apiServer.SetLicenseResolver(licenseResolver)
+		// Hydrate from DB if a runtime-mutable global policy row exists.
+		// Missing row is not an error — YAML config stays in effect.
+		if err := api.LoadGlobalLicensePolicyFromDB(db, licenseResolver, policyEngine); err != nil {
+			log.Warn().Err(err).Msg("license: failed to hydrate global policy from DB, keeping YAML values")
+		}
+	}
+	// Wire the project service into adapter base so audit + usage tracking
+	// can read the project from request context.
+	adapter.SetProjectService(projectSvc)
+
+	// SBOM storage — uses the active blob backend. When sbom.enabled is false,
+	// we skip this wiring entirely; the adapter helper + API endpoints become
+	// no-ops.
+	if cfg.SBOM.Enabled {
+		cachePrefix := cfg.Cache.Local.Path
+		sbomStore := sbom.NewStorage(db, blobStore, cachePrefix)
+		apiServer.SetSBOMStorage(sbomStore)
+		adapter.SetSBOMWriter(sbomAdapterWriter{st: sbomStore})
+		adapter.SetLicenseMetadataWriter(sbomStore)
+		log.Info().Str("format", "cyclonedx-json").Msg("SBOM storage enabled")
+	}
+
 	// Init proxy auth middleware (if enabled).
 	var apiKeyMw *auth.APIKeyMiddleware
 	if cfg.ProxyAuth.Enabled {
@@ -393,7 +549,7 @@ func main() {
 		if cfg.ProxyAuth.GlobalTokenEnv != "" {
 			globalToken = os.Getenv(cfg.ProxyAuth.GlobalTokenEnv)
 		}
-		apiKeyMw = auth.NewAPIKeyMiddleware(db, globalToken)
+		apiKeyMw = auth.NewAPIKeyMiddleware(db, globalToken).WithProjectService(projectSvc)
 		log.Info().Msg("proxy API key authentication enabled")
 	}
 	// SetProxyAuth on apiServer so it can conditionally register API key management endpoints.
@@ -528,4 +684,21 @@ func fallback(val, defaultVal string) string {
 		return val
 	}
 	return defaultVal
+}
+
+// orDefault is an alias for fallback; used in the license-policy wiring for
+// slightly better readability when the defaults are policy-semantic values
+// like "allow" or "any_allowed".
+func orDefault(val, defaultVal string) string { return fallback(val, defaultVal) }
+
+// sbomAdapterWriter bridges adapter.SBOMAsyncWriter to sbom.Storage.Write.
+// Kept here (not inside the sbom package) so the sbom package does not need to
+// import adapter and avoid a dependency cycle.
+type sbomAdapterWriter struct {
+	st sbom.Storage
+}
+
+func (s sbomAdapterWriter) Write(ctx context.Context, artifactID, format string, raw []byte, scannerLicenses []string) error {
+	_, err := s.st.Write(ctx, artifactID, format, raw, scannerLicenses)
+	return err
 }

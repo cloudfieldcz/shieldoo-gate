@@ -18,6 +18,13 @@ upstreams:
   npm: "https://registry.npmjs.org"
   nuget: "https://api.nuget.org"
   maven: "https://repo1.maven.org/maven2"
+  maven_resolver:
+    enabled: true                    # resolve licenses from parent POM chain (fail-open)
+    cache_size: 4096                 # in-memory LRU entries for parent POMs
+    cache_ttl: "24h"                 # parent POMs are immutable per release GAV
+    max_depth: 5                     # max parent chain depth (hardcode ceiling: 10)
+    fetch_timeout: "3s"              # per-POM HTTP timeout
+    resolver_timeout: "5s"           # total timeout for entire parent chain walk
   rubygems: "https://rubygems.org"
   gomod: "https://proxy.golang.org"
   docker:
@@ -221,6 +228,16 @@ policy:
     action: "warn"                   # "quarantine" | "warn" | "block"
     exclude_tags: ["latest", "nightly", "dev"]
     check_on_cache_hit: false        # adds latency to cache hits; use rescan scheduler instead
+  # License policy — blocks/warns artifacts based on SPDX IDs extracted
+  # from the SBOM. Requires sbom.enabled=true. See docs/features/license-policy.md.
+  licenses:
+    enabled: false
+    blocked: []                      # e.g. ["GPL-3.0-only", "AGPL-3.0-only"]
+    warned:  []                      # e.g. ["LGPL-2.1-only", "MPL-2.0"]
+    allowed: []                      # Non-empty enables whitelist mode
+    unknown_action: "allow"          # "allow" | "warn" | "block"
+    on_sbom_error: "allow"           # Action when SBOM unavailable (Trivy timeout, pre-SBOM artifact, etc.)
+    or_semantics: "any_allowed"      # "any_allowed" | "all_allowed" — SPDX OR expression evaluation
 
 threat_feed:
   enabled: true
@@ -267,6 +284,36 @@ auth:
 proxy_auth:
   enabled: false
   global_token_env: "SGW_PROXY_TOKEN"  # Env var holding the global shared token (optional)
+
+# Project registry — per-team / per-service segmentation of proxy usage.
+# The Basic auth USERNAME is interpreted as the project label (lowercased +
+# regex-validated). See docs/features/projects.md.
+projects:
+  mode: "lazy"                 # "lazy" (auto-create) | "strict" (reject unknown)
+  default_label: "default"     # Fallback for empty Basic auth username
+  # label_regex: ""            # Optional custom regex (default: ^[a-z0-9][a-z0-9_-]{0,63}$)
+  max_count: 1000              # Hard cap (0 = unlimited)
+  lazy_create_rate: 10         # New projects per hour per identity (PAT hash)
+  cache_size: 512              # LRU cache entries (hot-path optimization)
+  cache_ttl: "5m"              # LRU entry TTL
+  usage_flush_period: "30s"    # Debounced upsert interval for artifact_project_usage
+  # Bootstrap labels — pre-provisioned on every startup (idempotent). Required
+  # for strict mode + ad-hoc clients (CI, build pipelines) that can't POST
+  # /projects themselves. Lazy mode would auto-create on first use, but listing
+  # them here also makes the registry browsable in the admin UI before any
+  # traffic flows.
+  bootstrap_labels:
+    - default
+    - shieldoo-gate          # used by docker/Dockerfile (SGW_USER) for self-build dogfood
+    - ci-bot                 # generic CI/E2E identity
+
+# SBOM generation — when enabled, Trivy emits CycloneDX output including
+# licenses. See docs/features/sbom-generation.md.
+sbom:
+  enabled: false               # Set true to generate + persist CycloneDX SBOMs
+  format: "cyclonedx-json"
+  async_write: true            # Write blob in a goroutine (don't block request path)
+  ttl: "30d"                   # Retention hint (cleanup scheduler TBD)
 
 alerts:
   webhook:

@@ -2,7 +2,10 @@
 FROM python:3.12.11-slim
 
 ARG SGW_TOKEN=""
-ARG SGW_USER=docker-build
+# Basic-auth username = project label on a self-hosted Shieldoo Gate. We use
+# "shieldoo-gate" so the whole project (core + bridge) shows up under one
+# label in the admin UI when the proxy is self-hosting.
+ARG SGW_USER=shieldoo-gate
 
 # System dependencies for cffi and pygit2
 RUN apt-get update && apt-get install -y --no-install-recommends \

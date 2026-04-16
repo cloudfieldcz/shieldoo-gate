@@ -97,7 +97,7 @@ func TestMavenAdapter_PathTraversal_Rejected(t *testing.T) {
 			}))
 			defer upstream.Close()
 
-			a := NewMavenAdapter(nil, nil, nil, nil, upstream.URL)
+			a := NewMavenAdapter(nil, nil, nil, nil, upstream.URL, nil)
 			req := httptest.NewRequest(http.MethodGet, "/"+tt.path, nil)
 			w := httptest.NewRecorder()
 			a.ServeHTTP(w, req)
@@ -118,7 +118,7 @@ func TestMavenAdapter_ArtifactID_Format(t *testing.T) {
 }
 
 func TestMavenAdapter_Ecosystem_ReturnsMaven(t *testing.T) {
-	a := NewMavenAdapter(nil, nil, nil, nil, "https://repo1.maven.org/maven2")
+	a := NewMavenAdapter(nil, nil, nil, nil, "https://repo1.maven.org/maven2", nil)
 	assert.Equal(t, scanner.EcosystemMaven, a.Ecosystem())
 }
 
@@ -132,13 +132,13 @@ func TestMavenAdapter_HealthCheck(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	a := NewMavenAdapter(nil, nil, nil, nil, upstream.URL)
+	a := NewMavenAdapter(nil, nil, nil, nil, upstream.URL, nil)
 	err := a.HealthCheck(context.Background())
 	assert.NoError(t, err)
 }
 
 func TestMavenAdapter_HealthCheck_UpstreamDown(t *testing.T) {
-	a := NewMavenAdapter(nil, nil, nil, nil, "http://127.0.0.1:1")
+	a := NewMavenAdapter(nil, nil, nil, nil, "http://127.0.0.1:1", nil)
 	err := a.HealthCheck(context.Background())
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "health check")
@@ -178,7 +178,7 @@ func TestMavenAdapter_PassThrough_MetadataXML(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	a := NewMavenAdapter(nil, nil, nil, nil, upstream.URL)
+	a := NewMavenAdapter(nil, nil, nil, nil, upstream.URL, nil)
 	req := httptest.NewRequest(http.MethodGet, "/org/apache/commons/commons-lang3/maven-metadata.xml", nil)
 	w := httptest.NewRecorder()
 	a.ServeHTTP(w, req)
@@ -194,7 +194,7 @@ func TestMavenAdapter_PassThrough_POM(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	a := NewMavenAdapter(nil, nil, nil, nil, upstream.URL)
+	a := NewMavenAdapter(nil, nil, nil, nil, upstream.URL, nil)
 	req := httptest.NewRequest(http.MethodGet, "/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.pom", nil)
 	w := httptest.NewRecorder()
 	a.ServeHTTP(w, req)

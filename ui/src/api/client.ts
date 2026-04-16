@@ -16,6 +16,14 @@ import type {
   APIKeyCreateResponse,
   PolicyModeResponse,
   RescanQuarantinedResponse,
+  Project,
+  ProjectsListResponse,
+  ProjectArtifactsResponse,
+  ProjectLicensePolicyView,
+  ProjectLicensePolicyUpdate,
+  GlobalLicensePolicyView,
+  GlobalLicensePolicyUpdate,
+  ArtifactLicenses,
 } from './types'
 
 const api = axios.create({
@@ -141,4 +149,53 @@ export const adminApi = {
 
   setPolicyMode: (mode: string) =>
     api.put<PolicyModeResponse>('/admin/policy-mode', { mode }).then((r) => r.data),
+}
+
+// ---- v1.2+ projects & licenses ------------------------------------------
+
+export const projectsApi = {
+  list: () =>
+    api.get<ProjectsListResponse>('/projects').then((r) => r.data.projects),
+
+  get: (id: number) =>
+    api.get<Project>(`/projects/${id}`).then((r) => r.data),
+
+  create: (data: { label: string; display_name?: string; description?: string }) =>
+    api.post<Project>('/projects', data).then((r) => r.data),
+
+  update: (id: number, data: { display_name?: string; description?: string; enabled?: boolean }) =>
+    api.patch<Project>(`/projects/${id}`, data).then((r) => r.data),
+
+  disable: (id: number) => api.delete(`/projects/${id}`),
+
+  listArtifacts: (id: number) =>
+    api.get<ProjectArtifactsResponse>(`/projects/${id}/artifacts`).then((r) => r.data.artifacts ?? []),
+
+  getLicensePolicy: (id: number) =>
+    api.get<ProjectLicensePolicyView>(`/projects/${id}/license-policy`).then((r) => r.data),
+
+  putLicensePolicy: (id: number, body: ProjectLicensePolicyUpdate) =>
+    api.put<ProjectLicensePolicyView>(`/projects/${id}/license-policy`, body).then((r) => r.data),
+
+  deleteLicensePolicy: (id: number) =>
+    api
+      .delete<ProjectLicensePolicyView>(`/projects/${id}/license-policy`)
+      .then((r) => r.data),
+}
+
+export const globalLicensePolicyApi = {
+  get: () =>
+    api.get<GlobalLicensePolicyView>('/policy/licenses').then((r) => r.data),
+
+  put: (body: GlobalLicensePolicyUpdate) =>
+    api.put<GlobalLicensePolicyView>('/policy/licenses', body).then((r) => r.data),
+
+  /** Reverts to the YAML fallback (source becomes "config"). */
+  reset: () =>
+    api.delete<GlobalLicensePolicyView>('/policy/licenses').then((r) => r.data),
+}
+
+export const artifactLicensesApi = {
+  get: (id: string) =>
+    api.get<ArtifactLicenses>(`/artifacts/${encodeURIComponent(id)}/licenses`).then((r) => r.data),
 }

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/policy"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/project"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
 )
 
@@ -30,6 +32,176 @@ var globalAlerter atomic.Pointer[alert.Alerter]
 
 // globalAsyncScanner holds the package-level async scanner (e.g. sandbox) set during initialization.
 var globalAsyncScanner atomic.Pointer[scanner.AsyncScanner]
+
+// globalProjectSvc is set at startup; when non-nil the audit helpers will
+// automatically record per-project artifact usage and stamp audit entries
+// with project_id.
+var globalProjectSvc atomic.Pointer[project.Service]
+
+// SetProjectService stores the project service so audit + usage helpers can
+// use it. Safe to call once during startup.
+func SetProjectService(svc project.Service) {
+	globalProjectSvc.Store(&svc)
+}
+
+// globalSBOMWriter is set at startup (see cmd/shieldoo-gate). When non-nil
+// and a ScanResult carries SBOM content, the adapter triggers an async write
+// to blob storage after the response is served.
+var globalSBOMWriter atomic.Pointer[SBOMAsyncWriter]
+
+// SBOMAsyncWriter is the adapter-side hook used to persist SBOMs without
+// blocking the request path. Implemented by a thin wrapper in main.go that
+// forwards to sbom.Storage.Write.
+type SBOMAsyncWriter interface {
+	// Write persists the SBOM blob and metadata. scannerLicenses are the
+	// pre-extracted SPDX IDs from the scanner's license extractor — they
+	// are merged with whatever Parse() finds in the CycloneDX blob so that
+	// metadata is complete even when Trivy produces 0 components (common
+	// for single-artifact scans).
+	Write(ctx context.Context, artifactID, format string, raw []byte, scannerLicenses []string) error
+}
+
+// SetSBOMWriter stores the async SBOM writer.
+func SetSBOMWriter(w SBOMAsyncWriter) {
+	globalSBOMWriter.Store(&w)
+}
+
+// LicenseMetadataWriter persists license-only metadata for artifacts that
+// have discovered licenses outside the normal SBOM path (e.g. Maven
+// effective-POM resolver).
+type LicenseMetadataWriter interface {
+	WriteLicensesOnly(ctx context.Context, artifactID string, licenses []string, generator string) error
+}
+
+var globalLicenseWriter atomic.Pointer[LicenseMetadataWriter]
+
+// SetLicenseMetadataWriter stores the license metadata writer.
+func SetLicenseMetadataWriter(w LicenseMetadataWriter) {
+	globalLicenseWriter.Store(&w)
+}
+
+// TriggerAsyncLicenseWrite persists license metadata asynchronously for
+// artifacts where licenses are discovered without a full SBOM (e.g. Maven
+// effective-POM resolver). No-op when no writer is configured or licenses
+// are empty.
+func TriggerAsyncLicenseWrite(ctx context.Context, artifactID string, licenses []string, generator string) {
+	wp := globalLicenseWriter.Load()
+	if wp == nil || *wp == nil || len(licenses) == 0 {
+		return
+	}
+	w := *wp
+	go func() {
+		writeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := w.WriteLicensesOnly(writeCtx, artifactID, licenses, generator); err != nil {
+			log.Warn().Err(err).Str("artifact_id", artifactID).Msg("adapter: async license metadata write failed")
+		}
+	}()
+}
+
+// ApplyPolicyWarnings surfaces any non-blocking PolicyResult.Warnings as a
+// response header (X-Shieldoo-Warning) and a best-effort audit event. It is
+// safe to call from every adapter Allow/AllowWithWarning path — a nil or
+// empty warning list is a no-op.
+func ApplyPolicyWarnings(w http.ResponseWriter, ctx context.Context, db *config.GateDB, artifactID string, warnings []string) {
+	if len(warnings) == 0 {
+		return
+	}
+	// Combine into a single header. Tools that parse this tend to look for
+	// substrings ("license:...") rather than structured values.
+	w.Header().Set("X-Shieldoo-Warning", strings.Join(warnings, "; "))
+	for _, wrn := range warnings {
+		// Audit as LICENSE_WARNED for license-flavored warnings, otherwise as
+		// a generic ALLOWED_WITH_WARNING so existing dashboards pick them up.
+		eventType := model.EventAllowedWithWarning
+		if len(wrn) > 8 && wrn[:8] == "license:" {
+			eventType = model.EventLicenseWarned
+		}
+		_ = WriteAuditLogCtx(ctx, db, model.AuditEntry{
+			EventType:  eventType,
+			ArtifactID: artifactID,
+			Reason:     wrn,
+		})
+	}
+}
+
+// CheckCacheHitLicensePolicy evaluates the current license policy against
+// stored SBOM metadata for a cached artifact. This is the synchronous gate
+// that prevents serving artifacts with blocked licenses from cache.
+//
+// Returns true if the request was handled (blocked or error). The caller
+// should return immediately. Returns false if the artifact may be served.
+//
+// When the license is blocked, a 403 JSON error is written with a
+// LICENSE_BLOCKED audit event. When the license triggers a warning, the
+// X-Shieldoo-Warning header is set and serving continues.
+func CheckCacheHitLicensePolicy(
+	w http.ResponseWriter,
+	ctx context.Context,
+	policyEngine *policy.Engine,
+	db *config.GateDB,
+	artifactID string,
+) bool {
+	if policyEngine == nil {
+		return false
+	}
+	result := policyEngine.EvaluateLicensesOnly(ctx, artifactID)
+
+	if result.Action == policy.ActionBlock {
+		_ = WriteAuditLogCtx(ctx, db, model.AuditEntry{
+			EventType:  model.EventLicenseBlocked,
+			ArtifactID: artifactID,
+			Reason:     result.Reason,
+		})
+		WriteJSONError(w, http.StatusForbidden, ErrorResponse{
+			Error:    "blocked by license policy",
+			Artifact: artifactID,
+			Reason:   result.Reason,
+		})
+		return true
+	}
+
+	// Apply warnings (non-blocking).
+	ApplyPolicyWarnings(w, ctx, db, artifactID, result.Warnings)
+	return false
+}
+
+// TriggerAsyncSBOMWrite scans scanResults for an SBOM (first scanner that
+// provides SBOMContent), and if found, writes it asynchronously via the
+// configured SBOMAsyncWriter. No-op when no writer is configured or when
+// no scanner produced SBOM content.
+func TriggerAsyncSBOMWrite(ctx context.Context, artifactID string, scanResults []scanner.ScanResult) {
+	wp := globalSBOMWriter.Load()
+	if wp == nil || *wp == nil {
+		return
+	}
+	for _, sr := range scanResults {
+		if len(sr.SBOMContent) == 0 {
+			continue
+		}
+		w := *wp
+		// Detach from request context — the request may be done by the time
+		// we finish persisting. Preserve a small timeout so we don't leak
+		// goroutines on a broken storage backend.
+		raw := sr.SBOMContent
+		format := sr.SBOMFormat
+		if format == "" {
+			format = "cyclonedx-json"
+		}
+		// Pass scanner-extracted licenses so they get merged into SBOM
+		// metadata even when the CycloneDX blob has 0 components (common
+		// for single-artifact scans where Trivy doesn't detect packages).
+		licenses := sr.Licenses
+		go func() {
+			writeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := w.Write(writeCtx, artifactID, format, raw, licenses); err != nil {
+				log.Warn().Err(err).Str("artifact_id", artifactID).Msg("adapter: async SBOM write failed")
+			}
+		}()
+		return // first SBOM wins — Trivy is the only scanner producing SBOMs
+	}
+}
 
 // NewProxyHTTPClient returns an *http.Client with connection pooling tuned for
 // high-concurrency upstream proxying. All adapters should use this instead of
@@ -105,6 +277,23 @@ func PipelineContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), PipelineTimeout)
 }
 
+// PipelineContextFrom is the project-aware variant of PipelineContext. It
+// copies the per-request project (set by the auth middleware) into the
+// detached pipeline context so the policy engine can resolve per-project
+// license overrides during scan/policy evaluation. Cancellation is still
+// independent of the originating request.
+//
+// Use this from any adapter that calls policyEngine.Evaluate(...) — without
+// it, the engine sees projectID=0 and always falls back to the global
+// policy, silently breaking per-project enforcement.
+func PipelineContextFrom(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.Background(), PipelineTimeout)
+	if p := project.FromContext(parent); p != nil {
+		ctx = project.WithContext(ctx, p)
+	}
+	return ctx, cancel
+}
+
 // ArtifactLocker provides per-artifact-ID locking so that only one
 // download/scan pipeline runs for a given artifact at a time.
 // Subsequent requests for the same artifact wait for the first to complete.
@@ -168,15 +357,51 @@ func WriteJSONError(w http.ResponseWriter, status int, resp ErrorResponse) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+// WriteAuditLogCtx inserts an AuditEntry with project_id extracted from ctx
+// (if a project is present) and also records artifact usage for the project.
+// This is the preferred variant for adapter serve/block/quarantine paths.
+//
+// As a convenience the generic BLOCKED event is auto-promoted to the more
+// specific LICENSE_BLOCKED when the reason indicates a license-policy
+// rejection. Adapters can keep emitting `model.EventBlocked` for every
+// policy.ActionBlock case without needing to discriminate themselves.
+func WriteAuditLogCtx(ctx context.Context, db *config.GateDB, entry model.AuditEntry) error {
+	if p := project.FromContext(ctx); p != nil {
+		id := p.ID
+		entry.ProjectID = &id
+		// Track usage (debounced). Only when we have a real artifact id.
+		if entry.ArtifactID != "" && entry.EventType == model.EventServed {
+			if svcPtr := globalProjectSvc.Load(); svcPtr != nil && *svcPtr != nil {
+				(*svcPtr).RecordUsage(p.ID, entry.ArtifactID)
+			}
+		}
+	}
+	if entry.EventType == model.EventBlocked && isLicenseReason(entry.Reason) {
+		entry.EventType = model.EventLicenseBlocked
+	}
+	return WriteAuditLog(db, entry)
+}
+
+// isLicenseReason returns true when the reason string came from the license
+// policy evaluator (e.g. `license "GPL-3.0-only" blocked by …`). Kept as a
+// prefix match — the evaluator emits a stable shape, no need for regex.
+func isLicenseReason(reason string) bool {
+	return strings.HasPrefix(reason, "license ") ||
+		strings.HasPrefix(reason, "license:") ||
+		strings.HasPrefix(reason, "license: ")
+}
+
 // WriteAuditLog inserts an AuditEntry into the audit_log table.
 // Timestamp is set to now if zero.
+// NOTE: For adapter serve paths with a request context, prefer WriteAuditLogCtx
+// so the project_id and usage tracking are populated automatically.
 func WriteAuditLog(db *config.GateDB, entry model.AuditEntry) error {
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now().UTC()
 	}
 	_, err := db.Exec(
-		`INSERT INTO audit_log (ts, event_type, artifact_id, client_ip, user_agent, reason, metadata_json, user_email)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO audit_log (ts, event_type, artifact_id, client_ip, user_agent, reason, metadata_json, user_email, project_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		entry.Timestamp,
 		entry.EventType,
 		entry.ArtifactID,
@@ -185,6 +410,7 @@ func WriteAuditLog(db *config.GateDB, entry model.AuditEntry) error {
 		entry.Reason,
 		entry.MetadataJSON,
 		entry.UserEmail,
+		entry.ProjectID,
 	)
 	if err != nil {
 		return fmt.Errorf("adapter: writing audit log: %w", err)

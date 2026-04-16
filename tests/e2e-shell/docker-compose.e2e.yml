@@ -41,6 +41,10 @@ services:
       # Proxy auth: set SGW_PROXY_AUTH_ENABLED=true and SGW_PROXY_TOKEN to enable
       SGW_PROXY_AUTH_ENABLED: "${SGW_PROXY_AUTH_ENABLED:-false}"
       SGW_PROXY_TOKEN: "${SGW_PROXY_TOKEN:-}"
+      # Projects mode: lazy (default) or strict — the strict pass exercises
+      # bootstrap_labels (config.e2e.yaml) + per-project license-policy
+      # overrides (test_license_policy.sh).
+      SGW_PROJECTS_MODE: "${SGW_PROJECTS_MODE:-lazy}"
     networks:
       - proxy-net
       - internal-net
@@ -117,6 +121,8 @@ services:
       # Proxy auth (pass through from host env)
       SGW_PROXY_AUTH_ENABLED: "${SGW_PROXY_AUTH_ENABLED:-false}"
       SGW_PROXY_TOKEN: "${SGW_PROXY_TOKEN:-}"
+      # Projects mode (pass through so test_license_policy.sh adapts assertions)
+      SGW_PROJECTS_MODE: "${SGW_PROJECTS_MODE:-lazy}"
       # Docker-in-Docker access (no socket mount)
       DOCKER_HOST: "tcp://docker-dind:2375"
     networks:

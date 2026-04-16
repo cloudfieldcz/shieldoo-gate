@@ -102,6 +102,22 @@ func (e *Engine) ScanAll(ctx context.Context, artifact Artifact, excludeNames ..
 	}
 
 	wg.Wait()
+
+	// Merge ExtraLicenses provided by the adapter (e.g. Maven effective-POM
+	// parent chain resolution). These licenses are discovered outside the
+	// normal scanner path and need to be injected into results so the policy
+	// engine can evaluate them. Adapters must pre-normalize ExtraLicenses
+	// via sbom.NameAliasToID before setting them on the artifact.
+	if len(artifact.ExtraLicenses) > 0 {
+		extraResult := ScanResult{
+			Verdict:   VerdictClean,
+			ScannerID: "extra-licenses",
+			ScannedAt: time.Now(),
+			Licenses:  artifact.ExtraLicenses,
+		}
+		results = append(results, extraResult)
+	}
+
 	return results, nil
 }
 

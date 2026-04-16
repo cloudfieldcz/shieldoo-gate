@@ -802,6 +802,264 @@ paths:
               schema:
                 $ref: "#/components/schemas/RescanQuarantinedResponse"
 
+  /api/v1/projects:
+    get:
+      summary: List projects
+      operationId: listProjects
+      tags: [projects]
+      responses:
+        "200":
+          description: Projects
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  projects:
+                    type: array
+                    items: { $ref: "#/components/schemas/Project" }
+    post:
+      summary: Create a project (explicit / strict-mode provisioning)
+      operationId: createProject
+      tags: [projects]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties:
+                label:        { type: string, pattern: "^[a-z0-9][a-z0-9_-]{0,63}$" }
+                display_name: { type: string }
+                description:  { type: string }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Project" }
+        "400": { description: Invalid label }
+        "429": { description: Project hard-cap reached }
+
+  /api/v1/projects/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer, format: int64 }
+    get:
+      summary: Get a single project
+      operationId: getProject
+      tags: [projects]
+      responses:
+        "200":
+          description: Project
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Project" }
+        "404": { description: Not found }
+    patch:
+      summary: Update project metadata
+      operationId: updateProject
+      tags: [projects]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name: { type: string }
+                description:  { type: string }
+                enabled:      { type: boolean }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Project" }
+    delete:
+      summary: Soft-disable a project (metadata only in v1.2)
+      operationId: disableProject
+      tags: [projects]
+      responses:
+        "204": { description: Disabled }
+
+  /api/v1/projects/{id}/artifacts:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer, format: int64 }
+    get:
+      summary: Artifacts used by this project
+      operationId: listProjectArtifacts
+      tags: [projects]
+      responses:
+        "200":
+          description: Project artifacts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  artifacts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:             { type: string }
+                        ecosystem:      { type: string }
+                        name:           { type: string }
+                        version:        { type: string }
+                        first_used_at:  { type: string }
+                        last_used_at:   { type: string }
+                        use_count:      { type: integer }
+
+  /api/v1/projects/{id}/license-policy:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer, format: int64 }
+    get:
+      summary: Effective license policy for a project
+      operationId: getProjectLicensePolicy
+      tags: [projects, license]
+      responses:
+        "200":
+          description: License policy view
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LicensePolicyView" }
+    put:
+      summary: Upsert per-project license policy override
+      operationId: putProjectLicensePolicy
+      tags: [projects, license]
+      description: |
+        Requires projects.mode=strict. In lazy mode the server rejects
+        mode=override with 403 to prevent label-spoofing policy bypass.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LicensePolicyUpdate" }
+      responses:
+        "200":
+          description: Updated view
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LicensePolicyView" }
+        "403": { description: strict_required — override requires strict projects mode }
+    delete:
+      summary: Remove per-project override (fall back to inherit)
+      operationId: deleteProjectLicensePolicy
+      tags: [projects, license]
+      description: |
+        Deletes the `project_license_policy` row for this project; the
+        project then inherits the global policy. The resolver's cached
+        per-project entry is evicted so subsequent requests pick up the
+        reverted effective policy immediately. Safe to call when no row
+        exists (no-op).
+      responses:
+        "200":
+          description: Effective policy after delete (mode=inherit)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LicensePolicyView" }
+
+  /api/v1/policy/licenses:
+    get:
+      summary: Effective global license policy (runtime-mutable)
+      operationId: getGlobalLicensePolicy
+      tags: [license, policy]
+      description: |
+        Returns the policy currently in effect. `source=db` means a runtime
+        edit persisted in `global_license_policy` is active; `source=config`
+        means the YAML values from `policy.licenses.*` are the fallback.
+      responses:
+        "200":
+          description: Global license policy view
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GlobalLicensePolicyView" }
+    put:
+      summary: Upsert the global license policy (applied live, no restart)
+      operationId: putGlobalLicensePolicy
+      tags: [license, policy]
+      description: |
+        Persists to the `global_license_policy` singleton row (id=1) and
+        pushes the new values into the live resolver + policy engine. The
+        per-project license cache is purged so projects inheriting the
+        global policy see the new values immediately.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GlobalLicensePolicyUpdate" }
+      responses:
+        "200":
+          description: Updated view
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GlobalLicensePolicyView" }
+        "400": { description: Validation error (bad enum value) }
+    delete:
+      summary: Revert to the YAML fallback
+      operationId: deleteGlobalLicensePolicy
+      tags: [license, policy]
+      description: |
+        Deletes the `global_license_policy` row and swaps the live resolver
+        back to the YAML values captured at startup (`policy.licenses.*`
+        from `docker/config.yaml`). Purges the per-project policy cache so
+        inheritors pick up the reverted values immediately. The subsequent
+        GET returns `source: "config"`.
+      responses:
+        "200":
+          description: Policy after revert (source=config)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GlobalLicensePolicyView" }
+
+  /api/v1/artifacts/{id}/sbom:
+    parameters:
+      - $ref: "#/components/parameters/artifactId"
+    get:
+      summary: Download the CycloneDX SBOM blob for an artifact
+      operationId: getArtifactSBOM
+      tags: [artifacts, sbom]
+      responses:
+        "200":
+          description: CycloneDX JSON
+          content:
+            application/vnd.cyclonedx+json:
+              schema:
+                type: object
+        "404": { description: No SBOM exists for this artifact }
+        "501": { description: SBOM feature disabled }
+
+  /api/v1/artifacts/{id}/licenses:
+    parameters:
+      - $ref: "#/components/parameters/artifactId"
+    get:
+      summary: Pre-extracted SPDX IDs for an artifact's SBOM
+      operationId: getArtifactLicenses
+      tags: [artifacts, license]
+      responses:
+        "200":
+          description: License list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  artifact_id:     { type: string }
+                  licenses:        { type: array, items: { type: string } }
+                  component_count: { type: integer }
+                  generator:       { type: string }
+                  generated_at:    { type: string, format: date-time }
+
 components:
   parameters:
     artifactId:
@@ -1528,3 +1786,65 @@ components:
       properties:
         error:
           type: string
+
+    Project:
+      type: object
+      required: [id, label, created_at, created_via, enabled]
+      properties:
+        id:          { type: integer, format: int64 }
+        label:       { type: string, pattern: "^[a-z0-9][a-z0-9_-]{0,63}$" }
+        display_name: { type: string }
+        description: { type: string }
+        created_at:  { type: string, format: date-time }
+        created_via: { type: string, enum: [lazy, api, seed] }
+        enabled:     { type: boolean }
+
+    LicensePolicyView:
+      type: object
+      properties:
+        project_id:       { type: integer, format: int64 }
+        mode:             { type: string, enum: [inherit, override, disabled] }
+        blocked:          { type: array, items: { type: string } }
+        warned:           { type: array, items: { type: string } }
+        allowed:          { type: array, items: { type: string } }
+        unknown_action:   { type: string, enum: [allow, warn, block] }
+        updated_at:       { type: string }
+        updated_by:       { type: string }
+        effective_source: { type: string, description: "Human-readable source of the effective policy" }
+        strict_required:  { type: boolean, description: "True when mode=override but runtime is lazy — override is ignored" }
+
+    LicensePolicyUpdate:
+      type: object
+      required: [mode]
+      properties:
+        mode:           { type: string, enum: [inherit, override, disabled] }
+        blocked:        { type: array, items: { type: string } }
+        warned:         { type: array, items: { type: string } }
+        allowed:        { type: array, items: { type: string } }
+        unknown_action: { type: string, enum: [allow, warn, block, ""] }
+
+    GlobalLicensePolicyView:
+      type: object
+      properties:
+        enabled:        { type: boolean, description: "Mirror of the YAML master switch — policy.licenses.enabled (file-controlled)" }
+        blocked:        { type: array, items: { type: string } }
+        warned:         { type: array, items: { type: string } }
+        allowed:        { type: array, items: { type: string } }
+        unknown_action: { type: string, enum: [allow, warn, block] }
+        on_sbom_error:  { type: string, enum: [allow, warn, block] }
+        or_semantics:   { type: string, enum: [any_allowed, all_allowed] }
+        updated_at:     { type: string, description: "Present only when source=db" }
+        updated_by:     { type: string, description: "Admin email from OIDC session (when auth is enabled)" }
+        source:         { type: string, enum: [db, config], description: "Where the live values came from" }
+
+    GlobalLicensePolicyUpdate:
+      type: object
+      required: [blocked, warned, allowed, unknown_action, on_sbom_error]
+      properties:
+        enabled:        { type: boolean, description: "Optional — toggles the DB-persisted row; YAML master switch still wins if false" }
+        blocked:        { type: array, items: { type: string } }
+        warned:         { type: array, items: { type: string } }
+        allowed:        { type: array, items: { type: string } }
+        unknown_action: { type: string, enum: [allow, warn, block] }
+        on_sbom_error:  { type: string, enum: [allow, warn, block] }
+        or_semantics:   { type: string, enum: [any_allowed, all_allowed], default: any_allowed }

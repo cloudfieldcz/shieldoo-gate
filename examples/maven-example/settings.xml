@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Local Maven settings — pairs the <server id="shieldoo"> credentials with the
+  <repository id="shieldoo"> entry in pom.xml.
+
+  Basic auth:
+    - username = project label (maven-demo)
+    - password = the well-known dev token defined in docker/docker-compose.yml
+
+  For production, replace the token with a PAT from the admin UI and reference
+  it via ${env.SGW_TOKEN} instead of hard-coding a secret.
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
+                              https://maven.apache.org/xsd/settings-1.0.0.xsd">
+  <servers>
+    <server>
+      <id>shieldoo</id>
+      <username>maven-demo</username>
+      <password>test-token-123</password>
+    </server>
+  </servers>
+</settings>

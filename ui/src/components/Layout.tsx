@@ -1,10 +1,22 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import { LayoutDashboard, Package, Container, ScrollText, Settings, ShieldAlert, ShieldCheck } from 'lucide-react'
+import {
+  LayoutDashboard,
+  Package,
+  Container,
+  ScrollText,
+  Settings,
+  ShieldAlert,
+  ShieldCheck,
+  FolderTree,
+  FileText,
+} from 'lucide-react'
 import UserMenu from './UserMenu'
 
 const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/artifacts', label: 'Artifacts', icon: Package },
+  { to: '/projects', label: 'Projects', icon: FolderTree },
+  { to: '/license-policy', label: 'License Policy', icon: FileText },
   { to: '/docker', label: 'Docker', icon: Container },
   { to: '/overrides', label: 'Overrides', icon: ShieldAlert },
   { to: '/audit-log', label: 'Audit Log', icon: ScrollText },

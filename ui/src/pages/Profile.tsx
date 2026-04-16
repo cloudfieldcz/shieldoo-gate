@@ -130,6 +130,11 @@ function APIKeysSection({
         </button>
       </div>
 
+      <p className="text-xs text-gray-500 -mt-2">
+        Proxy requests authenticate with HTTP Basic Auth: a <strong>project label</strong> as username and the token as password.
+        The key <em>name</em> below is for your own bookkeeping (shown in this list, not in requests).
+      </p>
+
       {/* Create form */}
       {showCreate && (
         <div className="flex items-start gap-2">
@@ -210,6 +215,15 @@ function TokenModal({ token, onClose }: { token: string; onClose: () => void }) 
           >
             {copied ? <Check className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
           </button>
+        </div>
+        <div className="text-xs text-gray-600 bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-1">
+          <p className="font-medium text-gray-900">How to use:</p>
+          <p>
+            HTTP Basic Auth — <code className="px-1 bg-white border rounded">PROJECT</code> in the username field, the token in the password field.
+          </p>
+          <p>
+            <strong>What to put in <code className="px-1 bg-white border rounded">PROJECT</code>:</strong> any label from <code className="px-1 bg-white border rounded">[a-z0-9][a-z0-9_-]{'{0,63}'}</code> (your team, service, or pipeline name). Shieldoo Gate uses it to segment audit events and per-project artifact usage. If you don't need segmentation, use <code className="px-1 bg-white border rounded">default</code>. Full examples are in the <em>Usage</em> section below.
+          </p>
         </div>
         <button
           onClick={onClose}
@@ -342,41 +356,57 @@ function UsageInstructions({ urls }: { urls?: PublicURLs }) {
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-3">
       <h2 className="text-base font-semibold text-gray-900">Usage</h2>
       <p className="text-sm text-gray-600">
-        All ecosystems use HTTP Basic Auth (username + token as password).
-        For npm, the credentials must be base64-encoded. We recommend storing the token in an
-        environment variable:
+        All ecosystems use <strong>HTTP Basic Auth</strong> (<code className="px-1 bg-gray-100 rounded">PROJECT:TOKEN</code>).
+        The <strong>username is interpreted as a project label</strong> — it's
+        used to segment audit events, track per-project artifact usage, and
+        (in strict mode) apply per-project license policy. Pick whatever
+        name fits your team or service.
+      </p>
+      <div className="text-sm text-gray-600 space-y-1 bg-blue-50 border border-blue-200 rounded-lg p-3">
+        <p><strong>What to put in the username?</strong></p>
+        <ul className="list-disc pl-5 space-y-1">
+          <li><code className="px-1 bg-white border rounded">myteam</code>, <code className="px-1 bg-white border rounded">backend-svc</code>, <code className="px-1 bg-white border rounded">data-pipeline</code> — any lowercase label <code className="px-1 bg-white border rounded">[a-z0-9][a-z0-9_-]{'{0,63}'}</code>. Mixed case (<code className="px-1 bg-white border rounded">MyTeam</code>) is auto-lowercased.</li>
+          <li><code className="px-1 bg-white border rounded">default</code> or leave empty — if you don't need per-project segmentation, everything lands under the <code className="px-1 bg-white border rounded">default</code> project.</li>
+          <li>In <strong>lazy</strong> mode (default), a new label auto-creates a project. In <strong>strict</strong> mode, an admin must create the project first at <code className="px-1 bg-white border rounded">/projects</code>, otherwise the request is rejected (403).</li>
+        </ul>
+      </div>
+      <p className="text-sm text-gray-600">
+        The examples below use <code className="px-1 bg-gray-100 rounded">$USER</code> (your shell user) as the project label — replace it with any label you prefer (e.g. <code className="px-1 bg-gray-100 rounded">default</code>, <code className="px-1 bg-gray-100 rounded">myteam</code>). The token goes in the password field; we recommend keeping it in an environment variable.
       </p>
       <pre className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-xs font-mono text-gray-800 overflow-x-auto whitespace-pre">
-{`export SGW_TOKEN="your-token-here"
+{`# Set once
+export SGW_TOKEN="your-token-here"
+# Use your username, a team label, or 'default' — see the note above.
+PROJECT=\${USER:-default}
 
 # PyPI — pip
-pip install --index-url ${scheme}://\${USER}:\${SGW_TOKEN}@${pypi.replace(/^https?:\/\//, '')}/simple/ <package>
+pip install --index-url ${scheme}://\${PROJECT}:\${SGW_TOKEN}@${pypi.replace(/^https?:\/\//, '')}/simple/ <package>
 
 # PyPI — uv
-UV_DEFAULT_INDEX=${scheme}://\${USER}:\${SGW_TOKEN}@${pypi.replace(/^https?:\/\//, '')}/simple/ uv pip install <package>
+UV_DEFAULT_INDEX=${scheme}://\${PROJECT}:\${SGW_TOKEN}@${pypi.replace(/^https?:\/\//, '')}/simple/ uv pip install <package>
 
 # PyPI — pipenv
-PIPENV_PYPI_MIRROR=${scheme}://\${USER}:\${SGW_TOKEN}@${pypi.replace(/^https?:\/\//, '')}/simple/ pipenv install <package>
+PIPENV_PYPI_MIRROR=${scheme}://\${PROJECT}:\${SGW_TOKEN}@${pypi.replace(/^https?:\/\//, '')}/simple/ pipenv install <package>
 
-# npm
+# npm (credentials must be base64-encoded)
 npm config set registry ${npm}/
-npm config set //${npmHost}/:_auth $(printf "\${USER}:\${SGW_TOKEN}" | base64)
+npm config set //${npmHost}/:_auth $(printf "\${PROJECT}:\${SGW_TOKEN}" | base64)
 
 # Docker
-echo \${SGW_TOKEN} | docker login ${dockerHost} -u \${USER} --password-stdin
+echo \${SGW_TOKEN} | docker login ${dockerHost} -u \${PROJECT} --password-stdin
 
 # NuGet
-dotnet nuget add source ${nuget}/v3/index.json -n shieldoo -u \${USER} -p \${SGW_TOKEN} --store-password-in-clear-text
+dotnet nuget add source ${nuget}/v3/index.json -n shieldoo -u \${PROJECT} -p \${SGW_TOKEN} --store-password-in-clear-text
 
 # Go modules
-GOPROXY=${gomod.replace(/^https?:\/\//, `${scheme}://\${USER}:\${SGW_TOKEN}@`)} go get <module>
+GOPROXY=${gomod.replace(/^https?:\/\//, `${scheme}://\${PROJECT}:\${SGW_TOKEN}@`)} go get <module>
 
 # Maven (Java) — add to ~/.m2/settings.xml
-# <server><id>shieldoo</id><username>\${USER}</username><password>\${SGW_TOKEN}</password></server>
+# <server><id>shieldoo</id><username>\${PROJECT}</username><password>\${SGW_TOKEN}</password></server>
 # <mirror><id>shieldoo</id><url>${maven}/repository/</url><mirrorOf>central</mirrorOf></mirror>
 
 # RubyGems
-gem sources --add ${rubygems.replace(/^https?:\/\//, `${scheme}://\${USER}:\${SGW_TOKEN}@`)}/`}
+gem sources --add ${rubygems.replace(/^https?:\/\//, `${scheme}://\${PROJECT}:\${SGW_TOKEN}@`)}/`}
       </pre>
     </div>
   )

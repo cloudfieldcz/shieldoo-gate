@@ -168,6 +168,17 @@ policy:
     circuit_breaker_threshold: 5
     circuit_breaker_cooldown: "60s"
   allowlist: []
+  # License policy: enabled in E2E so test_license_policy exercises the evaluator.
+  # Empty lists = evidence-only mode (nothing blocked). test_license_policy
+  # mutates the effective policy through runtime env overrides / API.
+  licenses:
+    enabled: true
+    blocked: []
+    warned: []
+    allowed: []
+    unknown_action: "allow"
+    on_sbom_error: "allow"
+    or_semantics: "any_allowed"
 
 threat_feed:
   enabled: false
@@ -183,3 +194,26 @@ log:
 proxy_auth:
   enabled: false
   global_token_env: "SGW_PROXY_TOKEN"
+
+# Project registry: lazy mode by default; strict mode tested via SGW_PROJECTS_MODE override.
+# bootstrap_labels seeds the well-known E2E identities (`ci-bot` for helpers.sh,
+# `default` for the seeded project) so the strict-mode pass can authenticate
+# without ad-hoc POST /projects calls.
+projects:
+  mode: "lazy"
+  default_label: "default"
+  max_count: 100
+  lazy_create_rate: 50
+  cache_size: 128
+  cache_ttl: "2m"
+  usage_flush_period: "2s"  # faster flush for deterministic E2E assertions
+  bootstrap_labels:
+    - default
+    - ci-bot
+
+# SBOM generation: enabled for E2E so test_sbom exercises the CycloneDX path.
+sbom:
+  enabled: true
+  format: "cyclonedx-json"
+  async_write: true
+  ttl: "30d"

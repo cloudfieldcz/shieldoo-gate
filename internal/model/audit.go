@@ -29,4 +29,14 @@ type AuditEntry struct {
 	Reason       string    `db:"reason" json:"reason,omitempty"`
 	MetadataJSON string    `db:"metadata_json" json:"metadata_json,omitempty"`
 	UserEmail    string    `db:"user_email" json:"user_email,omitempty"`
+	ProjectID    *int64    `db:"project_id" json:"project_id,omitempty"`
 }
+
+// License policy + project-related event types (v1.2).
+const (
+	EventLicenseBlocked      EventType = "LICENSE_BLOCKED"
+	EventLicenseWarned       EventType = "LICENSE_WARNED"
+	EventLicenseCheckSkipped EventType = "LICENSE_CHECK_SKIPPED"
+	EventProjectNotFound     EventType = "PROJECT_NOT_FOUND"
+	EventSBOMGenerated       EventType = "SBOM_GENERATED"
+)

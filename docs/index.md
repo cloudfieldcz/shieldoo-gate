@@ -95,6 +95,32 @@ Shieldoo Gate Protocol Adapter
 | — | Version diff analysis | Done |
 | — | Maintainer reputation risk scoring | Done |
 | — | SHA256 integrity verification gate | Done |
+| — | [Project registry](features/projects.md) (Basic-auth username → project) | Done (v1.2) |
+| — | [SBOM generation](features/sbom-generation.md) (CycloneDX via Trivy single-run) | Done (v1.2) |
+| — | [License policy enforcement](features/license-policy.md) (SPDX, per-project override in strict mode) | Done (v1.2) |
+
+## Client Authentication — How Basic Auth Maps to Projects (v1.2+)
+
+Every proxy request authenticates with **HTTP Basic Auth**: `PROJECT:TOKEN`. The password is a PAT (or the global shared token). The **username is interpreted as a project label** — a free-form identifier that Shieldoo Gate uses to segment audit events, track per-project usage, and (in strict mode) apply per-project license policy.
+
+- **Don't care about projects?** Use `default` as the username. Migration 018 seeds this project on first boot.
+- **Want segmentation?** Pick any label matching `[a-z0-9][a-z0-9_-]{0,63}` (e.g. `backend-team`, `data-pipeline`, `ci-jenkins`). In **lazy** mode (default) the project auto-creates on first use.
+- **Need strong separation?** Run in **strict** mode, have an admin pre-create projects at `POST /api/v1/projects`, and optionally define [per-project license policy overrides](features/license-policy.md#per-project-overrides).
+
+```bash
+# pip / uv
+uv pip install --index-url http://myteam:$SGW_TOKEN@proxy:5000/simple/ requests
+
+# npm
+npm config set //proxy:4873/:_auth $(printf "myteam:$SGW_TOKEN" | base64)
+
+# docker
+echo $SGW_TOKEN | docker login proxy:5002 -u myteam --password-stdin
+```
+
+**Why the username instead of a custom header?** All seven proxy protocols we support (pip, npm, docker, NuGet, Maven, Go mod, RubyGems) natively carry HTTP Basic Auth, but none support arbitrary custom headers. Reusing the username field requires **zero client-side changes** — see [ADR-001](adr/ADR-001-project-identification-via-basic-auth.md) for the rationale and the S-01 anti-spoofing mitigation.
+
+Full details in [docs/features/projects.md](features/projects.md).
 
 ## Getting Started
 

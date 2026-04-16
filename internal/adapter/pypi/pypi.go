@@ -201,7 +201,7 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 				Artifact: artifactID,
 				Reason:   status.QuarantineReason,
 			})
-			_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+			_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 				EventType:  model.EventBlocked,
 				ArtifactID: artifactID,
 				ClientIP:   r.RemoteAddr,
@@ -225,11 +225,14 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 			string(scanner.EcosystemPyPI), pkgName, pkgVersion, artifactID, upstreamURL, r, w) {
 			return
 		}
+		if adapter.CheckCacheHitLicensePolicy(w, r.Context(), a.policyEngine, a.db, artifactID) {
+			return
+		}
 		// Serve from cache.
 		log.Info().Str("artifact", artifactID).Str("client", r.RemoteAddr).Msg("pypi: serving from cache")
 		adapter.UpdateLastAccessedAt(a.db, artifactID)
 		http.ServeFile(w, r, cachedPath)
-		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventServed,
 			ArtifactID: artifactID,
 			ClientIP:   r.RemoteAddr,
@@ -255,7 +258,7 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 				Artifact: artifactID,
 				Reason:   "typosquatting detected: " + result.Findings[0].Description,
 			})
-			_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+			_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 				EventType:  model.EventBlocked,
 				ArtifactID: artifactID,
 				ClientIP:   r.RemoteAddr,
@@ -275,7 +278,7 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 	// if the client disconnects mid-scan the upload would be aborted,
 	// leaving the artifact uncached. Using a dedicated pipeline context
 	// ensures download, scan, and cache write always complete.
-	pctx, pcancel := adapter.PipelineContext()
+	pctx, pcancel := adapter.PipelineContextFrom(r.Context())
 	defer pcancel()
 
 	// Re-check cache after acquiring lock — another request may have completed the pipeline.
@@ -302,6 +305,9 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 				Artifact: artifactID,
 				Reason:   "cached artifact integrity check failed",
 			})
+			return
+		}
+		if adapter.CheckCacheHitLicensePolicy(w, r.Context(), a.policyEngine, a.db, artifactID) {
 			return
 		}
 		http.ServeFile(w, r, cachedPath)
@@ -376,7 +382,7 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 	case policy.ActionBlock:
 		now := time.Now().UTC()
 		_ = a.persistArtifact(artifactID, scanArtifact, model.StatusQuarantined, policyResult.Reason, &now, scanResults)
-		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventBlocked,
 			ArtifactID: artifactID,
 			ClientIP:   r.RemoteAddr,
@@ -392,7 +398,7 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 
 	case policy.ActionAllowWithWarning:
 		_ = a.persistArtifact(artifactID, scanArtifact, model.StatusClean, "", nil, scanResults)
-		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventAllowedWithWarning,
 			ArtifactID: artifactID,
 			ClientIP:   r.RemoteAddr,
@@ -408,7 +414,7 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 	case policy.ActionQuarantine:
 		now := time.Now().UTC()
 		_ = a.persistArtifact(artifactID, scanArtifact, model.StatusQuarantined, policyResult.Reason, &now, scanResults)
-		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventQuarantined,
 			ArtifactID: artifactID,
 			ClientIP:   r.RemoteAddr,
@@ -427,7 +433,10 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 	_ = a.cache.Put(pctx, scanArtifact, tmpPath)
 	_ = a.persistArtifact(artifactID, scanArtifact, model.StatusClean, "", nil, scanResults)
 
-	_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+	// Emit any non-blocking policy warnings (license, etc.) before writing the body.
+	adapter.ApplyPolicyWarnings(w, r.Context(), a.db, artifactID, policyResult.Warnings)
+
+	_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 		EventType:  model.EventServed,
 		ArtifactID: artifactID,
 		ClientIP:   r.RemoteAddr,
@@ -437,6 +446,8 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 
 	// Trigger async sandbox scan (non-blocking).
 	adapter.TriggerAsyncScan(r.Context(), scanArtifact, tmpPath, a.db, a.policyEngine)
+	// Persist SBOM asynchronously (non-blocking) if any scanner produced one.
+	adapter.TriggerAsyncSBOMWrite(r.Context(), artifactID, scanResults)
 }
 
 // persistArtifact writes the artifact, status, and scan results to the DB.

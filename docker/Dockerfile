@@ -3,7 +3,11 @@ FROM node:20.19.0-alpine3.21 AS ui-builder
 
 ARG APP_VERSION=dev
 ARG SGW_TOKEN=""
-ARG SGW_USER=docker-build
+# SGW_USER is used as the Basic-auth username when fetching dependencies via
+# a self-hosted Shieldoo Gate — the username is interpreted as the project
+# label. We label the Shieldoo Gate build as project "shieldoo-gate" so its
+# own proxy traffic is visible as such in the admin UI.
+ARG SGW_USER=shieldoo-gate
 ENV VITE_APP_VERSION=${APP_VERSION}
 
 WORKDIR /ui
@@ -20,7 +24,9 @@ RUN npm run build
 FROM golang:1.25.7-alpine AS go-builder
 
 ARG SGW_TOKEN=""
-ARG SGW_USER=docker-build
+# Same rationale as stage 1 — identify as project "shieldoo-gate" when
+# pulling Go modules through a self-hosted proxy.
+ARG SGW_USER=shieldoo-gate
 
 RUN apk add --no-cache gcc musl-dev sqlite-dev
 

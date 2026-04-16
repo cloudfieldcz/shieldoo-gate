@@ -80,9 +80,10 @@ Cryptographic verification, license compliance, and software inventory. These re
 | # | Feature | What it does | Effort | Deps |
 |---|---|---|---|---|
 | 5 | [Package Provenance](package-provenance.md) | Verify Sigstore/cosign signatures, npm provenance, PyPI PEP 740 attestations, NuGet/Maven signing. Catches compromised CI/CD and registry breaches. | High — per-ecosystem crypto verification, Sigstore SDK | None |
-| 6 | [SBOM Generation](sbom-generation.md) | Auto-generate CycloneDX / SPDX for every artifact. Trivy already supports it — mostly wiring. | Low-Medium — Trivy does the heavy lifting | Trivy (done) |
-| 7 | [License Policy](license-policy.md) | Block GPL/AGPL in commercial projects, warn on unknown licenses. Prevents legal headaches. | Low — parse SPDX identifiers from SBOM, config-driven rules | SBOM (recommended) |
-| 8 | [Dependency Graph](dependency-graph.md) | When a package is quarantined, show blast radius. "litellm is quarantined — these 14 projects depend on it." | Medium — parse dependency metadata, graph storage + UI | SBOM (recommended) |
+| 6 | [SBOM Generation](sbom-generation.md) | Auto-generate CycloneDX for every artifact via Trivy single-run. **Implemented (v1.2)**. | Low-Medium — Trivy does the heavy lifting | Trivy (done) |
+| 7 | [License Policy](license-policy.md) | Block GPL/AGPL in commercial projects, warn on unknown licenses. **Implemented (v1.2)**. | Low — parse SPDX identifiers from SBOM, config-driven rules | SBOM (done) + [Projects](projects.md) |
+| 7a | [Project Registry](projects.md) | Per-team/service segmentation via Basic-auth username. Drives audit segmentation + per-project license overrides. **Implemented (v1.2)**. | Low — new table + service + middleware hook | None |
+| 8 | [Dependency Graph](dependency-graph.md) | When a package is quarantined, show blast radius. "litellm is quarantined — these 14 projects depend on it." | Medium — parse dependency metadata, graph storage + UI | SBOM (done) |
 
 **Why this order:** Provenance is the strongest defense against the LiteLLM-class attack (compromised maintainer account), but implementation is non-trivial. SBOM is almost free thanks to Trivy and unlocks the next two features. License policy is simple once you have SBOM. Dependency graph is the most complex here but extremely useful for incident response.
 

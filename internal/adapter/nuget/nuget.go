@@ -293,10 +293,13 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 			string(scanner.EcosystemNuGet), pkgID, version, artifactID, upstreamURL, r, w) {
 			return
 		}
+		if adapter.CheckCacheHitLicensePolicy(w, r.Context(), a.policyEngine, a.db, artifactID) {
+			return
+		}
 		log.Info().Str("artifact", artifactID).Str("client", r.RemoteAddr).Msg("nuget: serving from cache")
 		adapter.UpdateLastAccessedAt(a.db, artifactID)
 		http.ServeFile(w, r, cachedPath)
-		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventServed,
 			ArtifactID: artifactID,
 			ClientIP:   r.RemoteAddr,
@@ -314,7 +317,7 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 	defer unlock()
 
 	// Detach from the HTTP request context — see PyPI adapter for rationale.
-	pctx, pcancel := adapter.PipelineContext()
+	pctx, pcancel := adapter.PipelineContextFrom(r.Context())
 	defer pcancel()
 
 	// Re-check cache after acquiring lock.
@@ -341,6 +344,9 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 				Artifact: artifactID,
 				Reason:   "cached artifact integrity check failed",
 			})
+			return
+		}
+		if adapter.CheckCacheHitLicensePolicy(w, r.Context(), a.policyEngine, a.db, artifactID) {
 			return
 		}
 		http.ServeFile(w, r, cachedPath)
@@ -391,7 +397,7 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 	case policy.ActionBlock:
 		now := time.Now().UTC()
 		_ = a.persistArtifact(artifactID, scanArtifact, model.StatusQuarantined, policyResult.Reason, &now, scanResults)
-		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventBlocked,
 			ArtifactID: artifactID,
 			ClientIP:   r.RemoteAddr,
@@ -408,7 +414,7 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 	case policy.ActionQuarantine:
 		now := time.Now().UTC()
 		_ = a.persistArtifact(artifactID, scanArtifact, model.StatusQuarantined, policyResult.Reason, &now, scanResults)
-		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventQuarantined,
 			ArtifactID: artifactID,
 			ClientIP:   r.RemoteAddr,
@@ -425,7 +431,7 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 	case policy.ActionAllowWithWarning:
 		_ = a.cache.Put(pctx, scanArtifact, tmpPath)
 		_ = a.persistArtifact(artifactID, scanArtifact, model.StatusClean, "", nil, scanResults)
-		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventAllowedWithWarning,
 			ArtifactID: artifactID,
 			ClientIP:   r.RemoteAddr,
@@ -441,7 +447,8 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 	// 7. Allow.
 	_ = a.cache.Put(pctx, scanArtifact, tmpPath)
 	_ = a.persistArtifact(artifactID, scanArtifact, model.StatusClean, "", nil, scanResults)
-	_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+	adapter.ApplyPolicyWarnings(w, r.Context(), a.db, artifactID, policyResult.Warnings)
+	_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 		EventType:  model.EventServed,
 		ArtifactID: artifactID,
 		ClientIP:   r.RemoteAddr,
@@ -451,6 +458,7 @@ func (a *NuGetAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 
 	// Trigger async sandbox scan (non-blocking).
 	adapter.TriggerAsyncScan(r.Context(), scanArtifact, tmpPath, a.db, a.policyEngine)
+	adapter.TriggerAsyncSBOMWrite(r.Context(), artifactID, scanResults)
 }
 
 // persistArtifact writes artifact, status, and scan results to the DB.

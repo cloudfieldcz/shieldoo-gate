@@ -21,8 +21,10 @@ import (
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/cache"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/maven/effectivepom"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/policy"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/sbom"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
 )
 
@@ -47,6 +49,7 @@ type MavenAdapter struct {
 	upstream     string
 	router       http.Handler
 	httpClient   *http.Client
+	pomResolver  *effectivepom.Resolver // nil when effective-POM resolution is disabled
 }
 
 // parsedPath holds the result of parsing a Maven repository URL path.
@@ -61,13 +64,15 @@ type parsedPath struct {
 	passThru   bool   // true if this is metadata/checksum
 }
 
-// NewMavenAdapter creates and wires a MavenAdapter.
+// NewMavenAdapter creates and wires a MavenAdapter. The pomResolver may be nil
+// when effective-POM parent chain resolution is disabled.
 func NewMavenAdapter(
 	db *config.GateDB,
 	cacheStore cache.CacheStore,
 	scanEngine *scanner.Engine,
 	policyEngine *policy.Engine,
 	upstream string,
+	pomResolver *effectivepom.Resolver,
 ) *MavenAdapter {
 	a := &MavenAdapter{
 		db:           db,
@@ -76,6 +81,7 @@ func NewMavenAdapter(
 		policyEngine: policyEngine,
 		upstream:     strings.TrimRight(upstream, "/"),
 		httpClient:   adapter.NewProxyHTTPClient(5 * time.Minute),
+		pomResolver:  pomResolver,
 	}
 	a.router = a.buildRouter()
 	return a
@@ -301,7 +307,7 @@ func (a *MavenAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 				Artifact: artifactID,
 				Reason:   status.QuarantineReason,
 			})
-			_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+			_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 				EventType:  model.EventBlocked,
 				ArtifactID: artifactID,
 				ClientIP:   r.RemoteAddr,
@@ -320,10 +326,13 @@ func (a *MavenAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 			})
 			return
 		}
+		if adapter.CheckCacheHitLicensePolicy(w, r.Context(), a.policyEngine, a.db, artifactID) {
+			return
+		}
 		log.Info().Str("artifact", artifactID).Str("client", r.RemoteAddr).Msg("maven: serving from cache")
 		adapter.UpdateLastAccessedAt(a.db, artifactID)
 		http.ServeFile(w, r, cachedPath)
-		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventServed,
 			ArtifactID: artifactID,
 			ClientIP:   r.RemoteAddr,
@@ -341,7 +350,7 @@ func (a *MavenAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 	defer unlock()
 
 	// Detach from the HTTP request context — see PyPI adapter for rationale.
-	pctx, pcancel := adapter.PipelineContext()
+	pctx, pcancel := adapter.PipelineContextFrom(r.Context())
 	defer pcancel()
 
 	// Re-check cache after acquiring lock.
@@ -368,6 +377,9 @@ func (a *MavenAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 				Artifact: artifactID,
 				Reason:   "cached artifact integrity check failed",
 			})
+			return
+		}
+		if adapter.CheckCacheHitLicensePolicy(w, r.Context(), a.policyEngine, a.db, artifactID) {
 			return
 		}
 		http.ServeFile(w, r, cachedPath)
@@ -413,6 +425,32 @@ func (a *MavenAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 		UpstreamURL: upstreamURL,
 	}
 
+	// 4b. Effective POM resolution — enrich with parent-chain licenses.
+	// Only for scannable extensions (JARs/WARs) and only when resolver is enabled.
+	// Network failures fail-open: log warning and continue without extra licenses.
+	if a.pomResolver != nil {
+		coords := effectivepom.Coords{
+			GroupID:    parsed.groupID,
+			ArtifactID: parsed.artifactID,
+			Version:    parsed.version,
+		}
+		if rawLicenses := a.pomResolver.Resolve(pctx, coords); len(rawLicenses) > 0 {
+			// Normalize license strings to canonical SPDX IDs before passing
+			// to the scanner engine. E.g. "The GNU General Public License, v2
+			// with Universal FOSS Exception, v1.0" → "GPL-2.0-only".
+			normalized := make([]string, 0, len(rawLicenses))
+			for _, l := range rawLicenses {
+				canon, _ := sbom.NameAliasToID(l)
+				normalized = append(normalized, canon)
+			}
+			scanArtifact.ExtraLicenses = normalized
+			log.Info().
+				Str("artifact", artifactID).
+				Strs("licenses", normalized).
+				Msg("maven: effective-POM resolver found licenses via parent chain")
+		}
+	}
+
 	// 5. Scan.
 	log.Info().Str("artifact", artifactID).Str("client", r.RemoteAddr).Msg("maven: starting scan pipeline")
 	scanResults, err := a.scanEngine.ScanAll(pctx, scanArtifact)
@@ -449,7 +487,7 @@ func (a *MavenAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 	case policy.ActionBlock:
 		now := time.Now().UTC()
 		_ = a.persistArtifact(artifactID, scanArtifact, model.StatusQuarantined, policyResult.Reason, &now, scanResults)
-		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventBlocked,
 			ArtifactID: artifactID,
 			ClientIP:   r.RemoteAddr,
@@ -465,7 +503,7 @@ func (a *MavenAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 
 	case policy.ActionAllowWithWarning:
 		_ = a.persistArtifact(artifactID, scanArtifact, model.StatusClean, "", nil, scanResults)
-		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventAllowedWithWarning,
 			ArtifactID: artifactID,
 			ClientIP:   r.RemoteAddr,
@@ -481,7 +519,7 @@ func (a *MavenAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 	case policy.ActionQuarantine:
 		now := time.Now().UTC()
 		_ = a.persistArtifact(artifactID, scanArtifact, model.StatusQuarantined, policyResult.Reason, &now, scanResults)
-		_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventQuarantined,
 			ArtifactID: artifactID,
 			ClientIP:   r.RemoteAddr,
@@ -500,7 +538,7 @@ func (a *MavenAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 	_ = a.cache.Put(pctx, scanArtifact, tmpPath)
 	_ = a.persistArtifact(artifactID, scanArtifact, model.StatusClean, "", nil, scanResults)
 
-	_ = adapter.WriteAuditLog(a.db, model.AuditEntry{
+	_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 		EventType:  model.EventServed,
 		ArtifactID: artifactID,
 		ClientIP:   r.RemoteAddr,
@@ -510,6 +548,13 @@ func (a *MavenAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 
 	// Trigger async sandbox scan (non-blocking).
 	adapter.TriggerAsyncScan(r.Context(), scanArtifact, tmpPath, a.db, a.policyEngine)
+	adapter.TriggerAsyncSBOMWrite(r.Context(), artifactID, scanResults)
+
+	// Persist license metadata from effective-POM resolver so licenses are
+	// visible in the API / admin UI even without a full SBOM blob.
+	if len(scanArtifact.ExtraLicenses) > 0 {
+		adapter.TriggerAsyncLicenseWrite(r.Context(), artifactID, scanArtifact.ExtraLicenses, "effective-pom")
+	}
 }
 
 // persistArtifact writes the artifact, status, and scan results to the DB.
