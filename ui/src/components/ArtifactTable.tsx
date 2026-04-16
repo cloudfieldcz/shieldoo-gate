@@ -23,7 +23,7 @@ export default function ArtifactTable({ artifacts, onRowClick, selectedId }: Art
       <table className="min-w-full divide-y divide-gray-200">
         <thead className="bg-gray-50">
           <tr>
-            {['Ecosystem', 'Name', 'Version', 'Status', 'Size', 'Cached At'].map((col) => (
+            {['Ecosystem', 'Name', 'Version', 'Licenses', 'Status', 'Size', 'Cached At'].map((col) => (
               <th
                 key={col}
                 className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider"
@@ -56,6 +56,22 @@ export default function ArtifactTable({ artifacts, onRowClick, selectedId }: Art
                 )}
               </td>
               <td className="px-4 py-3 text-sm text-gray-600 font-mono">{a.version}</td>
+              <td className="px-4 py-3 text-sm">
+                {a.licenses?.length ? (
+                  <div className="flex flex-wrap gap-1">
+                    {a.licenses.map((l) => (
+                      <span
+                        key={l}
+                        className="inline-block px-1.5 py-0.5 rounded text-xs font-mono bg-blue-50 text-blue-700 border border-blue-200"
+                      >
+                        {l}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="text-xs text-gray-300">—</span>
+                )}
+              </td>
               <td className="px-4 py-3 text-sm">
                 <div className="flex items-center gap-1.5">
                   <StatusBadge status={a.status.status} />

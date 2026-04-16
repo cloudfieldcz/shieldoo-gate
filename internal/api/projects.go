@@ -152,13 +152,14 @@ func (s *Server) handleListProjectArtifacts(w http.ResponseWriter, r *http.Reque
 	defer rows.Close()
 
 	type row struct {
-		ID          string `db:"id"            json:"id"`
-		Ecosystem   string `db:"ecosystem"     json:"ecosystem"`
-		Name        string `db:"name"          json:"name"`
-		Version     string `db:"version"       json:"version"`
-		FirstUsedAt string `db:"first_used_at" json:"first_used_at"`
-		LastUsedAt  string `db:"last_used_at"  json:"last_used_at"`
-		UseCount    int64  `db:"use_count"     json:"use_count"`
+		ID          string   `db:"id"            json:"id"`
+		Ecosystem   string   `db:"ecosystem"     json:"ecosystem"`
+		Name        string   `db:"name"          json:"name"`
+		Version     string   `db:"version"       json:"version"`
+		FirstUsedAt string   `db:"first_used_at" json:"first_used_at"`
+		LastUsedAt  string   `db:"last_used_at"  json:"last_used_at"`
+		UseCount    int64    `db:"use_count"     json:"use_count"`
+		Licenses    []string `db:"-"             json:"licenses,omitempty"`
 	}
 	var out []row
 	for rows.Next() {
@@ -169,5 +170,30 @@ func (s *Server) handleListProjectArtifacts(w http.ResponseWriter, r *http.Reque
 		}
 		out = append(out, r)
 	}
+
+	// Batch-load SBOM licenses.
+	if len(out) > 0 {
+		licMap := make(map[string]string)
+		lRows, lErr := s.db.QueryxContext(r.Context(),
+			`SELECT artifact_id, licenses_json FROM sbom_metadata WHERE licenses_json != '[]'`)
+		if lErr == nil {
+			defer lRows.Close()
+			for lRows.Next() {
+				var aid, lj string
+				if err := lRows.Scan(&aid, &lj); err == nil {
+					licMap[aid] = lj
+				}
+			}
+		}
+		for i := range out {
+			if lj, ok := licMap[out[i].ID]; ok {
+				var lics []string
+				if json.Unmarshal([]byte(lj), &lics) == nil && len(lics) > 0 {
+					out[i].Licenses = lics
+				}
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{"artifacts": out})
 }

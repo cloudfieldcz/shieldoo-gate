@@ -2,6 +2,7 @@ package api
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -60,6 +61,7 @@ type artifactResponse struct {
 	StoragePath    string                 `json:"storage_path"`
 	Status         artifactStatusResponse `json:"status"`
 	HasOverride    bool                   `json:"has_override"`
+	Licenses       []string               `json:"licenses,omitempty"`
 }
 
 // artifactID extracts and URL-decodes the {id} route parameter.
@@ -244,6 +246,30 @@ func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 			key := items[i].Ecosystem + ":" + items[i].Name + ":" + items[i].Version
 			pkgKey := items[i].Ecosystem + ":" + items[i].Name + ":"
 			items[i].HasOverride = overrideSet[key] || overrideSet[pkgKey]
+		}
+	}
+
+	// Batch-load SBOM licenses for all artifacts in the page.
+	if len(items) > 0 {
+		licMap := make(map[string]string) // artifact_id → licenses_json
+		lRows, lErr := s.db.QueryxContext(r.Context(),
+			`SELECT artifact_id, licenses_json FROM sbom_metadata WHERE licenses_json != '[]'`)
+		if lErr == nil {
+			defer lRows.Close()
+			for lRows.Next() {
+				var aid, lj string
+				if err := lRows.Scan(&aid, &lj); err == nil {
+					licMap[aid] = lj
+				}
+			}
+		}
+		for i := range items {
+			if lj, ok := licMap[items[i].ID]; ok {
+				var lics []string
+				if json.Unmarshal([]byte(lj), &lics) == nil && len(lics) > 0 {
+					items[i].Licenses = lics
+				}
+			}
 		}
 	}
 

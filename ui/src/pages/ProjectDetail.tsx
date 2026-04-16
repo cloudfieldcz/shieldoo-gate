@@ -127,6 +127,7 @@ function ArtifactsTab({ projectId }: { projectId: number }) {
         <thead className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wide">
           <tr>
             <th className="px-4 py-2 text-left font-medium">Artifact</th>
+            <th className="px-4 py-2 text-left font-medium">Licenses</th>
             <th className="px-4 py-2 text-right font-medium">Uses</th>
             <th className="px-4 py-2 text-left font-medium">First used</th>
             <th className="px-4 py-2 text-left font-medium">Last used</th>
@@ -142,6 +143,22 @@ function ArtifactsTab({ projectId }: { projectId: number }) {
                 >
                   {a.id}
                 </Link>
+              </td>
+              <td className="px-4 py-2">
+                {a.licenses?.length ? (
+                  <div className="flex flex-wrap gap-1">
+                    {a.licenses.map((l: string) => (
+                      <span
+                        key={l}
+                        className="inline-block px-1.5 py-0.5 rounded text-xs font-mono bg-blue-50 text-blue-700 border border-blue-200"
+                      >
+                        {l}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="text-xs text-gray-300">—</span>
+                )}
               </td>
               <td className="px-4 py-2 text-right tabular-nums">{a.use_count}</td>
               <td className="px-4 py-2 text-xs text-gray-500">{formatDate(a.first_used_at)}</td>

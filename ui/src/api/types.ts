@@ -127,7 +127,7 @@ interface OverrideInfo {
   expires_at?: string
 }
 
-export type ArtifactWithStatus = Artifact & { status: ArtifactStatus }
+export type ArtifactWithStatus = Artifact & { status: ArtifactStatus; licenses?: string[] }
 export type ArtifactDetail = Artifact & { status: ArtifactStatus; scan_results: ScanResult[]; active_overrides: OverrideInfo[] }
 
 export interface DockerRepository {
@@ -210,6 +210,7 @@ export interface ProjectArtifact {
   first_used_at: string
   last_used_at: string
   use_count: number
+  licenses?: string[]
 }
 
 export interface ProjectArtifactsResponse {
