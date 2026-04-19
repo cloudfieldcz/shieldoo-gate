@@ -299,6 +299,12 @@ func (e *Engine) EvaluateLicensesOnly(ctx context.Context, artifactID string) Po
 
 	pol, err := e.licenseResolver.ResolveForProject(ctx, projectID, projectLabel)
 	if err != nil {
+		if isContextError(err) {
+			// Client disconnected or pipeline timeout — no point issuing
+			// a fail-closed block + audit entry for a response nobody
+			// will read.
+			return PolicyResult{Action: ActionAllow}
+		}
 		// FAIL-CLOSED: resolver error blocks the request.
 		log.Error().Err(err).Int64("project_id", projectID).Str("artifact_id", artifactID).
 			Msg("policy: cache-hit license check: resolver error — blocking (fail-closed)")
@@ -316,6 +322,11 @@ func (e *Engine) EvaluateLicensesOnly(ctx context.Context, artifactID string) Po
 	if e.sbomStore != nil {
 		meta, err := e.sbomStore.GetMetadata(ctx, artifactID)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			if isContextError(err) {
+				// See resolver branch above — canceled / deadline means
+				// the client is gone, don't pollute the audit log.
+				return PolicyResult{Action: ActionAllow}
+			}
 			// FAIL-CLOSED: DB error blocks the request.
 			log.Error().Err(err).Str("artifact_id", artifactID).
 				Msg("policy: cache-hit license check: metadata read error — blocking (fail-closed)")
@@ -503,6 +514,14 @@ func (e *Engine) evaluateLicenses(ctx context.Context, artifact scanner.Artifact
 		}, false
 	}
 	return PolicyResult{}, false
+}
+
+// isContextError reports whether err originated from the request/pipeline
+// context being canceled or hitting its deadline. The cache-hit license
+// evaluator treats these as "client gone" (not a real DB/resolver fault)
+// so they do not trigger a fail-closed block + audit log entry.
+func isContextError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 // triageSuspicious handles AI triage for balanced mode MEDIUM severity findings.

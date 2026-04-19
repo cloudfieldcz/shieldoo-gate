@@ -121,3 +121,34 @@ func TestEvaluateLicensesOnly_DisabledPolicy_ReturnsAllow(t *testing.T) {
 	result := engine.EvaluateLicensesOnly(context.Background(), "npm:chalk:5.4.1")
 	assert.Equal(t, policy.ActionAllow, result.Action)
 }
+
+func TestEvaluateLicensesOnly_CanceledContext_ReturnsAllow(t *testing.T) {
+	// When the HTTP request context is canceled (client disconnected mid
+	// flight), the DB query returns context.Canceled. The previous fail-
+	// closed handler would mark the artifact BLOCKED and append a
+	// LICENSE_BLOCKED audit entry even though no one is listening. We now
+	// treat canceled contexts as "client went away — no enforcement needed".
+	engine, db, store := newLicenseEngine(t, []string{"GPL-3.0"}, nil, "")
+	seedArtifactWithLicenses(t, db, store, "npm:chalk:5.4.1", []string{"MIT"})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result := engine.EvaluateLicensesOnly(ctx, "npm:chalk:5.4.1")
+	assert.Equal(t, policy.ActionAllow, result.Action,
+		"canceled context must not trigger fail-closed block")
+}
+
+func TestEvaluateLicensesOnly_DeadlineExceeded_ReturnsAllow(t *testing.T) {
+	// Same rationale as above, but for context.DeadlineExceeded (slow DB
+	// under load while a pipeline timeout expires).
+	engine, db, store := newLicenseEngine(t, []string{"GPL-3.0"}, nil, "")
+	seedArtifactWithLicenses(t, db, store, "npm:chalk:5.4.1", []string{"MIT"})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 0)
+	defer cancel()
+
+	result := engine.EvaluateLicensesOnly(ctx, "npm:chalk:5.4.1")
+	assert.Equal(t, policy.ActionAllow, result.Action,
+		"deadline-exceeded context must not trigger fail-closed block")
+}
