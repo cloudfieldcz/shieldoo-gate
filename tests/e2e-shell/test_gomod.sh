@@ -83,7 +83,61 @@ test_gomod() {
     assert_gte "GoMod: at least 1 SERVED audit event for go artifacts" 1 "$go_served"
 
     # ------------------------------------------------------------------
-    # 7. Gate logs contain scan pipeline entries for gomod
+    # 7. License detection — zerolog v1.33.0 is MIT-licensed; the gomod
+    # adapter runs google/licensecheck over LICENSE-family files in the
+    # module zip and persists results via TriggerAsyncLicenseWrite.
+    # ------------------------------------------------------------------
+    local go_artifact_id=""
+    local waited=0
+    while [ "$waited" -lt 30 ]; do
+        go_artifact_id=$(api_jq "/api/v1/artifacts?ecosystem=go&per_page=200" \
+            "[.data[] | select(.ecosystem == \"go\" and .name == \"${module}\")] | .[0].id // empty" 2>/dev/null)
+        if [ -n "$go_artifact_id" ] && [ "$go_artifact_id" != "null" ]; then
+            break
+        fi
+        sleep 1
+        waited=$(( waited + 1 ))
+    done
+
+    if [ -z "$go_artifact_id" ] || [ "$go_artifact_id" = "null" ]; then
+        log_fail "GoMod: could not discover ${module} artifact via admin API"
+    else
+        log_pass "GoMod: discovered go artifact id=${go_artifact_id}"
+
+        # The license write is async (10s timeout goroutine). Give it time.
+        sleep 5
+
+        # Go artifact IDs contain both ':' and '/' (e.g. "go:github.com/rs/zerolog:v1.33.0").
+        # Chi's {id} parameter matches a single path segment, so slashes must be
+        # percent-encoded to reach handleGetArtifactLicenses.
+        local encoded_id
+        encoded_id=$(jq -rn --arg s "$go_artifact_id" '$s|@uri')
+
+        local licenses_body
+        licenses_body=$(curl -sf "${E2E_ADMIN_URL}/api/v1/artifacts/${encoded_id}/licenses" 2>/dev/null || true)
+        if [ -z "$licenses_body" ]; then
+            log_fail "GoMod: /licenses endpoint returned empty body for ${go_artifact_id}"
+        else
+            local has_mit
+            has_mit=$(echo "$licenses_body" | jq -r '.licenses // [] | index("MIT") // empty')
+            if [ -n "$has_mit" ]; then
+                log_pass "GoMod: detected MIT license for ${module}"
+            else
+                log_fail "GoMod: MIT license not detected (body=${licenses_body})"
+            fi
+
+            local generator
+            generator=$(echo "$licenses_body" | jq -r '.generator // empty')
+            if [ "$generator" = "gomod-licensecheck" ]; then
+                log_pass "GoMod: generator=gomod-licensecheck"
+            else
+                log_fail "GoMod: expected generator=gomod-licensecheck, got '${generator}'"
+            fi
+        fi
+    fi
+
+    # ------------------------------------------------------------------
+    # 8. Gate logs contain scan pipeline entries for gomod
     # ------------------------------------------------------------------
     local gate_logs
     gate_logs=$(docker_logs shieldoo-gate 2>/dev/null)

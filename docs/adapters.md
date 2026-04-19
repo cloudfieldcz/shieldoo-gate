@@ -440,6 +440,8 @@ gem "rails"
 
 5. **Metadata and list requests** (`.info`, `.mod`, `list`, `@latest`) are proxied directly to the upstream without scanning.
 
+6. **License detection:** Trivy does not support the Go ecosystem, so the adapter scans LICENSE-family files (`LICENSE`, `LICENCE`, `COPYING`, `UNLICENSE` plus common extensions like `.md`/`.txt`) at the module root inside the downloaded zip using [`google/licensecheck`](https://pkg.go.dev/github.com/google/licensecheck). Matches with ≥75% coverage are normalized to SPDX IDs, forwarded to the scanner engine via `scanArtifact.ExtraLicenses` for policy enforcement, and asynchronously persisted to `sbom_metadata` (generator `gomod-licensecheck`) so licenses appear in the admin UI and the `/licenses` API.
+
 ### Artifact ID Format
 
 `go:{module_path}:{version}` (e.g., `go:github.com/rs/zerolog:v1.33.0`)

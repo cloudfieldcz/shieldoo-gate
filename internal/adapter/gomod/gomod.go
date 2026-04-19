@@ -428,6 +428,18 @@ func (a *GoModAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 		UpstreamURL: upstreamURL,
 	}
 
+	// 4b. License detection — Trivy does not support Go modules, so we scan
+	// LICENSE-family files in the module zip with google/licensecheck. The
+	// resulting SPDX IDs feed both the scanner engine (for policy enforcement
+	// on Go artifacts) and async sbom_metadata persistence after serving.
+	if extra := extractLicensesFromGoModuleZip(tmpPath); len(extra) > 0 {
+		scanArtifact.ExtraLicenses = extra
+		log.Info().
+			Str("artifact", artifactID).
+			Strs("licenses", extra).
+			Msg("gomod: detected licenses in module zip")
+	}
+
 	// 5. Scan.
 	log.Info().Str("artifact", artifactID).Str("client", r.RemoteAddr).Msg("gomod: starting scan pipeline")
 	scanResults, err := a.scanEngine.ScanAll(pctx, scanArtifact)
@@ -527,6 +539,12 @@ func (a *GoModAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 	// Trigger async sandbox scan (non-blocking).
 	adapter.TriggerAsyncScan(r.Context(), scanArtifact, tmpPath, a.db, a.policyEngine)
 	adapter.TriggerAsyncSBOMWrite(r.Context(), artifactID, scanResults)
+
+	// Persist detected licenses so they appear in sbom_metadata / admin UI
+	// even though Trivy does not emit an SBOM for Go modules.
+	if len(scanArtifact.ExtraLicenses) > 0 {
+		adapter.TriggerAsyncLicenseWrite(r.Context(), artifactID, scanArtifact.ExtraLicenses, "gomod-licensecheck")
+	}
 }
 
 // persistArtifact writes the artifact, status, and scan results to the DB.
