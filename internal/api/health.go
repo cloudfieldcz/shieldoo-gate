@@ -19,8 +19,12 @@ type scannerInfo struct {
 }
 
 // handleHealth returns the service health status including scanner health checks.
+//
+// The 10 s budget is the ceiling for all scanner health checks combined.
+// Engine.HealthCheck runs them in parallel, so the slowest scanner — typically
+// trivy's `trivy version` fork+exec or the OSV API round-trip — sets the floor.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
 	resp := healthResponse{

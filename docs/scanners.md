@@ -516,4 +516,8 @@ At startup, the sandbox scanner lists all containers with the `sgw-sandbox-` pre
 
 ## Health Checks
 
-`Engine.HealthCheck()` runs `HealthCheck()` on every registered scanner and returns a map of scanner name to error (nil = healthy). This is exposed via `GET /api/v1/health` and includes scanner status in the response.
+`Engine.HealthCheck()` runs `HealthCheck()` on every registered scanner **in parallel** and returns a map of scanner name to error (nil = healthy). This is exposed via `GET /api/v1/health` and includes scanner status in the response.
+
+Parallelism matters here because individual scanners perform real I/O during their health check — `trivy` forks `trivy version`, `osv` does an HTTPS POST to `api.osv.dev`, `ai-scanner` makes a gRPC call to the scanner bridge. Running them sequentially would let a slow scanner consume the budget of the ones that follow, producing spurious `DeadlineExceeded` (gRPC/HTTP) or `signal: killed` (SIGKILL from `exec.CommandContext` when the parent context expires mid-fork) errors even when every individual scanner is healthy.
+
+The HTTP handler in [`internal/api/health.go`](../internal/api/health.go) sets a **10 s ceiling** for the combined health check call. This is the upper bound across all scanners, not per-scanner — slowest scanner wins.

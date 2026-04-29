@@ -158,12 +158,30 @@ func (e *Engine) PreScanTyposquat(ctx context.Context, name string, ecosystem Ec
 	return ScanResult{}, false
 }
 
-// HealthCheck runs HealthCheck on all registered scanners and returns a map of
-// scanner name to error (nil means healthy).
+// HealthCheck runs HealthCheck on all registered scanners in parallel and
+// returns a map of scanner name to error (nil means healthy).
+//
+// Scanners run concurrently because each one may perform I/O (subprocess fork,
+// HTTP request, gRPC call) that takes a non-trivial fraction of the caller's
+// deadline. Running sequentially would let a slow scanner consume the budget
+// of the ones that follow it, producing spurious DeadlineExceeded / SIGKILL
+// errors even when every individual scanner is healthy.
 func (e *Engine) HealthCheck(ctx context.Context) map[string]error {
-	status := make(map[string]error)
+	status := make(map[string]error, len(e.scanners))
+	var (
+		mu sync.Mutex
+		wg sync.WaitGroup
+	)
 	for _, s := range e.scanners {
-		status[s.Name()] = s.HealthCheck(ctx)
+		wg.Add(1)
+		go func(sc Scanner) {
+			defer wg.Done()
+			err := sc.HealthCheck(ctx)
+			mu.Lock()
+			status[sc.Name()] = err
+			mu.Unlock()
+		}(s)
 	}
+	wg.Wait()
 	return status
 }
