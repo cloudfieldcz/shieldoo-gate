@@ -160,6 +160,12 @@ policy:
     circuit_breaker_cooldown: "60s"
   allowlist:
     - "pypi:litellm:==1.82.6"
+    # Written in PEP 503 canonical form (hyphen). The allowlist parser
+    # canonicalizes the ecosystem name before matching, so either spelling
+    # would work — canonical is preferred because that's what artifact rows
+    # are keyed on after migration 024.
+    - "pypi:strawberry-graphql:==0.263.0"
+    - "pypi:six:==1.17.0"
   tag_mutability:
     enabled: true
     action: "warn"

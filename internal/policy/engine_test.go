@@ -104,6 +104,21 @@ func TestParseAllowlistEntry_ValidEntry(t *testing.T) {
 	assert.Equal(t, "1.82.6", entry.Version)
 }
 
+// PyPI distributes the same package under two name forms — `strawberry-graphql`
+// (PEP 503 canonical, used in the simple index) and `strawberry_graphql`
+// (PEP 427 wheel filename). Both must parse to the canonical name so they
+// match the artifact's stored name regardless of which form the admin typed.
+func TestParseAllowlistEntry_PyPINormalizesEitherSpelling(t *testing.T) {
+	hyphen, err := policy.ParseAllowlistEntry("pypi:strawberry-graphql:==0.263.0")
+	require.NoError(t, err)
+	underscore, err := policy.ParseAllowlistEntry("pypi:strawberry_graphql:==0.263.0")
+	require.NoError(t, err)
+
+	assert.Equal(t, "strawberry-graphql", hyphen.Name)
+	assert.Equal(t, "strawberry-graphql", underscore.Name)
+	assert.Equal(t, hyphen, underscore)
+}
+
 // --- evaluateSuspicious mode tests ---
 
 func TestEvaluateSuspicious_StrictMode_AlwaysQuarantine(t *testing.T) {

@@ -81,6 +81,19 @@ The `error` field is `"blocked"` when the policy action is BLOCK, or `"quarantin
 
 3. Scanned file types: `.tar.gz`, `.whl`, `.zip` — the built-in PTH Inspector specifically looks for `.pth` files inside wheel archives (the LiteLLM attack vector).
 
+### Package Name Normalization
+
+PyPI distributes the same package under two name forms — the [PEP 503](https://peps.python.org/pep-0503/#normalized-names) canonical form on the simple index (`strawberry-graphql`, hyphens, lowercase) and the [PEP 427](https://peps.python.org/pep-0427/#file-name-convention) wheel-filename form (`strawberry_graphql`, with underscores so the filename can be split on `-`).
+
+Shieldoo Gate stores every PyPI artifact under its **PEP 503 canonical name**. This is the single source of truth used by:
+
+- the artifact ID (`pypi:strawberry-graphql:0.263.0:strawberry_graphql-0.263.0-py3-none-any.whl` — note the canonical name in segment 2 and the wheel filename verbatim in segment 4),
+- the admin UI Artifacts table search,
+- the static `policy:allowlist` in `config.yaml`,
+- entries created in the `policy_overrides` table by the admin API.
+
+The allowlist parser and the override-creation API canonicalize their input, so an admin may write `pypi:strawberry-graphql:==0.263.0` or `pypi:strawberry_graphql:==0.263.0` interchangeably; both round-trip to the canonical form. See [ADR-003](adr/ADR-003-pypi-canonical-package-names.md) for the full rationale.
+
 ### Client Configuration
 
 ```bash

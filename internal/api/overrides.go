@@ -12,6 +12,7 @@ import (
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
 )
 
 type createOverrideRequest struct {
@@ -114,6 +115,11 @@ func (s *Server) handleCreateOverride(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	// Canonicalize the package name so admins can type either spelling
+	// (e.g. PyPI's `strawberry-graphql` vs `strawberry_graphql`) and the
+	// inserted row matches the artifact's stored canonical name.
+	req.Name = scanner.CanonicalPackageName(scanner.Ecosystem(req.Ecosystem), req.Name)
 
 	// If scope is package, clear version
 	version := req.Version

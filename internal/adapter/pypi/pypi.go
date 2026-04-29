@@ -631,7 +631,24 @@ func downloadToTemp(ctx context.Context, rawURL string, client *http.Client) (st
 // parseFilename extracts (packageName, version) from a PyPI filename.
 // It handles both wheel (.whl) and sdist (.tar.gz, .zip) conventions.
 // Falls back to (filename, "unknown") on parse failure.
+//
+// The returned package name is normalized to its PEP 503 canonical form
+// (lowercase, runs of `-`/`_`/`.` collapsed to `-`) so artifact rows, allowlist
+// matching, and admin UI search are all keyed on a single identifier
+// independent of whether the source was a wheel filename (PEP 427, underscores)
+// or a simple-index URL (PEP 503, hyphens). The filename argument itself is
+// returned unmodified by callers — only the extracted name is canonicalized.
 func parseFilename(filename string) (string, string) {
+	rawName, version := splitNameVersion(filename)
+	if rawName == "" {
+		return filename, "unknown"
+	}
+	return CanonicalName(rawName), version
+}
+
+// splitNameVersion splits a PyPI filename into its raw (pre-canonical) name
+// and version components, or returns ("", "") on parse failure.
+func splitNameVersion(filename string) (string, string) {
 	// Wheel: name-version-pythonX-abiX-platformX.whl
 	if strings.HasSuffix(filename, ".whl") {
 		parts := strings.SplitN(strings.TrimSuffix(filename, ".whl"), "-", 3)
@@ -642,18 +659,16 @@ func parseFilename(filename string) (string, string) {
 	// sdist .tar.gz
 	if strings.HasSuffix(filename, ".tar.gz") {
 		base := strings.TrimSuffix(filename, ".tar.gz")
-		idx := strings.LastIndex(base, "-")
-		if idx > 0 {
+		if idx := strings.LastIndex(base, "-"); idx > 0 {
 			return base[:idx], base[idx+1:]
 		}
 	}
 	// .zip
 	if strings.HasSuffix(filename, ".zip") {
 		base := strings.TrimSuffix(filename, ".zip")
-		idx := strings.LastIndex(base, "-")
-		if idx > 0 {
+		if idx := strings.LastIndex(base, "-"); idx > 0 {
 			return base[:idx], base[idx+1:]
 		}
 	}
-	return filename, "unknown"
+	return "", ""
 }

@@ -34,6 +34,11 @@ type AllowlistEntry struct {
 
 // ParseAllowlistEntry parses an entry of the form "eco:name:==version".
 // The version specifier "==" prefix is stripped; if omitted, all versions match.
+//
+// The package name is run through scanner.CanonicalPackageName so admins can
+// write either form for ecosystems with multiple wire spellings (notably PyPI:
+// `pypi:strawberry-graphql:==0.263.0` and `pypi:strawberry_graphql:==0.263.0`
+// produce the same entry and both match the canonical artifact name).
 func ParseAllowlistEntry(entry string) (AllowlistEntry, error) {
 	parts := strings.SplitN(entry, ":", 3)
 	if len(parts) < 2 {
@@ -42,7 +47,7 @@ func ParseAllowlistEntry(entry string) (AllowlistEntry, error) {
 
 	e := AllowlistEntry{
 		Ecosystem: parts[0],
-		Name:      parts[1],
+		Name:      scanner.CanonicalPackageName(scanner.Ecosystem(parts[0]), parts[1]),
 	}
 
 	if len(parts) == 3 {

@@ -201,6 +201,10 @@ func initSQLite(cfg SQLiteConfig) (*GateDB, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := runDataMigrations(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 
 	return &GateDB{db}, nil
 }
@@ -241,6 +245,10 @@ func initPostgres(cfg PostgresConfig) (*GateDB, error) {
 	log.Info().Int("max_open_conns", maxOpen).Int("max_idle_conns", maxIdle).Dur("conn_max_lifetime", connMaxLifetime).Msg("postgres connection pool configured")
 
 	if err := runMigrations(db, postgresMigrationFS, "migrations/postgres"); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := runDataMigrations(db); err != nil {
 		db.Close()
 		return nil, err
 	}
