@@ -535,11 +535,17 @@ func (a *NPMAdapter) proxyUpstreamRewrite(w http.ResponseWriter, r *http.Request
 	}
 	defer resp.Body.Close()
 
-	// Cap metadata responses at 10 MB to prevent DoS from malicious upstreams.
-	const maxMetadataSize = 10 << 20
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataSize))
+	// Cap metadata responses at 200 MB to prevent DoS from malicious upstreams.
+	// Read one extra byte to distinguish "fits" from "exceeds": silently truncating
+	// the JSON would corrupt the packument (npm clients fail with "Unterminated string").
+	const maxMetadataSize = 200 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataSize+1))
 	if err != nil {
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
+		return
+	}
+	if int64(len(body)) > maxMetadataSize {
+		http.Error(w, "upstream metadata exceeds size limit", http.StatusBadGateway)
 		return
 	}
 

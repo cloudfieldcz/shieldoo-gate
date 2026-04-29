@@ -55,6 +55,12 @@ When an artifact is blocked or quarantined, the adapter returns HTTP 403 with:
 
 The `error` field is `"blocked"` when the policy action is BLOCK, or `"quarantined"` when the action is QUARANTINE.
 
+### Upstream Metadata Proxy Size Limit
+
+The npm, PyPI, and NuGet adapters proxy package metadata (packuments, simple index, registration pages) from the upstream registry, rewriting absolute URLs so artifact downloads route back through the proxy. These metadata responses are streamed directly to the client and **not cached on disk** — only artifact content (tarballs, wheels, .nupkg) is stored in the cache.
+
+To protect against DoS from a malicious or misbehaving upstream, metadata responses are capped at **200 MB**. If an upstream response exceeds the cap, the proxy returns `502 Bad Gateway` with `upstream metadata exceeds size limit` rather than truncating the body — silent truncation would corrupt JSON/XML and produce confusing client-side parse errors. Large public packuments (e.g. `vite`, `react`, `webpack`) routinely exceed 10 MB; 200 MB leaves substantial headroom.
+
 ## PyPI Adapter
 
 | | |

@@ -140,10 +140,16 @@ func (a *NuGetAdapter) handleServiceIndex(w http.ResponseWriter, r *http.Request
 	}
 	defer resp.Body.Close()
 
-	const maxMetadataSize = 10 << 20
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataSize))
+	// Read one extra byte to distinguish "fits" from "exceeds" so we error out
+	// cleanly instead of silently truncating the response body.
+	const maxMetadataSize = 200 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataSize+1))
 	if err != nil {
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
+		return
+	}
+	if int64(len(body)) > maxMetadataSize {
+		http.Error(w, "upstream metadata exceeds size limit", http.StatusBadGateway)
 		return
 	}
 
@@ -553,11 +559,17 @@ func (a *NuGetAdapter) proxyUpstreamRewrite(w http.ResponseWriter, r *http.Reque
 	}
 	defer resp.Body.Close()
 
-	// Cap metadata responses at 10 MB to prevent DoS from malicious upstreams.
-	const maxMetadataSize = 10 << 20
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataSize))
+	// Cap metadata responses at 200 MB to prevent DoS from malicious upstreams.
+	// Read one extra byte to distinguish "fits" from "exceeds" so we error out
+	// cleanly instead of silently truncating the response body.
+	const maxMetadataSize = 200 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataSize+1))
 	if err != nil {
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
+		return
+	}
+	if int64(len(body)) > maxMetadataSize {
+		http.Error(w, "upstream metadata exceeds size limit", http.StatusBadGateway)
 		return
 	}
 
