@@ -21,10 +21,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ScannerBridge_ScanArtifact_FullMethodName   = "/scanner.ScannerBridge/ScanArtifact"
-	ScannerBridge_ScanArtifactAI_FullMethodName = "/scanner.ScannerBridge/ScanArtifactAI"
-	ScannerBridge_TriageFindings_FullMethodName = "/scanner.ScannerBridge/TriageFindings"
-	ScannerBridge_HealthCheck_FullMethodName    = "/scanner.ScannerBridge/HealthCheck"
+	ScannerBridge_ScanArtifact_FullMethodName     = "/scanner.ScannerBridge/ScanArtifact"
+	ScannerBridge_ScanArtifactAI_FullMethodName   = "/scanner.ScannerBridge/ScanArtifactAI"
+	ScannerBridge_ScanArtifactDiff_FullMethodName = "/scanner.ScannerBridge/ScanArtifactDiff"
+	ScannerBridge_TriageFindings_FullMethodName   = "/scanner.ScannerBridge/TriageFindings"
+	ScannerBridge_HealthCheck_FullMethodName      = "/scanner.ScannerBridge/HealthCheck"
 )
 
 // ScannerBridgeClient is the client API for ScannerBridge service.
@@ -33,6 +34,7 @@ const (
 type ScannerBridgeClient interface {
 	ScanArtifact(ctx context.Context, in *ScanRequest, opts ...grpc.CallOption) (*ScanResponse, error)
 	ScanArtifactAI(ctx context.Context, in *AIScanRequest, opts ...grpc.CallOption) (*AIScanResponse, error)
+	ScanArtifactDiff(ctx context.Context, in *DiffScanRequest, opts ...grpc.CallOption) (*DiffScanResponse, error)
 	TriageFindings(ctx context.Context, in *TriageRequest, opts ...grpc.CallOption) (*TriageResponse, error)
 	HealthCheck(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error)
 }
@@ -65,6 +67,16 @@ func (c *scannerBridgeClient) ScanArtifactAI(ctx context.Context, in *AIScanRequ
 	return out, nil
 }
 
+func (c *scannerBridgeClient) ScanArtifactDiff(ctx context.Context, in *DiffScanRequest, opts ...grpc.CallOption) (*DiffScanResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DiffScanResponse)
+	err := c.cc.Invoke(ctx, ScannerBridge_ScanArtifactDiff_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *scannerBridgeClient) TriageFindings(ctx context.Context, in *TriageRequest, opts ...grpc.CallOption) (*TriageResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(TriageResponse)
@@ -91,6 +103,7 @@ func (c *scannerBridgeClient) HealthCheck(ctx context.Context, in *HealthRequest
 type ScannerBridgeServer interface {
 	ScanArtifact(context.Context, *ScanRequest) (*ScanResponse, error)
 	ScanArtifactAI(context.Context, *AIScanRequest) (*AIScanResponse, error)
+	ScanArtifactDiff(context.Context, *DiffScanRequest) (*DiffScanResponse, error)
 	TriageFindings(context.Context, *TriageRequest) (*TriageResponse, error)
 	HealthCheck(context.Context, *HealthRequest) (*HealthResponse, error)
 	mustEmbedUnimplementedScannerBridgeServer()
@@ -108,6 +121,9 @@ func (UnimplementedScannerBridgeServer) ScanArtifact(context.Context, *ScanReque
 }
 func (UnimplementedScannerBridgeServer) ScanArtifactAI(context.Context, *AIScanRequest) (*AIScanResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ScanArtifactAI not implemented")
+}
+func (UnimplementedScannerBridgeServer) ScanArtifactDiff(context.Context, *DiffScanRequest) (*DiffScanResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ScanArtifactDiff not implemented")
 }
 func (UnimplementedScannerBridgeServer) TriageFindings(context.Context, *TriageRequest) (*TriageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TriageFindings not implemented")
@@ -172,6 +188,24 @@ func _ScannerBridge_ScanArtifactAI_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ScannerBridge_ScanArtifactDiff_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DiffScanRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerBridgeServer).ScanArtifactDiff(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerBridge_ScanArtifactDiff_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerBridgeServer).ScanArtifactDiff(ctx, req.(*DiffScanRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ScannerBridge_TriageFindings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(TriageRequest)
 	if err := dec(in); err != nil {
@@ -222,6 +256,10 @@ var ScannerBridge_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ScanArtifactAI",
 			Handler:    _ScannerBridge_ScanArtifactAI_Handler,
+		},
+		{
+			MethodName: "ScanArtifactDiff",
+			Handler:    _ScannerBridge_ScanArtifactDiff_Handler,
 		},
 		{
 			MethodName: "TriageFindings",

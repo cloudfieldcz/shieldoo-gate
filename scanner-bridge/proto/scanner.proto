@@ -7,6 +7,7 @@ option go_package = "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/guar
 service ScannerBridge {
     rpc ScanArtifact(ScanRequest) returns (ScanResponse);
     rpc ScanArtifactAI(AIScanRequest) returns (AIScanResponse);
+    rpc ScanArtifactDiff(DiffScanRequest) returns (DiffScanResponse);
     rpc TriageFindings(TriageRequest) returns (TriageResponse);
     rpc HealthCheck(HealthRequest) returns (HealthResponse);
 }
@@ -72,4 +73,32 @@ message HealthRequest {}
 message HealthResponse {
     bool healthy = 1;
     string version = 2;
+}
+
+message DiffScanRequest {
+    string artifact_id            = 1;
+    string ecosystem              = 2;   // pypi, npm, nuget, maven, rubygems, go
+    string name                   = 3;
+    string version                = 4;
+    string previous_version       = 5;
+    string local_path             = 6;   // path to NEW artifact on disk (in shared volume)
+    string previous_path          = 7;   // path to PREVIOUS artifact on disk
+    string original_filename      = 8;
+    string local_path_sha256      = 9;   // expected hash, bridge re-verifies before extraction (TOCTOU)
+    string previous_path_sha256   = 10;  // expected hash, bridge re-verifies before extraction
+    string prompt_version         = 11;  // SHA256[:12] of system prompt — bridge attaches to response
+}
+
+message DiffScanResponse {
+    string verdict          = 1;   // CLEAN | SUSPICIOUS | MALICIOUS | UNKNOWN
+    float  confidence       = 2;
+    repeated string findings = 3;
+    string explanation      = 4;
+    string model_used       = 5;
+    int32  tokens_used      = 6;
+    int32  files_added      = 7;   // counts so Go can persist without re-parsing payload
+    int32  files_modified   = 8;
+    int32  files_removed    = 9;
+    string prompt_version   = 10;  // SHA256[:12] of system prompt at scan time — Go uses for idempotency cache key (so prompt edits invalidate cache)
+    bool   input_truncated  = 11;  // bridge sets true when token budget cut content; Go uses for confidence cap defense-in-depth
 }
