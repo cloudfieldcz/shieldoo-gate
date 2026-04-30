@@ -514,7 +514,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("scanners.typosquat.top_packages_count", 5000)
 	v.SetDefault("scanners.typosquat.combosquat_suffixes", []string{"-utils", "-helper", "-lib", "-dev", "-tool", "-sdk"})
 
-	v.SetDefault("scanners.version_diff.enabled", true)
+	v.SetDefault("scanners.version_diff.enabled", false)
 	v.SetDefault("scanners.version_diff.mode", "shadow")
 	v.SetDefault("scanners.version_diff.max_artifact_size_mb", 50)
 	v.SetDefault("scanners.version_diff.max_extracted_size_mb", 50)
@@ -890,6 +890,25 @@ func (c *Config) validateVersionDiff() error {
 	// allowed at config-load time and inherits scanners.guarddog.bridge_socket
 	// in cmd/shieldoo-gate/main.go before NewVersionDiffScanner runs. The
 	// constructor enforces non-empty.
+
+	// Invariant: the engine outer cap (scanners.timeout) must accommodate the
+	// inner version-diff scanner_timeout plus a 5s buffer; otherwise every
+	// version-diff scan is killed by the outer cap before the LLM finishes.
+	outer := 60 * time.Second
+	if c.Scanners.Timeout != "" {
+		if d, err := time.ParseDuration(c.Scanners.Timeout); err == nil {
+			outer = d
+		}
+	}
+	inner := 55 * time.Second
+	if vc.ScannerTimeout != "" {
+		if d, err := time.ParseDuration(vc.ScannerTimeout); err == nil {
+			inner = d
+		}
+	}
+	if outer < inner+5*time.Second {
+		return fmt.Errorf("config: scanners.timeout (%s) must be >= scanners.version_diff.scanner_timeout (%s) + 5s buffer", outer, inner)
+	}
 	return nil
 }
 

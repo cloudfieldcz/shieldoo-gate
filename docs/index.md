@@ -13,6 +13,7 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
 - [Architecture](architecture.md) — component overview, request flow, startup sequence, concurrency model
 - [Data Model](data-model.md) — database schema, Go structs, table relationships, migrations
 - [Scanners](scanners.md) — scan engine, built-in and external scanners, aggregation, threat feed
+  - [Version-Diff Scanner](scanners/version-diff.md) — AI-driven cross-version semantic analysis (replaces v1.x heuristic, see [ADR-005](adr/ADR-005-ai-driven-version-diff.md))
 - [Protocol Adapters](adapters.md) — PyPI, npm, NuGet, Docker, Maven, RubyGems, Go Modules proxy implementations and routing
 - [Policy Engine](policy.md) — evaluation order, overrides, allowlists, aggregation rules, policy tiers (v1.2), AI triage
 - [Configuration](configuration.md) — full `config.yaml` reference, environment variables, Go structs

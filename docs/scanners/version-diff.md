@@ -1,0 +1,134 @@
+# Version-Diff Scanner
+
+> **Status:** v2.0 (AI-driven) — replaces the v1.x static heuristic implementation.
+> See [ADR-005](../adr/ADR-005-ai-driven-version-diff.md) for the rebuild rationale.
+
+The `version-diff` scanner detects malicious supply-chain attacks by comparing
+each new package version against its most recent CLEAN/SUSPICIOUS cached
+predecessor. Both versions are sent to the Python `scanner-bridge` over gRPC,
+where extraction and an LLM call (gpt-5.4-mini default) classify the changes
+as `CLEAN`, `SUSPICIOUS`, or `MALICIOUS`. The Go side maps the verdict to a
+`scanner.Verdict`, persists the result, and applies a deliberate
+`MALICIOUS → SUSPICIOUS` downgrade (see "Verdict mapping" below).
+
+## When does it run?
+
+- Per-artifact, in parallel with all other enabled scanners.
+- Skipped (returns CLEAN) when:
+  - The package name is in the configured `allowlist`.
+  - Compressed artifact size exceeds `max_artifact_size_mb` (default 50 MB).
+  - No previous CLEAN/SUSPICIOUS version exists in the artifacts table.
+  - An idempotent cache hit is found in `version_diff_results` for the
+    `(new artifact, previous artifact, model, prompt version)` tuple.
+  - The per-package rate limiter has exhausted the hourly quota.
+  - The consecutive-failure circuit breaker is open.
+
+## Configuration
+
+```yaml
+scanners:
+  version_diff:
+    enabled: false                  # opt-in; requires scanner-bridge with AI enabled
+    mode: "shadow"                  # "shadow" | "active"
+    max_artifact_size_mb: 50
+    max_extracted_size_mb: 50       # bridge aggregate cap
+    max_extracted_files: 5000       # bridge file-count cap
+    scanner_timeout: "55s"          # must be < scanners.timeout
+    bridge_socket: ""               # empty -> reuse scanners.guarddog.bridge_socket
+    allowlist: []
+    min_confidence: 0.6             # SUSPICIOUS below this -> CLEAN + audit_log
+    per_package_rate_limit: 10      # LLM calls / hour / package; 0 = unlimited
+    daily_cost_limit_usd: 5.0
+    circuit_breaker_threshold: 5    # consecutive failures -> 60 s degraded mode
+```
+
+## Verdict mapping
+
+| AI says | Go-side mapped verdict | Notes |
+|---------|------------------------|-------|
+| `CLEAN` | `CLEAN` | Persisted with `ai_verdict='CLEAN'` |
+| `SUSPICIOUS` (confidence ≥ `min_confidence`) | `SUSPICIOUS` | Finding severity HIGH (≥ 0.75) or MEDIUM |
+| `SUSPICIOUS` (confidence < `min_confidence`) | `CLEAN` | Audit log entry `SCANNER_VERDICT_DOWNGRADED`, reason `below-min-confidence` |
+| `MALICIOUS` | `SUSPICIOUS` | **Always downgraded.** Finding severity CRITICAL. Audit log entry, reason `asymmetric-diff-downgrade` |
+| `UNKNOWN` (parse error, timeout, fail-open) | `CLEAN` (fail-open) | **NOT persisted** — cache integrity protected |
+
+In `mode: "shadow"`, the final `ScanResult.Verdict` is forced to `CLEAN`
+regardless of the mapping above. The DB row preserves the raw `ai_verdict`
+and `ai_confidence` so operators can still evaluate FP/FN rate.
+
+## Trust boundary — what leaves the gate
+
+When the scanner runs, the bridge sends to the LLM:
+
+- **Install hooks (full content or head+tail truncation):** `setup.py` (PyPI),
+  `*.pth` (PyPI), `tools/install.ps1` / `tools/init.ps1` (NuGet),
+  `ext/*/extconf.rb` (RubyGems), and the values of `package.json` `scripts.preinstall`,
+  `scripts.install`, `scripts.postinstall` (NPM, surfaced as synthetic `npm:scripts/<hook>`).
+- **Top-level executable code (truncated):** `.py` / `.js` / `.ts` / `.cjs` /
+  `.mjs` / `.ps1` / `.sh` / `.rb` files at depth ≤ 2 from the package root.
+- **File inventory and counts:** lists of added/modified/removed paths,
+  ignored-path summary, install-hook paths.
+- **Package metadata:** name, version, previous_version, ecosystem.
+
+After regex redaction of:
+- AWS access keys (`AKIA…`)
+- GitHub tokens (`ghp_…` / `ghs_…`)
+- Generic JWTs (`eyJ…eyJ…`)
+- PEM private keys
+- Azure storage connection strings
+- Generic `password=…` / `api_key=…` quoted strings
+
+Files that are filtered (`tests/`, `docs/`, `examples/`, binary extensions)
+are NOT sent — only their paths are summarized.
+
+For deployments with strict no-egress requirements (GDPR-bound on-prem,
+isolated networks): set `version_diff.enabled: false`.
+
+## Operational queries
+
+Cache invalidation (force re-scan after a prompt update):
+
+```sql
+DELETE FROM version_diff_results
+ WHERE ai_prompt_version = ''             -- or whatever version is now stale
+   AND verdict = 'CLEAN';                  -- preserve historical SUSPICIOUS for audit
+```
+
+Top SUSPICIOUS packages from the last 7 days:
+
+```sql
+SELECT a.name, COUNT(*) AS suspicious_scans, AVG(vdr.ai_confidence) AS mean_conf
+  FROM version_diff_results vdr
+  JOIN artifacts a ON a.id = vdr.artifact_id
+ WHERE vdr.diff_at > now() - INTERVAL '7 days'
+   AND vdr.verdict = 'SUSPICIOUS'
+ GROUP BY a.name
+ ORDER BY suspicious_scans DESC
+ LIMIT 20;
+```
+
+(SQLite syntax differs slightly: replace `now() - INTERVAL '7 days'` with
+`datetime('now', '-7 days')`.)
+
+## Migration from v1.x
+
+The DB table `version_diff_results` is preserved. Migration 024 adds AI
+columns (nullable) and an idempotency UNIQUE INDEX
+`(artifact_id, previous_artifact, ai_model_used, ai_prompt_version)`. Legacy
+v1.x rows have `ai_*` columns NULL — they remain visible in audit queries but
+are not used by the v2.0 cache logic.
+
+The previous heuristic config keys (`thresholds`, `entropy_sample_bytes`,
+`sensitive_patterns`) are silently ignored by the new validator. Future
+releases may reject them as errors after a deprecation window.
+
+## Disabling the scanner
+
+```yaml
+scanners:
+  version_diff:
+    enabled: false
+```
+
+Restart the gate. No data migration is needed; the table and historical rows
+remain available for audit.

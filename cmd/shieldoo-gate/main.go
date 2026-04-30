@@ -166,7 +166,7 @@ func main() {
 	// (vuln+license in one subprocess) so SBOMs are a free byproduct of
 	// vulnerability scanning. Otherwise, fall back to legacy native JSON.
 	if cfg.Scanners.Trivy.Enabled {
-		timeout := parseDuration(cfg.Scanners.Timeout, 30*time.Second)
+		timeout := parseDuration(cfg.Scanners.Timeout, 60*time.Second)
 		var trivy *trivyscanner.TrivyScanner
 		if cfg.SBOM.Enabled {
 			trivy = trivyscanner.NewTrivyScannerWithSBOM(cfg.Scanners.Trivy.Binary, cfg.Scanners.Trivy.CacheDir, timeout)
@@ -180,7 +180,7 @@ func main() {
 
 	// Optional: OSV scanner
 	if cfg.Scanners.OSV.Enabled {
-		timeout := parseDuration(cfg.Scanners.Timeout, 30*time.Second)
+		timeout := parseDuration(cfg.Scanners.Timeout, 60*time.Second)
 		apiURL := cfg.Scanners.OSV.APIURL
 		if apiURL == "" {
 			apiURL = "https://api.osv.dev"
@@ -258,7 +258,7 @@ func main() {
 	}
 
 	// Init scanner engine
-	scanTimeout := parseDuration(cfg.Scanners.Timeout, 30*time.Second)
+	scanTimeout := parseDuration(cfg.Scanners.Timeout, 60*time.Second)
 	scanEngine := scanner.NewEngine(scanners, scanTimeout, 32)
 	log.Info().Int("scanner_count", len(scanners)).Int64("max_concurrent_scans", 32).Msg("scanner engine initialized")
 

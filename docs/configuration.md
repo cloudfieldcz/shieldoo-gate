@@ -148,22 +148,23 @@ scanners:
       - "-sdk"
     allowlist: []                    # Package names to skip (false positive suppression)
 
-  # Version diff analysis. Compares new package versions against previous cached
-  # versions to detect suspicious changes (new install hooks, size anomalies,
-  # high-entropy additions, new dependencies). Opt-in; requires cached previous versions.
+  # AI-driven version diff scanner (v2.0+). Compares each new version against
+  # the most recent CLEAN/SUSPICIOUS cached version via the scanner-bridge and
+  # an LLM call (gpt-5.4-mini default). Replaces the v1.x heuristic — see
+  # docs/scanners/version-diff.md and ADR-005.
   version_diff:
-    enabled: false                      # opt-in; no value when cache is empty
-    max_artifact_size_mb: 20            # skip diff for artifacts larger than this (compressed)
-    max_extracted_size_mb: 200          # abort extraction if decompressed size exceeds this
-    max_extracted_files: 10000          # abort extraction if file count exceeds this
-    scanner_timeout: "10s"              # per-scan sub-timeout (for cloud cache latency)
-    entropy_sample_bytes: 8192          # sample first N bytes per file for entropy (0 = full file)
-    allowlist: []                       # package names to skip (false positive suppression)
-    thresholds:
-      code_volume_ratio: 5.0            # flag if new version is Nx larger
-      max_new_files: 20                 # flag if more than N new files added
-      entropy_delta: 2.0                # flag high-entropy additions
-    sensitive_patterns: []              # additional sensitive file globs (beyond built-in)
+    enabled: false                      # opt-in; requires scanner-bridge with AI enabled
+    mode: "shadow"                      # "shadow" (no policy effect) | "active"
+    max_artifact_size_mb: 50            # skip diff for artifacts larger than this (compressed)
+    max_extracted_size_mb: 50           # bridge: max aggregate bytes read across all members
+    max_extracted_files: 5000           # bridge: max member count
+    scanner_timeout: "55s"              # must be < scanners.timeout (engine outer cap, default 60s)
+    bridge_socket: ""                   # empty -> reuse scanners.guarddog.bridge_socket
+    allowlist: []                       # package names to skip (FP suppression)
+    min_confidence: 0.6                 # SUSPICIOUS below this -> CLEAN with audit_log entry
+    per_package_rate_limit: 10          # max LLM calls per package per hour; 0 = unlimited
+    daily_cost_limit_usd: 5.0           # alerting / future hard-cap; soft signal in v2.0
+    circuit_breaker_threshold: 5        # consecutive bridge errors trigger 60s degraded mode
 
   # Maintainer reputation & package risk scoring. Queries upstream registry APIs
   # for metadata (maintainer history, publication patterns, download counts) and

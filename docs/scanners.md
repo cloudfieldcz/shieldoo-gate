@@ -94,33 +94,23 @@ The typosquat scanner (`builtin-typosquat`) detects supply chain attacks based o
 
 The scanner seeds the `popular_packages` table from embedded data on first run. All checks run in <1ms with no file I/O. Configuration is under `scanners.typosquat` in `config.yaml` — see the [feature documentation](features/typosquatting-detection.md) for details.
 
-### Version Diff Scanner — Cross-Version Comparison
+### Version Diff Scanner — AI-Driven Cross-Version Analysis (v2.0)
 
-The version diff scanner (`version-diff`) compares newly downloaded package versions against previously cached versions to detect suspicious changes. It lives in `internal/scanner/versiondiff/` (separate package due to cache dependency).
+The version diff scanner (`version-diff`) detects malicious supply-chain attacks by comparing each new package version against its most recent CLEAN/SUSPICIOUS cached predecessor. Both versions are sent to the Python `scanner-bridge` over gRPC; the bridge extracts a `DiffPayload` (added/modified/removed files, install hooks, top-level executable code) and asks the LLM (gpt-5.4-mini default) whether the changes show malicious supply-chain intent. It lives in `internal/scanner/versiondiff/` (separate package due to cache dependency).
+
+The v1.x static-heuristic implementation (file inventory, code-volume ratio, sensitive-pattern, entropy, dependency-newness) was retired in v2.0 — see [ADR-005](adr/ADR-005-ai-driven-version-diff.md) for the rebuild rationale and the operational reference in [docs/scanners/version-diff.md](scanners/version-diff.md).
 
 **Supported ecosystems:** PyPI, npm, NuGet, Maven, RubyGems, Go (not Docker — handled by Trivy).
 
-**Detection strategies:**
+**Verdict mapping:** `CLEAN` → `CLEAN`, `SUSPICIOUS` (≥ `min_confidence`) → `SUSPICIOUS`, `SUSPICIOUS` (< `min_confidence`) → `CLEAN` + audit_log, `MALICIOUS` → `SUSPICIOUS` (always downgraded — diff is a structurally weak signal vs. single-version content scanners; see ADR-005).
 
-1. **File inventory diff** — Compares file lists between old and new version. Flags when many new files are added (threshold: `max_new_files`, default 20).
-2. **Size anomaly** — Computes ratio of new total extracted size to old. Flags when ratio exceeds `code_volume_ratio` (default 5.0x).
-3. **Sensitive file changes** — Per-ecosystem list of security-sensitive files (setup.py, postinstall, .pth, etc.). New or modified install hooks are CRITICAL findings. Non-executable package metadata that changes on virtually every release is MEDIUM (not HIGH) to avoid noise — new deps are already caught by strategy #5:
-   - **PyPI:** `__init__.py`, `pyproject.toml`, `setup.cfg` → MEDIUM. Only `setup.py` and `*.pth` are CRITICAL.
-   - **npm:** `package.json` → MEDIUM. Only `preinstall*`/`postinstall*`/`install*` are CRITICAL.
-   - **NuGet:** `.targets`, `.props` → MEDIUM. Only `install.ps1`/`init.ps1` are CRITICAL.
-   - **Maven:** `pom.xml` → MEDIUM. `*.sh` stays HIGH.
-   - **Go:** `go.mod` → MEDIUM.
-   - **RubyGems:** `Rakefile` stays HIGH. `extconf.rb` is CRITICAL.
-4. **Entropy analysis** — Shannon entropy for added/modified files. Samples first `entropy_sample_bytes` (default 8192) bytes. High entropy (>6.0 bits/byte) in code files suggests obfuscated/packed content. Skips known binary extensions.
-5. **New dependency detection** — Parses ecosystem metadata (package.json, setup.cfg, go.mod, etc.) to find newly added dependencies.
+**Operation:** Synchronous within the scan pipeline, runs in parallel with all other scanners. Large artifacts (> `max_artifact_size_mb`, default 50 MB) are skipped. A per-scan timeout (`scanner_timeout`, default 55s) sits under the engine outer cap (`scanners.timeout`, default 60s; invariant validated at startup). Idempotency cache keyed on `(artifact, previous_artifact, ai_model_used, ai_prompt_version)` ensures restarts and re-scans don't burn tokens. Per-package hourly rate limiter and consecutive-failure circuit breaker. Fail-open on any error; `UNKNOWN` verdicts are NOT persisted to preserve cache integrity.
 
-**Scoring:** Critical findings → SUSPICIOUS (0.90), High → SUSPICIOUS (0.80), Medium → SUSPICIOUS (0.60). The scanner never produces MALICIOUS verdict (heuristic-based).
+**Trust boundary:** Install hooks and top-level executable code from both versions leave the gate node and are sent to Azure OpenAI (after regex secret redaction — AWS/GitHub/Slack/Stripe tokens, JWTs, PEM keys, etc.). For deployments with strict no-egress requirements, set `version_diff.enabled: false`.
 
-**Operation:** Synchronous within the scan pipeline. Large artifacts (> `max_artifact_size_mb`, default 20 MB) are skipped. A sub-timeout (`scanner_timeout`, default 10s) prevents cloud cache latency from blocking other scanners. Fail-open on any error.
+**Security protections:** Decompression bomb limits, path traversal rejection, symlink/hardlink rejection, head+tail truncation of large install hooks (28 KB + 4 KB) so payload at end of file cannot be parked, SUSPICIOUS@<0.85 from a truncated file is downgraded to CLEAN as defense in depth.
 
-**Security protections:** Decompression bomb limits, path traversal rejection, symlink/hardlink rejection, SHA256 verification of cached previous version (TOCTOU protection), stale temp dir cleanup on startup.
-
-**Configuration:** Under `scanners.version_diff` in `config.yaml`. Disabled by default (opt-in). See `config.example.yaml` for all options.
+**Configuration:** Under `scanners.version_diff` in `config.yaml`. Disabled by default (opt-in); requires the scanner-bridge with `AI_SCANNER_ENABLED=true`. First activation should leave `mode: "shadow"` for at least 7 days. See `config.example.yaml` for all options.
 
 ## External Scanners
 
