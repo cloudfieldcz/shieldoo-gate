@@ -58,24 +58,26 @@ scanners:
   - For npm metadata requests (`GET /{package}`), the scan pipeline doesn't run at all — only tarball downloads trigger full scanning. The pre-scan catches typosquats at the metadata level.
   - Blocking before upstream fetch avoids leaking internal package queries to public registries.
 - **Adapter integration:** Both PyPI and npm adapters call `PreScanTyposquat()` before any upstream request. If the verdict is `SUSPICIOUS` or `MALICIOUS`, the adapter returns HTTP 403 immediately.
-- **Database:** `popular_packages` table (ecosystem, name, rank, download_count, last_updated). Seeded from embedded data on first run.
+- **Database:** `popular_packages` table (ecosystem, name, rank, download_count, last_updated). Seeded additively from embedded data on **every startup** — `INSERT … ON CONFLICT (ecosystem, name) DO NOTHING` ensures new entries shipped in a release propagate to existing DBs without manual intervention, while existing rows (including future UI-managed edits) are preserved. Strategy 1 (exact-match) short-circuits the edit-distance check for any name in `popular_packages`, so listing two real-but-similar packages (e.g., `vite` and `vitest`, `next` and `nest`) prevents false positives.
 - **Threat Feed synergy:** Typosquat detections can be auto-submitted to the threat feed contribution portal (when implemented).
 - **Performance:** Name-based checks add < 1ms latency. The popular package list is loaded into memory at startup.
 
 ### Ecosystem Coverage
 
-| Ecosystem | Typosquat Risk | Notes |
-|---|---|---|
-| PyPI | Very High | Flat namespace, no scopes, most targeted ecosystem |
-| npm | High | Scoped packages help, but unscoped packages are vulnerable |
-| RubyGems | High | Flat namespace similar to PyPI |
-| NuGet | Medium | Namespace prefixes (reserved) reduce risk but are optional |
-| Maven | Low | GroupId provides natural namespacing |
-| Go | Low | Module paths are URLs, hard to typosquat |
-| Docker | Medium | Popular image names can be squatted in public registries |
+| Ecosystem | Typosquat Risk | Notes | Seed coverage (2026-Q1) |
+|---|---|---|---|
+| PyPI | Very High | Flat namespace, no scopes, most targeted ecosystem | ~150 names |
+| npm | High | Scoped packages help, but unscoped packages are vulnerable | ~170 names (incl. scoped) |
+| RubyGems | High | Flat namespace similar to PyPI | ~85 names |
+| NuGet | Medium | Namespace prefixes (reserved) reduce risk but are optional | ~75 names |
+| Maven | Low | GroupId provides natural namespacing | ~75 GA-pairs (`groupId:artifactId`) |
+| Go | Low | Module paths are URLs, hard to typosquat | ~80 module paths |
+| Docker | Medium | Popular image names can be squatted in public registries | ~25 names |
 
 ### Considerations
 
-- **False positives:** Legitimate packages may have similar names. The confidence scoring and allowlist/override system handle this. Organizations can allowlist specific packages.
+- **False positives:** Legitimate packages may have similar names (e.g. `vitest` vs `vite`, `nest` vs `next`). Two layers of mitigation:
+  1. Both names are added to `popular_packages` so Strategy 1 short-circuits before edit-distance check.
+  2. Operators can extend `scanners.typosquat.allowlist` in `config.yaml` for any case the seed doesn't cover. Note that pre-scan blocks happen *before* an artifact is fetched, so blocked names never appear in the Artifacts UI — the allowlist is the only operator-facing escape hatch until UI-managed seed editing ships.
 - **Maintenance:** The popular package list needs periodic refresh. Consider shipping a default list with the release and allowing custom overrides.
 - **Privacy:** If fetching download stats from upstream registries, ensure no internal package names leak in the queries.

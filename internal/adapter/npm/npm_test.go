@@ -14,7 +14,38 @@ import (
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/policy"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner/builtin"
 )
+
+// setupTestNPMWithTyposquat builds an NPM adapter wired with the real builtin
+// typosquat scanner, so that PreScanTyposquat behaves like in production.
+func setupTestNPMWithTyposquat(t *testing.T, upstreamHandler http.HandlerFunc) (*npm.NPMAdapter, *httptest.Server) {
+	t.Helper()
+	upstream := httptest.NewServer(upstreamHandler)
+	t.Cleanup(upstream.Close)
+
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	cacheStore, err := local.NewLocalCacheStore(t.TempDir(), 10)
+	require.NoError(t, err)
+
+	tsq, err := builtin.NewTyposquatScanner(db, config.TyposquatConfig{
+		Enabled:          true,
+		MaxEditDistance:  2,
+		TopPackagesCount: 5000,
+	})
+	require.NoError(t, err)
+
+	scanEngine := scanner.NewEngine([]scanner.Scanner{tsq}, 30*time.Second, 0)
+	policyEngine := policy.NewEngine(policy.EngineConfig{
+		BlockIfVerdict:      scanner.VerdictMalicious,
+		QuarantineIfVerdict: scanner.VerdictSuspicious,
+		MinimumConfidence:   0.7,
+	}, nil)
+	return npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL, config.TagMutabilityConfig{}), upstream
+}
 
 func setupTestNPM(t *testing.T, upstreamHandler http.HandlerFunc) (*npm.NPMAdapter, *httptest.Server) {
 	t.Helper()
@@ -197,6 +228,56 @@ func TestNPMAdapter_ScopedVersion_PercentEncodedSlash_ProxiesUpstream(t *testing
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "/@alloc/quick-lru/5.2.0", gotPath, "upstream must receive decoded scoped version path")
+}
+
+// TestNPMAdapter_VitestNotBlocked_RegressionForTyposquatFalsePositive verifies
+// that a request for the legitimate package "vitest" is NOT blocked at the
+// pre-scan stage by the typosquat scanner (regression: vitest is within
+// edit distance 2 of "vite"). With vitest in the popular_packages seed,
+// Strategy 1 (exact-match) must short-circuit the edit-distance check.
+func TestNPMAdapter_VitestNotBlocked_RegressionForTyposquatFalsePositive(t *testing.T) {
+	const body = `{"name":"vitest","versions":{"1.0.0":{}}}`
+	upstreamHit := false
+
+	a, _ := setupTestNPMWithTyposquat(t, func(w http.ResponseWriter, r *http.Request) {
+		upstreamHit = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/vitest", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code,
+		"vitest must not be blocked by typosquat pre-scan")
+	assert.True(t, upstreamHit,
+		"request must reach upstream, not be short-circuited at pre-scan")
+	assert.NotContains(t, w.Body.String(), "typosquatting detected")
+}
+
+// TestNPMAdapter_TyposquatStillBlocksGenuineSquats is the positive control:
+// a genuine typosquat (close to a popular package but not itself popular) MUST
+// still be blocked, ensuring the seed expansion did not disable the scanner.
+func TestNPMAdapter_TyposquatStillBlocksGenuineSquats(t *testing.T) {
+	upstreamHit := false
+
+	a, _ := setupTestNPMWithTyposquat(t, func(w http.ResponseWriter, r *http.Request) {
+		upstreamHit = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// "lodahs" is ed=2 from "lodash" and not a real package.
+	req := httptest.NewRequest(http.MethodGet, "/lodahs", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code,
+		"genuine typosquat must still be blocked")
+	assert.False(t, upstreamHit,
+		"genuine typosquat must be blocked before reaching upstream")
+	assert.Contains(t, w.Body.String(), "typosquatting detected")
 }
 
 func TestNPMAdapter_ScopedMetadata_RewritesTarballURLs(t *testing.T) {

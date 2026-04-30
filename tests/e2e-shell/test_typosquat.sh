@@ -77,6 +77,32 @@ test_typosquat() {
         "200" "$legit_status"
 
     # ------------------------------------------------------------------
+    # 5b. Regression: legitimate npm package "vitest" must NOT be blocked.
+    # vitest is edit-distance 2 from "vite" and was previously a false positive.
+    # Both must now be in the popular_packages seed so Strategy 1 short-circuits.
+    # ------------------------------------------------------------------
+    local vitest_status
+    vitest_status=$(curl -s -o /dev/null -w "%{http_code}" \
+        "${E2E_CURL_AUTH[@]}" \
+        "${E2E_NPM_URL}/vitest")
+    if [ "$vitest_status" = "403" ]; then
+        log_fail "Typosquat: legitimate 'vitest' wrongly blocked (HTTP 403) — seed regression"
+    else
+        log_pass "Typosquat: legitimate 'vitest' not blocked (HTTP $vitest_status)"
+    fi
+
+    # 5c. Same regression check for "nest" (edit-distance 1 from "next" and "jest").
+    local nest_status
+    nest_status=$(curl -s -o /dev/null -w "%{http_code}" \
+        "${E2E_CURL_AUTH[@]}" \
+        "${E2E_NPM_URL}/nest")
+    if [ "$nest_status" = "403" ]; then
+        log_fail "Typosquat: legitimate 'nest' wrongly blocked (HTTP 403) — seed regression"
+    else
+        log_pass "Typosquat: legitimate 'nest' not blocked (HTTP $nest_status)"
+    fi
+
+    # ------------------------------------------------------------------
     # 6. Check scan results via API — look for builtin-typosquat scanner entries
     # ------------------------------------------------------------------
     local artifacts_body

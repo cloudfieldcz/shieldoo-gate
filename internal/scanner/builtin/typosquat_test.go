@@ -171,6 +171,94 @@ func TestTyposquatScanner_HealthCheck_WithData(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// TestTyposquatScanner_SeedIsAdditiveOnNonEmptyDB verifies that NewTyposquatScanner
+// inserts seed entries even when the popular_packages table already contains rows.
+// This guards against the regression where deploys with a new seed entry would not
+// take effect on existing production DBs.
+func TestTyposquatScanner_SeedIsAdditiveOnNonEmptyDB(t *testing.T) {
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	// Pre-seed with a single custom row to simulate an existing prod DB.
+	_, err = db.Exec(
+		"INSERT INTO popular_packages (ecosystem, name, rank, last_updated) VALUES (?, ?, ?, datetime('now'))",
+		"npm", "custom-internal-pkg", 9999,
+	)
+	require.NoError(t, err)
+
+	cfg := config.TyposquatConfig{
+		Enabled:          true,
+		MaxEditDistance:  2,
+		TopPackagesCount: 5000,
+	}
+	_, err = NewTyposquatScanner(db, cfg)
+	require.NoError(t, err)
+
+	// Both the pre-existing row AND seed entries must be present.
+	var count int
+	require.NoError(t, db.Get(&count,
+		"SELECT COUNT(*) FROM popular_packages WHERE ecosystem = ? AND name = ?",
+		"npm", "custom-internal-pkg"))
+	assert.Equal(t, 1, count, "pre-existing custom row must survive init")
+
+	// "lodash" is a well-known seed entry — must be present after init even though
+	// the table was non-empty.
+	require.NoError(t, db.Get(&count,
+		"SELECT COUNT(*) FROM popular_packages WHERE ecosystem = ? AND name = ?",
+		"npm", "lodash"))
+	assert.Equal(t, 1, count, "seed entry 'lodash' must be added even when table is non-empty")
+}
+
+// TestTyposquatScanner_LegitimatePackagesNearPopular guards against false positives
+// where a real, popular package is within edit distance of another real popular package.
+// All listed names must be in the seed so that Strategy 1 (exact-match) short-circuits.
+func TestTyposquatScanner_LegitimatePackagesNearPopular(t *testing.T) {
+	s := newTestScanner(t, config.TyposquatConfig{})
+
+	cases := []struct {
+		name      string
+		ecosystem scanner.Ecosystem
+	}{
+		// Real-world false positives that motivated the seed expansion:
+		{"vitest", scanner.EcosystemNPM},   // ed=2 from vite
+		{"nest", scanner.EcosystemNPM},     // ed=1 from next, ed=1 from jest
+		{"nuxt", scanner.EcosystemNPM},     // ed=1 from next
+		{"jose", scanner.EcosystemNPM},     // ed=2 from joi
+		{"joi", scanner.EcosystemNPM},      // ed=2 from jose
+		{"redux", scanner.EcosystemNPM},    // popular state lib
+		{"dayjs", scanner.EcosystemNPM},    // popular date lib
+		{"date-fns", scanner.EcosystemNPM}, // popular date lib
+		{"nanoid", scanner.EcosystemNPM},   // popular id gen
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := s.Scan(context.Background(), scanner.Artifact{
+				ID:        tc.name + "-1.0.0",
+				Ecosystem: tc.ecosystem,
+				Name:      tc.name,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, scanner.VerdictClean, result.Verdict,
+				"%s must be in seed and exact-match → Clean", tc.name)
+		})
+	}
+}
+
+// TestTyposquatScanner_AllSupportedEcosystemsHaveSeed verifies every ecosystem
+// advertised by SupportedEcosystems() has at least one seed entry. The scanner
+// silently returns Clean for ecosystems with empty popular lists, so without this
+// test, an unseeded ecosystem looks identical to a properly-seeded clean scan.
+func TestTyposquatScanner_AllSupportedEcosystemsHaveSeed(t *testing.T) {
+	s := newTestScanner(t, config.TyposquatConfig{})
+	for _, eco := range s.SupportedEcosystems() {
+		t.Run(string(eco), func(t *testing.T) {
+			pkgs := s.popularPackages[eco]
+			assert.NotEmpty(t, pkgs, "ecosystem %s must have seed entries", eco)
+		})
+	}
+}
+
 func TestLevenshtein_KnownDistances(t *testing.T) {
 	tests := []struct {
 		a, b string

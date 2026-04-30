@@ -49,15 +49,12 @@ func NewTyposquatScanner(db *config.GateDB, cfg config.TyposquatConfig) (*Typosq
 		s.allowlistSet[normalizeName(name)] = true
 	}
 
-	// Seed DB if empty.
-	var count int
-	if err := db.Get(&count, "SELECT COUNT(*) FROM popular_packages"); err != nil {
-		return nil, fmt.Errorf("builtin-typosquat: query popular_packages: %w", err)
-	}
-	if count == 0 {
-		if err := seedPopularPackages(db); err != nil {
-			log.Warn().Err(err).Msg("builtin-typosquat: failed to seed popular packages")
-		}
+	// Apply seed on every startup (INSERT OR IGNORE) so newly-added entries from
+	// code updates propagate to existing DBs without manual intervention. The
+	// PRIMARY KEY (ecosystem, name) makes this idempotent — existing entries
+	// (whether from earlier seed runs or future UI-managed edits) are preserved.
+	if err := seedPopularPackages(db); err != nil {
+		log.Warn().Err(err).Msg("builtin-typosquat: failed to seed popular packages")
 	}
 
 	// Load popular packages from DB.
@@ -404,7 +401,12 @@ func seedPopularPackages(db *config.GateDB) error {
 	defer tx.Rollback()
 
 	now := time.Now().UTC()
-	query := "INSERT INTO popular_packages (ecosystem, name, rank, last_updated) VALUES (?, ?, ?, ?)"
+	// ON CONFLICT DO NOTHING is supported by both SQLite (>=3.24) and PostgreSQL.
+	// Idempotent: existing entries (from earlier seeds or future UI edits) are preserved,
+	// only newly-added seed entries are inserted.
+	query := `INSERT INTO popular_packages (ecosystem, name, rank, last_updated)
+	          VALUES (?, ?, ?, ?)
+	          ON CONFLICT (ecosystem, name) DO NOTHING`
 
 	for eco, names := range popularPackageSeed {
 		for i, name := range names {
