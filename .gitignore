@@ -19,6 +19,9 @@ scanner-bridge/*.pyc
 **/__pycache__/
 scanner-bridge/.venv/
 scanner-bridge/venv/
+# uv-managed lockfile auto-generated when pyproject.toml exists in a dir;
+# we use the pinned requirements.txt as source of truth, not uv.lock.
+scanner-bridge/uv.lock
 *.egg-info/
 
 # Node / UI
