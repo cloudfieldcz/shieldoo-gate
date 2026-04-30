@@ -279,8 +279,14 @@ class TestPyPIDiffExtractor:
         # depth <= 3 IF parents include a filtered dir, OR rely on prompt awareness.
         # For this test we assert at minimum that the malicious content surfaces
         # via ignored_changed_paths annotation so the LLM sees it as summary.
-        assert any("tests/setup.py" in p for p in payload["ignored_changed_paths"]) \
-            or "evil-1.0/tests/setup.py" in payload["modified"]
+        # The malicious tests/setup.py must surface SOMEWHERE so the LLM sees it,
+        # either inspected (ideal) or summarized in the ignored list (safety net).
+        surfaced_in_ignored = any("tests/setup.py" in p for p in payload["ignored_changed_paths"])
+        surfaced_in_modified = any("tests/setup.py" in p for p in payload["modified"])
+        surfaced_in_added = any("tests/setup.py" in p for p in payload["added"])
+        assert surfaced_in_ignored or surfaced_in_modified or surfaced_in_added, (
+            "tests/setup.py must surface in ignored_changed_paths, modified, or added"
+        )
 
     def test_zip_info_size_does_not_exempt_decompression_bomb(self, tmp_path):
         """Even if zip metadata claimed 0 bytes, real decompressed size must be capped."""

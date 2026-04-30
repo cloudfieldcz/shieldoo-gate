@@ -51,11 +51,13 @@ def extract(new_path: str, old_path: str, *, original_filename: str = "") -> Dif
 
 # --- Archive reading ---------------------------------------------------------
 
-def _read_archive(path: str, original_filename: str, side: str, payload: DiffPayload) -> dict[str, bytes]:
-    """Read all members of one archive into {normalized_path: bytes}.
+def _read_archive(path: str, original_filename: str, side: str, payload: DiffPayload) -> dict[str, bytes | None]:
+    """Read all members of one archive into {normalized_path: bytes | None}.
 
-    Marks payload["partial"] if aggregate caps trip. Sets payload["error"] only
-    on hard failures (cannot open at all).
+    None marks "oversize, content suppressed" — distinct from b"" (truly empty
+    file) so empty files round-trip correctly. Marks payload["partial"] if
+    aggregate caps trip. Sets payload["error"] only on hard failures (cannot
+    open at all).
     """
     if not os.path.isfile(path):
         payload["error"] = f"{side} artifact not found: {path}"
@@ -89,14 +91,17 @@ def _detect_format(path: str, original_filename: str) -> str:
     return ""
 
 
-def _read_zip(path: str, payload: DiffPayload) -> dict[str, bytes]:
+def _read_zip(path: str, payload: DiffPayload) -> dict[str, bytes | None]:
     """Stream-read a zip; never trust info.file_size (zip metadata can lie).
 
     Uses zf.open(...).read(MAX_FILE_BYTES + 1) so the actual decompressed
     bytes are bounded — defends against decompression bombs that inflate
     far beyond their declared file_size.
+
+    Returns {path: bytes | None}. None marks "oversize, content suppressed"
+    so genuinely-empty files (b"") remain distinguishable.
     """
-    out: dict[str, bytes] = {}
+    out: dict[str, bytes | None] = {}
     aggregate = 0
     file_count = 0
     try:
@@ -115,7 +120,9 @@ def _read_zip(path: str, payload: DiffPayload) -> dict[str, bytes]:
                     break
 
                 try:
-                    with zf.open(info.filename, "r") as f:
+                    # Pass ZipInfo directly — avoids a second name lookup and
+                    # matches the zip64-safe idiom.
+                    with zf.open(info, "r") as f:
                         blob = f.read(MAX_FILE_BYTES + 1)
                 except Exception as e:
                     logger.warning("pypi diff extractor: read failed for %s: %s", info.filename, e)
@@ -123,13 +130,13 @@ def _read_zip(path: str, payload: DiffPayload) -> dict[str, bytes]:
 
                 if len(blob) > MAX_FILE_BYTES:
                     # Decompressed size exceeds per-file cap. Mark presence; no content.
-                    out[norm] = b""
+                    out[norm] = None
                     continue
 
                 aggregate += len(blob)
                 if aggregate > DEFAULT_MAX_AGGREGATE_BYTES:
                     payload["partial"] = True
-                    out[norm] = b""
+                    out[norm] = None
                     break
 
                 out[norm] = blob
@@ -139,8 +146,8 @@ def _read_zip(path: str, payload: DiffPayload) -> dict[str, bytes]:
     return out
 
 
-def _read_tar(path: str, payload: DiffPayload) -> dict[str, bytes]:
-    out: dict[str, bytes] = {}
+def _read_tar(path: str, payload: DiffPayload) -> dict[str, bytes | None]:
+    out: dict[str, bytes | None] = {}
     aggregate = 0
     file_count = 0
     try:
@@ -165,7 +172,7 @@ def _read_tar(path: str, payload: DiffPayload) -> dict[str, bytes]:
                     break
 
                 if member.size > MAX_FILE_BYTES:
-                    out[norm] = b""
+                    out[norm] = None
                     continue
 
                 try:
@@ -178,13 +185,13 @@ def _read_tar(path: str, payload: DiffPayload) -> dict[str, bytes]:
                     continue
 
                 if len(blob) > MAX_FILE_BYTES:
-                    out[norm] = b""
+                    out[norm] = None
                     continue
 
                 aggregate += len(blob)
                 if aggregate > DEFAULT_MAX_AGGREGATE_BYTES:
                     payload["partial"] = True
-                    out[norm] = b""
+                    out[norm] = None
                     break
 
                 out[norm] = blob
@@ -196,8 +203,16 @@ def _read_tar(path: str, payload: DiffPayload) -> dict[str, bytes]:
 
 # --- Diff --------------------------------------------------------------------
 
-def _diff(new_files: dict[str, bytes], old_files: dict[str, bytes], payload: DiffPayload) -> None:
-    """Compute payload fields from two file maps."""
+def _diff(
+    new_files: dict[str, bytes | None],
+    old_files: dict[str, bytes | None],
+    payload: DiffPayload,
+) -> None:
+    """Compute payload fields from two file maps.
+
+    A value of None marks an oversize file (content suppressed). b"" is a
+    genuinely empty file and must round-trip distinctly.
+    """
     new_keys = set(new_files)
     old_keys = set(old_files)
 
@@ -239,7 +254,7 @@ def _diff(new_files: dict[str, bytes], old_files: dict[str, bytes], payload: Dif
 
     for path in inspected_added:
         blob = new_files[path]
-        if not blob:
+        if blob is None:
             ignored.append(path + " (oversize)")
             continue
         text = safe_decode(blob)
@@ -256,7 +271,7 @@ def _diff(new_files: dict[str, bytes], old_files: dict[str, bytes], payload: Dif
     for path in inspected_modified:
         old_blob = old_files[path]
         new_blob = new_files[path]
-        if not old_blob or not new_blob:
+        if old_blob is None or new_blob is None:
             ignored.append(path + " (oversize)")
             continue
         old_text = safe_decode(old_blob)

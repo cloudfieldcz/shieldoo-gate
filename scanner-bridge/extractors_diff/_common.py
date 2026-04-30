@@ -16,7 +16,9 @@ MAX_FILE_BYTES = 1 * 1024 * 1024  # 1 MB
 TRUNCATE_THRESHOLD = 8 * 1024     # apply truncation above 8 KB
 TRUNCATE_HEAD = 4 * 1024
 TRUNCATE_TAIL = 4 * 1024
-INSTALL_HOOK_HEAD = 32 * 1024     # for install hooks: head-only budget
+INSTALL_HOOK_HEAD = 32 * 1024     # for install hooks: total head+tail budget
+INSTALL_HOOK_HEAD_KEEP = 28 * 1024  # 28 KB head for install hooks
+INSTALL_HOOK_TAIL_KEEP = 4 * 1024   # 4 KB tail for install hooks
 
 # Aggregate caps. Bridge config may override at call site.
 DEFAULT_MAX_AGGREGATE_BYTES = 50 * 1024 * 1024  # 50 MB
@@ -91,8 +93,14 @@ def empty_payload() -> DiffPayload:
 # --- Helpers -----------------------------------------------------------------
 
 def normalize_path(path: str) -> str:
-    """Normalize archive member path: forward slashes, no leading './' or '/'."""
-    p = path.replace("\\", "/").lstrip("./").lstrip("/")
+    """Normalize archive member path: forward slashes, strip leading './' prefixes.
+
+    Note: do NOT use lstrip("./") or lstrip("/") here — those strip any chars
+    in the set, including the leading dots of "../../etc/passwd" (which would
+    reduce to "etc/passwd" and silently neuter traversal detection). We only
+    want to strip whole "./" prefixes, hence the explicit while-loop.
+    """
+    p = path.replace("\\", "/")
     while p.startswith("./"):
         p = p[2:]
     return p
@@ -108,6 +116,11 @@ def is_path_traversal(path: str) -> bool:
 
     Catches POSIX traversal, absolute paths, Windows drive prefixes, and
     backslash-separated traversal (cross-platform archives sometimes use \\).
+
+    Note: symlinks and hardlinks are a related-but-distinct attack surface —
+    they're filtered separately in the per-ecosystem extractor (e.g. the
+    `_read_tar` symlink/hardlink skip in pypi.py), since this function only
+    inspects the member name string.
     """
     p = path.replace("\\", "/")
     # Strip leading "./" prefix(es) only — do NOT use lstrip(chars) here
@@ -115,7 +128,13 @@ def is_path_traversal(path: str) -> bool:
     # want to detect (e.g. "../../etc/passwd").
     while p.startswith("./"):
         p = p[2:]
-    if p.startswith("../") or "/../" in p or p == ".." or p == "":
+    if (
+        p.startswith("../")
+        or "/../" in p
+        or p == ".."
+        or p.endswith("/..")
+        or p == ""
+    ):
         return True
     if path.startswith("/") or path.startswith("\\"):
         return True
@@ -215,9 +234,6 @@ def truncate_content(content: str, *, install_hook: bool = False) -> tuple[str, 
 
     Returns (truncated_content, was_truncated).
     """
-    INSTALL_HOOK_HEAD_KEEP = 28 * 1024  # 28 KB head
-    INSTALL_HOOK_TAIL_KEEP = 4 * 1024   # 4 KB tail (= INSTALL_HOOK_HEAD reservation total)
-
     n = len(content)
     if install_hook:
         if n <= INSTALL_HOOK_HEAD_KEEP + INSTALL_HOOK_TAIL_KEEP:

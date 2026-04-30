@@ -6,7 +6,7 @@ Each extractor exposes:
 Phase 3 wires up PyPI. Phase 4 adds NPM/NuGet/Maven/RubyGems.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 from extractors_diff._common import DiffPayload, empty_payload
 from extractors_diff.pypi import extract as extract_pypi
