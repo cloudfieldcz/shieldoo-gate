@@ -14,7 +14,7 @@
 | 2 | DB migration 024 | [plan-2-db-migration.md](./2026-04-30-version-diff-ai-rebuild-plan-2-db-migration.md) | ✅ Complete | — |
 | 3 | PyPI extractor (reference) | [plan-3-pypi-extractor.md](./2026-04-30-version-diff-ai-rebuild-plan-3-pypi-extractor.md) | ✅ Complete | Phase 1 |
 | 4 | Other extractors (NPM/NuGet/Maven/RubyGems) | [plan-4-other-extractors.md](./2026-04-30-version-diff-ai-rebuild-plan-4-other-extractors.md) | ✅ Complete | Phase 3 |
-| 5 | Python diff_scanner + prompt | [plan-5-diff-scanner-prompt.md](./2026-04-30-version-diff-ai-rebuild-plan-5-diff-scanner-prompt.md) | ⬚ Not started | Phase 4 |
+| 5 | Python diff_scanner + prompt | [plan-5-diff-scanner-prompt.md](./2026-04-30-version-diff-ai-rebuild-plan-5-diff-scanner-prompt.md) | ✅ Complete | Phase 4 |
 | 6a | Go skeleton + config | [plan-6a-go-skeleton-config.md](./2026-04-30-version-diff-ai-rebuild-plan-6a-go-skeleton-config.md) | ⬚ Not started | Phases 1, 2 |
 | 6b | Go Scan flow integration | [plan-6b-go-scan-flow.md](./2026-04-30-version-diff-ai-rebuild-plan-6b-go-scan-flow.md) | ⬚ Not started | Phases 5, 6a |
 | 6c | Go tests | [plan-6c-go-tests.md](./2026-04-30-version-diff-ai-rebuild-plan-6c-go-tests.md) | ⬚ Not started | Phase 6b |
