@@ -379,6 +379,50 @@ class TestNPMDiffExtractor:
         diff_text = payload["modified"]["npm:scripts/postinstall"][0]
         assert "curl evil.com" in diff_text
 
+    def test_missing_package_json_safe(self, tmp_path):
+        new = tmp_path / "foo-1.1.tgz"
+        old = tmp_path / "foo-1.0.tgz"
+        _make_npm_tarball(new, {"index.js": "module.exports = 'new';"})
+        _make_npm_tarball(old, {"index.js": "module.exports = 'old';"})
+        payload = extract_npm(str(new), str(old))
+        assert not payload["error"]
+        # No synthetic entries when package.json is absent.
+        assert not any(p.startswith("npm:scripts/") for p in payload["modified"])
+
+    def test_malformed_package_json_safe(self, tmp_path):
+        new = tmp_path / "foo-1.1.tgz"
+        old = tmp_path / "foo-1.0.tgz"
+        _make_npm_tarball(new, {"package.json": "{ not valid json"})
+        _make_npm_tarball(old, {"package.json": "{ also not json"})
+        payload = extract_npm(str(new), str(old))
+        assert not payload["error"]
+        # Helper bails on JSON parse failure, no synthetic entries.
+        assert not any(p.startswith("npm:scripts/") for p in payload["modified"])
+
+    def test_nested_package_json_ignored(self, tmp_path):
+        """Bundled package.json at package/node_modules/foo/package.json must NOT be parsed."""
+        new = tmp_path / "foo-1.1.tgz"
+        old = tmp_path / "foo-1.0.tgz"
+        _make_npm_tarball(new, {
+            "package.json": _json.dumps({"name": "foo", "version": "1.1"}),
+            "node_modules/bar/package.json": _json.dumps({
+                "name": "bar",
+                "scripts": {"postinstall": "curl evil"},
+            }),
+        })
+        _make_npm_tarball(old, {
+            "package.json": _json.dumps({"name": "foo", "version": "1.0"}),
+            "node_modules/bar/package.json": _json.dumps({
+                "name": "bar",
+                "scripts": {"postinstall": "echo hi"},
+            }),
+        })
+        payload = extract_npm(str(new), str(old))
+        assert not payload["error"]
+        # Only the top-level package/package.json is inspected.
+        # The bundled scripts MUST NOT be surfaced as install hooks.
+        assert not any(p.startswith("npm:scripts/") for p in payload["modified"])
+
 
 class TestNuGetDiffExtractor:
     def test_install_ps1_change(self, tmp_path):
@@ -396,6 +440,21 @@ class TestNuGetDiffExtractor:
         assert not payload["error"]
         assert "tools/install.ps1" in payload["install_hook_paths"]
         assert "tools/install.ps1" in payload["modified"]
+
+    def test_path_traversal_skipped(self, tmp_path):
+        new = tmp_path / "Foo.1.1.nupkg"
+        old = tmp_path / "Foo.1.0.nupkg"
+        _make_nupkg(new, {
+            "tools/install.ps1": "Write-Host new",
+            "../../etc/evil": "should be skipped",
+        })
+        _make_nupkg(old, {"tools/install.ps1": "Write-Host old"})
+        payload = extract_nuget(str(new), str(old))
+        assert not payload["error"]
+        for p in payload["added"]:
+            assert ".." not in p
+        for p in payload["modified"]:
+            assert ".." not in p
 
 
 class TestMavenDiffExtractor:
@@ -423,6 +482,14 @@ class TestMavenDiffExtractor:
         assert not payload["error"]
         assert "pom.xml" in payload["modified"]
 
+    def test_unsupported_format_sets_error(self, tmp_path):
+        bad = tmp_path / "garbage.bin"
+        bad.write_bytes(b"\x00\x01\x02 not a real archive")
+        good = tmp_path / "foo.jar"
+        _make_jar(good, {"META-INF/maven/foo/pom.xml": "<project/>"})
+        payload = extract_maven(str(bad), str(good))
+        assert payload["error"]
+
 
 class TestRubyGemsDiffExtractor:
     def test_extconf_rb_change(self, tmp_path):
@@ -440,3 +507,17 @@ class TestRubyGemsDiffExtractor:
         assert not payload["error"]
         assert "ext/native/extconf.rb" in payload["install_hook_paths"]
         assert "ext/native/extconf.rb" in payload["modified"]
+
+    def test_corrupt_gem_missing_data_tar_gz(self, tmp_path):
+        bad = tmp_path / "foo-1.1.gem"
+        good = tmp_path / "foo-1.0.gem"
+        # Outer tar with no data.tar.gz inside
+        with tarfile.open(bad, "w") as outer:
+            meta = b"metadata"
+            info = tarfile.TarInfo(name="metadata.gz")
+            info.size = len(meta)
+            outer.addfile(info, io.BytesIO(meta))
+        _make_gem(good, {"lib/foo.rb": "VERSION='1.0'"})
+        payload = extract_rubygems(str(bad), str(good))
+        assert payload["error"]
+        assert "data.tar.gz" in payload["error"]

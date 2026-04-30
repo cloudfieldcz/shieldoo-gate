@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import difflib
 import os
+from collections.abc import Callable
 from typing import TypedDict
 
 
@@ -188,6 +189,9 @@ def is_install_hook(ecosystem: str, path: str) -> bool:
     parts = p.split("/")
     basename = parts[-1].lower()
 
+    # Maven has no path-based install hook — JAR manifests don't define
+    # automatic execution scripts. The "maven" branch intentionally falls
+    # through to `return False` below.
     if ecosystem == "pypi":
         # Top-level setup.py or any *.pth file.
         if len(parts) <= 2 and basename == "setup.py":
@@ -276,7 +280,7 @@ def _filter_or_collect(
     ignored: list[str],
     *,
     ecosystem: str = "pypi",
-    install_hook_detector=is_install_hook,
+    install_hook_detector: Callable[[str, str], bool] = is_install_hook,
 ) -> bool:
     """Returns True if the path should be skipped from inspection.
 
@@ -302,7 +306,7 @@ def diff_files(
     ecosystem: str,
     payload: DiffPayload,
     *,
-    install_hook_detector=is_install_hook,
+    install_hook_detector: Callable[[str, str], bool] = is_install_hook,
 ) -> None:
     """Populate payload from two file maps. Ecosystem-aware install hook detection.
 

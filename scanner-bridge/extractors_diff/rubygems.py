@@ -57,7 +57,13 @@ def _read_gem(path: str, payload: DiffPayload, side: str) -> dict[str, bytes | N
             if data_file is None:
                 payload["error"] = f"{side} cannot read data.tar.gz"
                 return {}
-            data_blob = data_file.read()
+            data_blob = data_file.read(DEFAULT_MAX_AGGREGATE_BYTES + 1)
+            if len(data_blob) > DEFAULT_MAX_AGGREGATE_BYTES:
+                payload["error"] = (
+                    f"{side} .gem inner data.tar.gz exceeds cap "
+                    f"({DEFAULT_MAX_AGGREGATE_BYTES} bytes)"
+                )
+                return {}
     except Exception as e:
         payload["error"] = f"{side} outer .gem open failed: {e}"
         return {}
