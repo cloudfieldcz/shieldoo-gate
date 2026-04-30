@@ -17,7 +17,7 @@
 | 5 | Python diff_scanner + prompt | [plan-5-diff-scanner-prompt.md](./2026-04-30-version-diff-ai-rebuild-plan-5-diff-scanner-prompt.md) | ✅ Complete | Phase 4 |
 | 6a | Go skeleton + config | [plan-6a-go-skeleton-config.md](./2026-04-30-version-diff-ai-rebuild-plan-6a-go-skeleton-config.md) | ✅ Complete | Phases 1, 2 |
 | 6b | Go Scan flow integration | [plan-6b-go-scan-flow.md](./2026-04-30-version-diff-ai-rebuild-plan-6b-go-scan-flow.md) | ✅ Complete | Phases 5, 6a |
-| 6c | Go tests | [plan-6c-go-tests.md](./2026-04-30-version-diff-ai-rebuild-plan-6c-go-tests.md) | ⬚ Not started | Phase 6b |
+| 6c | Go tests | [plan-6c-go-tests.md](./2026-04-30-version-diff-ai-rebuild-plan-6c-go-tests.md) | ✅ Complete | Phase 6b |
 | 7 | Config + documentation | [plan-7-config-docs.md](./2026-04-30-version-diff-ai-rebuild-plan-7-config-docs.md) | ⬚ Not started | Phase 6c |
 | 7.5 | Pre-rollout validation | [plan-7-5-pre-rollout-validation.md](./2026-04-30-version-diff-ai-rebuild-plan-7-5-pre-rollout-validation.md) | ⬚ Not started | Phase 7 |
 | 8a | Shadow rollout (7 days) | [plan-8a-shadow-rollout.md](./2026-04-30-version-diff-ai-rebuild-plan-8a-shadow-rollout.md) | ⬚ Not started | Phase 7.5 |
