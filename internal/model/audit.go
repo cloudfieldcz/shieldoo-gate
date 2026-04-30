@@ -39,4 +39,10 @@ const (
 	EventLicenseCheckSkipped EventType = "LICENSE_CHECK_SKIPPED"
 	EventProjectNotFound     EventType = "PROJECT_NOT_FOUND"
 	EventSBOMGenerated       EventType = "SBOM_GENERATED"
+
+	// EventScannerVerdictDowngraded records when version-diff downgrades a scanner
+	// verdict (MALICIOUS → SUSPICIOUS, or SUSPICIOUS → CLEAN below MinConfidence).
+	// MetadataJSON has shape: {"scanner":"version-diff","original_verdict":"MALICIOUS",
+	// "downgraded_verdict":"SUSPICIOUS","ai_confidence":0.92,"reason":"asymmetric-diff-downgrade"}
+	EventScannerVerdictDowngraded EventType = "SCANNER_VERDICT_DOWNGRADED"
 )
