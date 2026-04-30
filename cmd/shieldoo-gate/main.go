@@ -207,6 +207,11 @@ func main() {
 			log.Warn().Err(err).Msg("ai scanner disabled: failed to init")
 		} else {
 			scanners = append(scanners, ai)
+			defer func() {
+				if err := ai.Close(); err != nil {
+					log.Warn().Err(err).Msg("ai scanner: close failed")
+				}
+			}()
 			log.Info().Str("model", cfg.Scanners.AI.Model).Str("provider", cfg.Scanners.AI.Provider).Msg("ai scanner enabled")
 		}
 	}
@@ -235,11 +240,19 @@ func main() {
 
 	// Optional: Version diff scanner (compares new vs previous versions)
 	if cfg.Scanners.VersionDiff.Enabled {
+		if cfg.Scanners.VersionDiff.BridgeSocket == "" {
+			cfg.Scanners.VersionDiff.BridgeSocket = cfg.Scanners.GuardDog.BridgeSocket // reuse same bridge socket
+		}
 		vd, err := versiondiff.NewVersionDiffScanner(db, cacheStore, cfg.Scanners.VersionDiff)
 		if err != nil {
 			log.Warn().Err(err).Msg("version-diff scanner disabled: failed to init")
 		} else {
 			scanners = append(scanners, vd)
+			defer func() {
+				if err := vd.Close(); err != nil {
+					log.Warn().Err(err).Msg("version-diff scanner: close failed")
+				}
+			}()
 			log.Info().Msg("version-diff scanner enabled")
 		}
 	}

@@ -287,24 +287,25 @@ type TyposquatConfig struct {
 	Allowlist          []string `mapstructure:"allowlist"`
 }
 
-// VersionDiffConfig holds configuration for the version diff analysis scanner.
+// VersionDiffConfig holds configuration for the AI-driven version diff scanner.
+// The scanner sends new + previous artifact paths to scanner-bridge over gRPC,
+// where a Python module extracts diffs and calls the LLM (gpt-5.4-mini default).
+//
+// Mode "shadow" runs the scanner but ScanResult.Verdict is forced to CLEAN so
+// the policy engine ignores it. Mode "active" passes the LLM verdict through.
 type VersionDiffConfig struct {
-	Enabled            bool                  `mapstructure:"enabled"`
-	MaxArtifactSizeMB  int                   `mapstructure:"max_artifact_size_mb"`
-	MaxExtractedSizeMB int                   `mapstructure:"max_extracted_size_mb"`
-	MaxExtractedFiles  int                   `mapstructure:"max_extracted_files"`
-	ScannerTimeout     string                `mapstructure:"scanner_timeout"`
-	EntropySampleBytes int                   `mapstructure:"entropy_sample_bytes"`
-	Allowlist          []string              `mapstructure:"allowlist"`
-	Thresholds         VersionDiffThresholds `mapstructure:"thresholds"`
-	SensitivePatterns  []string              `mapstructure:"sensitive_patterns"`
-}
-
-// VersionDiffThresholds holds anomaly detection thresholds.
-type VersionDiffThresholds struct {
-	CodeVolumeRatio float64 `mapstructure:"code_volume_ratio"`
-	MaxNewFiles     int     `mapstructure:"max_new_files"`
-	EntropyDelta    float64 `mapstructure:"entropy_delta"`
+	Enabled                 bool     `mapstructure:"enabled"`
+	Mode                    string   `mapstructure:"mode"`                       // "shadow" | "active"
+	MaxArtifactSizeMB       int      `mapstructure:"max_artifact_size_mb"`       // default 50
+	MaxExtractedSizeMB      int      `mapstructure:"max_extracted_size_mb"`      // default 50
+	MaxExtractedFiles       int      `mapstructure:"max_extracted_files"`        // default 5000
+	ScannerTimeout          string   `mapstructure:"scanner_timeout"`            // default "55s" — must be < scanners.timeout
+	BridgeSocket            string   `mapstructure:"bridge_socket"`              // shared with ai-scanner; empty = reuse guarddog socket
+	Allowlist               []string `mapstructure:"allowlist"`
+	MinConfidence           float32  `mapstructure:"min_confidence"`             // default 0.6 — SUSPICIOUS below this is downgraded to CLEAN with audit_log entry
+	PerPackageRateLimit     int      `mapstructure:"per_package_rate_limit"`     // default 10 LLM calls/h/package; 0 = unlimited
+	DailyCostLimitUSD       float64  `mapstructure:"daily_cost_limit_usd"`       // default 5.0; circuit breaker auto-disables on exceed
+	CircuitBreakerThreshold int      `mapstructure:"circuit_breaker_threshold"`  // default 5 consecutive failures triggers 60 s pause
 }
 
 // ReputationConfig holds configuration for the maintainer/package reputation scanner.
@@ -514,14 +515,15 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("scanners.typosquat.combosquat_suffixes", []string{"-utils", "-helper", "-lib", "-dev", "-tool", "-sdk"})
 
 	v.SetDefault("scanners.version_diff.enabled", true)
-	v.SetDefault("scanners.version_diff.max_artifact_size_mb", 20)
-	v.SetDefault("scanners.version_diff.max_extracted_size_mb", 200)
-	v.SetDefault("scanners.version_diff.max_extracted_files", 10000)
-	v.SetDefault("scanners.version_diff.scanner_timeout", "10s")
-	v.SetDefault("scanners.version_diff.entropy_sample_bytes", 8192)
-	v.SetDefault("scanners.version_diff.thresholds.code_volume_ratio", 5.0)
-	v.SetDefault("scanners.version_diff.thresholds.max_new_files", 20)
-	v.SetDefault("scanners.version_diff.thresholds.entropy_delta", 2.0)
+	v.SetDefault("scanners.version_diff.mode", "shadow")
+	v.SetDefault("scanners.version_diff.max_artifact_size_mb", 50)
+	v.SetDefault("scanners.version_diff.max_extracted_size_mb", 50)
+	v.SetDefault("scanners.version_diff.max_extracted_files", 5000)
+	v.SetDefault("scanners.version_diff.scanner_timeout", "55s")
+	v.SetDefault("scanners.version_diff.min_confidence", 0.6)
+	v.SetDefault("scanners.version_diff.per_package_rate_limit", 10)
+	v.SetDefault("scanners.version_diff.daily_cost_limit_usd", 5.0)
+	v.SetDefault("scanners.version_diff.circuit_breaker_threshold", 5)
 
 	v.SetDefault("scanners.reputation.enabled", false)
 	v.SetDefault("scanners.reputation.cache_ttl", "24h")
@@ -855,6 +857,9 @@ func (c *Config) validateVersionDiff() error {
 	if !vc.Enabled {
 		return nil
 	}
+	if vc.Mode != "" && vc.Mode != "shadow" && vc.Mode != "active" {
+		return fmt.Errorf("config: scanners.version_diff.mode must be 'shadow' or 'active', got %q", vc.Mode)
+	}
 	if vc.MaxArtifactSizeMB < 1 {
 		return fmt.Errorf("config: scanners.version_diff.max_artifact_size_mb must be >= 1, got %d", vc.MaxArtifactSizeMB)
 	}
@@ -864,9 +869,27 @@ func (c *Config) validateVersionDiff() error {
 	if vc.MaxExtractedFiles < 100 {
 		return fmt.Errorf("config: scanners.version_diff.max_extracted_files must be >= 100, got %d", vc.MaxExtractedFiles)
 	}
-	if vc.Thresholds.CodeVolumeRatio < 1.0 {
-		return fmt.Errorf("config: scanners.version_diff.thresholds.code_volume_ratio must be >= 1.0, got %f", vc.Thresholds.CodeVolumeRatio)
+	if vc.ScannerTimeout != "" {
+		if _, err := time.ParseDuration(vc.ScannerTimeout); err != nil {
+			return fmt.Errorf("config: scanners.version_diff.scanner_timeout %q is not a valid duration: %w", vc.ScannerTimeout, err)
+		}
 	}
+	if vc.MinConfidence < 0 || vc.MinConfidence > 1 {
+		return fmt.Errorf("config: scanners.version_diff.min_confidence must be in [0,1], got %f", vc.MinConfidence)
+	}
+	if vc.PerPackageRateLimit < 0 {
+		return fmt.Errorf("config: scanners.version_diff.per_package_rate_limit must be >= 0, got %d", vc.PerPackageRateLimit)
+	}
+	if vc.DailyCostLimitUSD < 0 {
+		return fmt.Errorf("config: scanners.version_diff.daily_cost_limit_usd must be >= 0, got %f", vc.DailyCostLimitUSD)
+	}
+	if vc.CircuitBreakerThreshold < 0 {
+		return fmt.Errorf("config: scanners.version_diff.circuit_breaker_threshold must be >= 0, got %d", vc.CircuitBreakerThreshold)
+	}
+	// bridge_socket is intentionally NOT validated here: an empty value is
+	// allowed at config-load time and inherits scanners.guarddog.bridge_socket
+	// in cmd/shieldoo-gate/main.go before NewVersionDiffScanner runs. The
+	// constructor enforces non-empty.
 	return nil
 }
 
