@@ -30,4 +30,6 @@ def _unknown(explanation: str) -> dict:
         "files_added": 0,
         "files_modified": 0,
         "files_removed": 0,
+        "prompt_version": "",
+        "input_truncated": False,
     }

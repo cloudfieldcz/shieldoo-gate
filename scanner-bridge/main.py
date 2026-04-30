@@ -11,6 +11,7 @@ import grpc
 # Generated proto imports (generate with: python -m grpc_tools.protoc ...)
 import proto.scanner_pb2 as scanner_pb2
 import proto.scanner_pb2_grpc as scanner_pb2_grpc
+import diff_scanner
 
 logging.basicConfig(
     level=logging.INFO,
@@ -181,7 +182,6 @@ class ScannerBridgeServicer(scanner_pb2_grpc.ScannerBridgeServicer):
             )
 
         try:
-            import diff_scanner
             future = asyncio.run_coroutine_threadsafe(
                 diff_scanner.scan(request), self._ai_loop
             )
