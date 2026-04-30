@@ -127,11 +127,13 @@ Expected: venv created at `scanner-bridge/.venv/`, dependencies installed (with 
 ```bash
 cd scanner-bridge
 uv run python -m grpc_tools.protoc \
-    -I proto \
-    --python_out=proto \
-    --grpc_python_out=proto \
+    -I. \
+    --python_out=. \
+    --grpc_python_out=. \
     proto/scanner.proto
 ```
+
+Note: `-I.` (not `-I proto`) matches the [Dockerfile invocation](../../scanner-bridge/Dockerfile#L35). With `-I proto`, protoc writes `import scanner_pb2 as scanner__pb2` (flat) into `scanner_pb2_grpc.py`, which fails at runtime because `main.py` imports `proto.scanner_pb2_grpc`. With `-I.`, protoc writes `from proto import scanner_pb2 as proto_dot_scanner__pb2` — matching `main.py`'s expectation. No `__init__.py` is needed (Python 3 implicit namespace package).
 
 Expected: refreshed `scanner-bridge/proto/scanner_pb2.py` and `scanner_pb2_grpc.py` with `DiffScanRequest`, `DiffScanResponse`, `ScanArtifactDiff` symbols.
 
