@@ -12,6 +12,7 @@ Pipeline:
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import pathlib
@@ -124,7 +125,7 @@ def _verify_sha256(path: str, expected: str) -> bool:
         with open(path, "rb") as f:
             for chunk in iter(lambda: f.read(64 * 1024), b""):
                 h.update(chunk)
-        return h.hexdigest() == expected.lower()
+        return hmac.compare_digest(h.hexdigest(), expected.lower())
     except Exception as e:
         logger.warning("diff_scanner: sha256 verify failed for %s: %s", path, e)
         return False
@@ -135,7 +136,11 @@ def _verify_sha256(path: str, expected: str) -> bool:
 def _build_prompt(req, payload: DiffPayload) -> tuple[str, bool]:
     """Build the user-message content from a DiffPayload.
 
-    Returns (prompt_text, was_truncated). Honors INSTALL_HOOK_RESERVATION.
+    Returns (prompt_text, was_truncated). Honors INSTALL_HOOK_RESERVATION:
+    install hooks get a reserved 32 KB slice of MAX_INPUT_CHARS, with the
+    remainder available for other sections. Unused install-hook budget is
+    NOT refunded to other sections — this keeps the budget reasoning simple
+    and predictable when many install hooks come in mixed with bulk code.
     """
     truncated = payload["partial"]
 
@@ -280,6 +285,8 @@ async def _call_llm(prompt: str, prompt_version: str) -> dict:
             timeout=LLM_TIMEOUT_SECONDS,
         )
         raw = resp.choices[0].message.content
+        if raw is None:
+            return _unknown("LLM returned empty content (finish_reason=length or content_filter)")
         parsed = json.loads(raw)
     except json.JSONDecodeError as e:
         logger.error("diff_scanner: LLM returned invalid JSON: %s", e)

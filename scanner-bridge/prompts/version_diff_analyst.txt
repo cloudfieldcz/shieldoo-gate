@@ -77,7 +77,7 @@ CONFIDENCE RULES:
 - verdict=MALICIOUS: confidence >= 0.85, clear malicious intent in the diff
 - verdict=SUSPICIOUS: confidence 0.5-0.84, unusual change but possibly legitimate
 - verdict=CLEAN: no concerning patterns found in the diff
-- If [INPUT_TRUNCATED] is present: confidence cap = 0.7
+- If [INPUT_TRUNCATED] is present: confidence cap = 0.7 (applies to all verdicts including MALICIOUS)
 - If only ignored_changed_paths changed: verdict=CLEAN, confidence=0.5
 
 NEVER:
