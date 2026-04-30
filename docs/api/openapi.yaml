@@ -938,8 +938,9 @@ paths:
       operationId: putProjectLicensePolicy
       tags: [projects, license]
       description: |
-        Requires projects.mode=strict. In lazy mode the server rejects
-        mode=override with 403 to prevent label-spoofing policy bypass.
+        Upsert the per-project license policy override row. Applies in both
+        lazy and strict projects modes — see ADR-004 for the threat-model
+        rationale.
       requestBody:
         required: true
         content:
@@ -951,7 +952,6 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LicensePolicyView" }
-        "403": { description: strict_required — override requires strict projects mode }
     delete:
       summary: Remove per-project override (fall back to inherit)
       operationId: deleteProjectLicensePolicy
@@ -1811,7 +1811,6 @@ components:
         updated_at:       { type: string }
         updated_by:       { type: string }
         effective_source: { type: string, description: "Human-readable source of the effective policy" }
-        strict_required:  { type: boolean, description: "True when mode=override but runtime is lazy — override is ignored" }
 
     LicensePolicyUpdate:
       type: object

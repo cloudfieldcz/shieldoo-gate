@@ -23,7 +23,7 @@ Every proxy request authenticates via HTTP Basic Auth. The **password field** ca
 |------|-------------|
 | You don't care about per-project segmentation | `default` (or leave the username empty — it falls back to `default`) |
 | You want your team/service tracked separately | `backend-team`, `data-pipeline`, `ci-jenkins`, etc. (lowercase, `[a-z0-9][a-z0-9_-]{0,63}`) |
-| You want strong separation (per-project license policy) | Run in **strict mode** and have an admin pre-create the project at `POST /api/v1/projects` |
+| You want strong separation (deterministic labels, no auto-create) | Run in **strict mode** and have an admin pre-create the project at `POST /api/v1/projects` |
 
 ### Why the username is reused as a project label
 
@@ -57,9 +57,10 @@ Any new username auto-creates a project row (`created_via = "lazy"`). This is th
 
 Labels must be pre-provisioned via `POST /api/v1/projects` **or** via `projects.bootstrap_labels` in `config.yaml` (see [Configuration](#configuration) below). Unknown labels are rejected with 403 at auth time. Use strict mode when:
 
-- Per-project license policy overrides must be secure (see S-01 anti-spoofing in the analysis).
 - You want deterministic billing / chargeback by project.
 - You want to prevent ad-hoc labeling of proxy usage.
+
+Per-project license policy overrides apply in both modes — see [ADR-004](../adr/ADR-004-license-policy-override-in-lazy-mode.md).
 
 The reference [`docker/config.yaml`](../../docker/config.yaml) ships in **strict** mode with `bootstrap_labels` covering the `examples/` projects, the `shieldoo-gate` self-build identity, and `ci-bot`. This means the bundled smoke-test examples work immediately without any admin POST step.
 
@@ -165,7 +166,7 @@ All endpoints require admin OIDC authentication.
 | DELETE | `/api/v1/projects/{id}` | Soft-disable (metadata-only in v1.2) |
 | GET | `/api/v1/projects/{id}/artifacts` | Artifacts used by this project |
 | GET | `/api/v1/projects/{id}/license-policy` | Effective license policy |
-| PUT | `/api/v1/projects/{id}/license-policy` | Upsert override (requires strict mode) |
+| PUT | `/api/v1/projects/{id}/license-policy` | Upsert override (lazy + strict) |
 
 ## Client Configuration Examples
 

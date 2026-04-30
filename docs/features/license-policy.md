@@ -13,7 +13,7 @@ Many organizations have strict rules about which open-source licenses are accept
 
 Yes, but only at the per-project-override level. **Global license policy applies to every artifact, regardless of which project the request belongs to.** Deployments that don't care about projects can set the global lists and never touch [project registry](./projects.md) — all requests land under the `default` project (seeded by migration 018) and inherit the global policy.
 
-If you run in [strict mode](./projects.md#strict) and explicitly provision projects, you can additionally define per-project overrides for licenses that are acceptable in one project but not another (e.g. allow `GPL-3.0-only` in an internal `oss-playground` project but keep it blocked for `commercial-svc`). See [Per-Project Overrides](#per-project-overrides) below.
+You can additionally define per-project overrides for licenses that are acceptable in one project but not another (e.g. allow `GPL-3.0-only` in an internal `oss-playground` project but keep it blocked for `commercial-svc`). Overrides apply in both lazy and strict projects modes (see [ADR-004](../adr/ADR-004-license-policy-override-in-lazy-mode.md)). See [Per-Project Overrides](#per-project-overrides) below.
 
 ## How It Works
 
@@ -21,8 +21,6 @@ License enforcement is a new step in the policy engine that runs **after the sta
 
 1. **Global YAML policy** — `policy.licenses.*` in `config.yaml`.
 2. **Per-project override** — optional row in `project_license_policy`, keyed by `project_id`.
-
-**Security guard:** per-project overrides are only honored at runtime when `projects.mode == "strict"`. In lazy mode, anyone can pick any project label (it's the Basic auth username), so honoring a permissive override would be a trivial policy bypass. The API rejects `PUT .../license-policy` with `mode=override` in lazy mode (403).
 
 ### Pipeline Position
 
@@ -89,8 +87,6 @@ Controls behavior when an artifact has no SBOM data (e.g. version-diff re-evalua
 
 ## Per-Project Overrides
 
-In **strict** projects mode only:
-
 ```http
 PUT /api/v1/projects/{id}/license-policy
 Content-Type: application/json
@@ -106,10 +102,12 @@ Content-Type: application/json
 Modes:
 
 - `inherit` (default) — use global policy.
-- `override` — replace global with the rows in this record. **Requires strict mode.**
+- `override` — replace global with the rows in this record.
 - `disabled` — skip license check entirely for this project.
 
-The `GET` view surfaces a `strict_required` boolean and an annotated `effective_source` so the UI can explain why an override is ignored in lazy mode.
+Overrides apply in both lazy and strict projects modes — they are admin-authored DB rows, independent of the lazy/strict project-creation model. See [ADR-004](../adr/ADR-004-license-policy-override-in-lazy-mode.md) for the threat-model rationale.
+
+The `GET` view surfaces an annotated `effective_source` (`global` / `project-override` / `disabled`) for the UI.
 
 ## Runtime-mutable global policy (v1.2.1+)
 
@@ -211,7 +209,6 @@ Most Maven JARs (~95%) inherit their `<licenses>` from a parent POM rather than 
 - `WITH` exceptions in SPDX expressions are ignored for evaluation purposes.
 - License policy changes are **not retroactive** — already-cached artifacts keep their original verdict. Admins can force re-evaluation via the rescan scheduler.
 - License data depends on Trivy's extraction quality. Packages with no declared license surface as empty and fall through to `unknown_action`.
-- Per-project overrides require `projects.mode=strict`. Lazy mode deployments can only use the global policy.
 - Maven effective-POM resolver requires network access to the upstream Maven repository. Private repositories with authentication are supported (resolver shares the adapter's HTTP client).
 
 ## Files

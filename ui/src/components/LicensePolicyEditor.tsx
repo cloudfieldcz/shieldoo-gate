@@ -24,8 +24,6 @@ export interface LicensePolicyEditorProps {
   value: LicensePolicyValue
   onSave: (next: LicensePolicyValue) => void
   saving?: boolean
-  /** When true, the 'override' mode is disabled with a tooltip (lazy-mode guard). */
-  modeOverrideDisabled?: boolean
   /** Small info banner rendered above the editor. */
   hint?: React.ReactNode
   /** Descriptive label for the current effective source. */
@@ -121,7 +119,6 @@ export default function LicensePolicyEditor({
   value,
   onSave,
   saving,
-  modeOverrideDisabled,
   hint,
   sourceLabel,
 }: LicensePolicyEditorProps) {
@@ -188,34 +185,28 @@ export default function LicensePolicyEditor({
         <fieldset className="space-y-2">
           <legend className="text-sm font-semibold text-gray-900">Policy mode</legend>
           <div className="flex gap-4 flex-wrap">
-            {(['inherit', 'override', 'disabled'] as LicensePolicyMode[]).map((m) => {
-              const isOverride = m === 'override'
-              const disabled = isOverride && !!modeOverrideDisabled
-              return (
-                <label
-                  key={m}
-                  title={disabled ? 'Override requires projects.mode=strict' : undefined}
-                  className={`flex items-center gap-2 px-3 py-2 border rounded-md text-sm cursor-pointer ${
-                    draft.mode === m
-                      ? 'bg-blue-50 border-blue-400 text-blue-900'
-                      : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
-                  } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
-                >
-                  <input
-                    type="radio"
-                    name="license-policy-mode"
-                    value={m}
-                    checked={draft.mode === m}
-                    disabled={disabled}
-                    onChange={() => setDraft({ ...draft, mode: m })}
-                  />
-                  <span className="capitalize">{m}</span>
-                </label>
-              )
-            })}
+            {(['inherit', 'override', 'disabled'] as LicensePolicyMode[]).map((m) => (
+              <label
+                key={m}
+                className={`flex items-center gap-2 px-3 py-2 border rounded-md text-sm cursor-pointer ${
+                  draft.mode === m
+                    ? 'bg-blue-50 border-blue-400 text-blue-900'
+                    : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="license-policy-mode"
+                  value={m}
+                  checked={draft.mode === m}
+                  onChange={() => setDraft({ ...draft, mode: m })}
+                />
+                <span className="capitalize">{m}</span>
+              </label>
+            ))}
           </div>
           <p className="text-xs text-gray-500">
-            <strong>inherit</strong> uses the global policy · <strong>override</strong> replaces it (strict projects mode only) · <strong>disabled</strong> skips license checks for this project.
+            <strong>inherit</strong> uses the global policy · <strong>override</strong> replaces it with the lists below · <strong>disabled</strong> skips license checks for this project.
           </p>
         </fieldset>
       )}

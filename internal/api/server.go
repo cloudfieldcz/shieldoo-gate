@@ -38,7 +38,6 @@ type Server struct {
 	publicURLs       config.PublicURLsConfig
 	onRescanQueued   func()
 	projectSvc       project.Service
-	projectsMode     string // "lazy" | "strict" (informational; enforcement is per request)
 	sbomStore        sbom.Storage
 	licenseResolver  *license.Resolver
 }
@@ -92,12 +91,6 @@ func (s *Server) SetSyncService(svc *docker.SyncService) {
 // SetProjectService wires the project registry for admin API routes.
 func (s *Server) SetProjectService(svc project.Service) {
 	s.projectSvc = svc
-}
-
-// SetProjectsMode stores the active mode so handlers can enforce rules
-// (e.g. per-project license policy overrides are rejected in lazy mode).
-func (s *Server) SetProjectsMode(mode string) {
-	s.projectsMode = mode
 }
 
 // Routes returns a chi.Router with all API routes registered.

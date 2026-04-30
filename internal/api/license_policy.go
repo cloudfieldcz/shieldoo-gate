@@ -27,9 +27,6 @@ type licensePolicyView struct {
 	// Source reports which policy is effective at runtime ("global" or
 	// "project:<label>"). Used by the UI to explain inheritance.
 	EffectiveSource string `json:"effective_source,omitempty"`
-	// StrictRequired signals that override is ignored at runtime because
-	// projects.mode is "lazy". True when projectsMode != "strict" and mode=override.
-	StrictRequired bool `json:"strict_required,omitempty"`
 }
 
 type licensePolicyUpdate struct {
@@ -93,21 +90,10 @@ func (s *Server) handleGetProjectLicensePolicy(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	// Flag: in this deployment, mode=override will NOT be honoured (lazy
-	// mode). Set regardless of the currently-saved mode so the UI can
-	// disable the 'override' radio before the user ever clicks it.
-	if s.projectsMode != "strict" {
-		view.StrictRequired = true
-	}
-
 	// Annotate runtime source.
 	switch view.Mode {
 	case "override":
-		if view.StrictRequired {
-			view.EffectiveSource = "global (override ignored — projects.mode is 'lazy')"
-		} else {
-			view.EffectiveSource = "project-override"
-		}
+		view.EffectiveSource = "project-override"
 	case "disabled":
 		view.EffectiveSource = "disabled"
 	}
@@ -115,9 +101,10 @@ func (s *Server) handleGetProjectLicensePolicy(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, view)
 }
 
-// handlePutProjectLicensePolicy upserts the project override. Returns 403 when
-// the deployment is in lazy mode and mode=override is requested (otherwise the
-// override would be a trivial policy bypass).
+// handlePutProjectLicensePolicy upserts the project override. Per-project
+// overrides apply in both lazy and strict projects modes (see ADR-004) — the
+// override is an admin-authored DB row, independent of the lazy/strict auth
+// model.
 func (s *Server) handlePutProjectLicensePolicy(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -134,13 +121,6 @@ func (s *Server) handlePutProjectLicensePolicy(w http.ResponseWriter, r *http.Re
 	case "inherit", "override", "disabled":
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mode must be 'inherit'|'override'|'disabled'"})
-		return
-	}
-	if body.Mode == "override" && s.projectsMode != "strict" {
-		writeJSON(w, http.StatusForbidden, map[string]string{
-			"error":   "strict_required",
-			"message": "per-project license overrides require projects.mode=strict",
-		})
 		return
 	}
 

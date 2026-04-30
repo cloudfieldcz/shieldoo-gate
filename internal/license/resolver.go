@@ -24,17 +24,15 @@ type Resolver struct {
 	db         *config.GateDB
 	global     Policy // currently-effective global (may be YAML or DB-derived)
 	yamlGlobal Policy // immutable copy of startup YAML values — used by ResetToYAML
-	strictMode bool
 	cache      *lru.LRU[int64, *Policy]
 	mu         sync.Mutex // guards global pointer swaps if SetGlobal is called
 }
 
 // ResolverConfig configures a Resolver.
 type ResolverConfig struct {
-	Global     Policy
-	StrictMode bool // true when projects.mode == "strict"
-	CacheSize  int
-	CacheTTL   time.Duration
+	Global    Policy
+	CacheSize int
+	CacheTTL  time.Duration
 }
 
 // NewResolver creates a Resolver backed by the given DB.
@@ -49,7 +47,6 @@ func NewResolver(db *config.GateDB, cfg ResolverConfig) *Resolver {
 		db:         db,
 		global:     cfg.Global,
 		yamlGlobal: cfg.Global, // remember original YAML values
-		strictMode: cfg.StrictMode,
 		cache:      lru.NewLRU[int64, *Policy](cfg.CacheSize, nil, cfg.CacheTTL),
 	}
 }
@@ -97,9 +94,8 @@ func (r *Resolver) ResolveForProject(ctx context.Context, projectID int64, proje
 	global := r.global
 	r.mu.Unlock()
 
-	// Per-project overrides only apply in strict mode (security: prevents
-	// label spoofing bypass of license policy in lazy mode).
-	if !r.strictMode || projectID == 0 {
+	// projectID == 0 means "no project context" — fall back to global.
+	if projectID == 0 {
 		return global, nil
 	}
 

@@ -359,8 +359,8 @@ function UsageInstructions({ urls }: { urls?: PublicURLs }) {
         All ecosystems use <strong>HTTP Basic Auth</strong> (<code className="px-1 bg-gray-100 rounded">PROJECT:TOKEN</code>).
         The <strong>username is interpreted as a project label</strong> — it's
         used to segment audit events, track per-project artifact usage, and
-        (in strict mode) apply per-project license policy. Pick whatever
-        name fits your team or service.
+        apply per-project license policy. Pick whatever name fits your team
+        or service.
       </p>
       <div className="text-sm text-gray-600 space-y-1 bg-blue-50 border border-blue-200 rounded-lg p-3">
         <p><strong>What to put in the username?</strong></p>

@@ -2,10 +2,10 @@
 //
 // Design notes:
 //   - The effective policy is resolved from the global YAML config plus an
-//     optional per-project override row (`project_license_policy`).
-//   - Per-project overrides are ONLY applied when projects.mode == "strict".
-//     In lazy mode, anyone can pick any project label, so honoring a
-//     permissive override would be a trivial policy bypass.
+//     optional per-project override row (`project_license_policy`). Per-project
+//     overrides apply in both lazy and strict projects modes; the override is
+//     an admin-authored row in the DB, so it does not depend on the lazy/strict
+//     auth model. See ADR-004.
 //   - License expressions ("MIT OR Apache-2.0") are evaluated with the
 //     configured or_semantics: "any_allowed" (default) or "all_allowed".
 package license

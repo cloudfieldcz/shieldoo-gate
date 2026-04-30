@@ -39,8 +39,8 @@ export default function LicensePolicy() {
           </h1>
           <p className="text-sm text-gray-500 mt-1">
             Defines which SPDX licenses are blocked, warned, or allowed for every artifact
-            served by this proxy. Per-project overrides (available in strict mode) are
-            layered on top of this via the <em>Projects</em> page.
+            served by this proxy. Per-project overrides are layered on top of this via
+            the <em>Projects</em> page.
           </p>
         </div>
         {policyQ.data?.source === 'db' && (

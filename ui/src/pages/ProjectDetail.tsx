@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, FolderTree, Package, ScrollText, RotateCcw } from 'lucide-react'
-import axios from 'axios'
 import { projectsApi } from '../api/client'
 import type { ProjectLicensePolicyUpdate } from '../api/types'
 import LicensePolicyEditor, {
@@ -214,43 +213,23 @@ function PolicyTab({ projectId }: { projectId: number }) {
         variant="project"
         value={initial}
         saving={putMut.isPending}
-        modeOverrideDisabled={pv.strict_required}
         sourceLabel={pv.effective_source}
         hint={
-          pv.strict_required ? (
-            <>
-              <strong>Strict mode required.</strong> The deployment is running with{' '}
-              <span className="font-mono">projects.mode=lazy</span>, so per-project
-              <em> override</em> is not honoured at runtime — the global policy still
-              applies. Switch to strict mode (and pre-provision projects) if you want
-              per-project overrides to take effect.
-            </>
-          ) : (
-            <>
-              Per-project policy. Leave mode as <strong>inherit</strong> to use the
-              global policy unchanged, or <strong>override</strong> it with the lists
-              below. <strong>disabled</strong> skips license checks entirely for this
-              project.
-            </>
-          )
+          <>
+            Per-project policy. Leave mode as <strong>inherit</strong> to use the
+            global policy unchanged, or <strong>override</strong> it with the lists
+            below. <strong>disabled</strong> skips license checks entirely for this
+            project.
+          </>
         }
         onSave={(next) => {
-          putMut.mutate(
-            {
-              mode: (next.mode ?? 'inherit') as ProjectLicensePolicyUpdate['mode'],
-              blocked: next.blocked,
-              warned: next.warned,
-              allowed: next.allowed,
-              unknown_action: (next.unknown_action || '') as ProjectLicensePolicyUpdate['unknown_action'],
-            },
-            {
-              onError: (err) => {
-                if (axios.isAxiosError(err) && err.response?.status === 403) {
-                  alert(err.response.data?.message || 'override requires strict mode')
-                }
-              },
-            }
-          )
+          putMut.mutate({
+            mode: (next.mode ?? 'inherit') as ProjectLicensePolicyUpdate['mode'],
+            blocked: next.blocked,
+            warned: next.warned,
+            allowed: next.allowed,
+            unknown_action: (next.unknown_action || '') as ProjectLicensePolicyUpdate['unknown_action'],
+          })
         }}
       />
 

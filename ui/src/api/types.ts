@@ -231,7 +231,6 @@ export interface ProjectLicensePolicyView {
   updated_at?: string
   updated_by?: string
   effective_source?: string
-  strict_required?: boolean
 }
 
 export interface ProjectLicensePolicyUpdate {

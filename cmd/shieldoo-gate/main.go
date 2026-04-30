@@ -323,8 +323,7 @@ func main() {
 			Source:        "global",
 		}
 		licenseResolver = license.NewResolver(db, license.ResolverConfig{
-			Global:     globalPolicy,
-			StrictMode: cfg.Projects.Mode == "strict",
+			Global: globalPolicy,
 		})
 		onErr := license.Action(orDefault(cfg.Policy.Licenses.OnSBOMError, "allow"))
 		engineOpts = append(engineOpts, policy.WithLicenseEvaluator(
@@ -517,7 +516,6 @@ func main() {
 
 	// Expose project registry to admin API.
 	apiServer.SetProjectService(projectSvc)
-	apiServer.SetProjectsMode(string(projectCfg.Mode))
 	if licenseResolver != nil {
 		apiServer.SetLicenseResolver(licenseResolver)
 		// Hydrate from DB if a runtime-mutable global policy row exists.
