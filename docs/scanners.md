@@ -193,6 +193,8 @@ The AI scanner uses a single-pass LLM call (Azure OpenAI `gpt-5.4-mini`) to perf
 4. The LLM returns a structured JSON verdict: `CLEAN`, `SUSPICIOUS`, or `MALICIOUS` with confidence and findings.
 5. The response is mapped to a standard `ScanResult` and returned to the scan engine.
 
+> **Companion package — `scanner-bridge/extractors_diff/`** (Phase 3+ of the version-diff AI rebuild). A parallel package alongside `extractors/` produces a `DiffPayload` comparing TWO archives of the same package (new vs cached previous version) for the AI-driven version-diff scanner. Each per-ecosystem module exposes `extract(new_path, old_path, *, original_filename) -> DiffPayload`. The PyPI implementation handles wheels and sdists, applies path-aware filtering (tests/examples/docs at depth ≥ 2 are filtered, install hooks bypass the filter), enforces a 1 MB per-file read cap with overflow detection (defends against decompression bombs), uses head+tail truncation for content > 8 KB (28 KB head + 4 KB tail for install hooks, 4 KB + 4 KB for regular files), and rejects path traversal / symlinks / hardlinks. Phase 4 extends the registry with NPM, NuGet, Maven, RubyGems; Phase 5 wires it into the version-diff scanner orchestrator.
+
 #### What Gets Extracted Per Ecosystem
 
 | Ecosystem | Extracted Files | Why |
