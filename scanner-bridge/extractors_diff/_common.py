@@ -267,3 +267,135 @@ def unified_diff(old: str, new: str, path: str) -> str:
             n=3,
         )
     )
+
+
+# --- Shared diff pipeline ----------------------------------------------------
+
+def _filter_or_collect(
+    path: str,
+    ignored: list[str],
+    *,
+    ecosystem: str = "pypi",
+    install_hook_detector=is_install_hook,
+) -> bool:
+    """Returns True if the path should be skipped from inspection.
+
+    Install hooks NEVER skip — even if the path matches the test/docs filter
+    (e.g. attacker publishes evil-1.0/tests/setup.py). Binary files always skip.
+    """
+    if is_binary_path(path):
+        ignored.append(path + " (binary)")
+        return True
+    if install_hook_detector(ecosystem, path):
+        # Defense against filter-bypass: install hooks reach the LLM regardless
+        # of which directory they live in.
+        return False
+    if is_filtered_path(path):
+        ignored.append(path + " (test/example/docs)")
+        return True
+    return False
+
+
+def diff_files(
+    new_files: dict[str, bytes | None],
+    old_files: dict[str, bytes | None],
+    ecosystem: str,
+    payload: DiffPayload,
+    *,
+    install_hook_detector=is_install_hook,
+) -> None:
+    """Populate payload from two file maps. Ecosystem-aware install hook detection.
+
+    A value of None marks an oversize file (content suppressed). b"" is a
+    genuinely empty file and must round-trip distinctly.
+
+    Caller must have already populated payload.error / payload.partial as needed.
+    """
+    new_keys = set(new_files)
+    old_keys = set(old_files)
+
+    raw_added = sorted(new_keys - old_keys)
+    raw_removed = sorted(old_keys - new_keys)
+    raw_modified = sorted(
+        k for k in (new_keys & old_keys) if new_files[k] != old_files[k]
+    )
+
+    payload["raw_counts"] = (len(raw_added), len(raw_modified), len(raw_removed))
+
+    inspected_added: list[str] = []
+    inspected_modified: list[str] = []
+    inspected_removed: list[str] = []
+    ignored: list[str] = []
+
+    for path in raw_added:
+        if _filter_or_collect(
+            path, ignored, ecosystem=ecosystem, install_hook_detector=install_hook_detector
+        ):
+            continue
+        inspected_added.append(path)
+
+    for path in raw_modified:
+        if _filter_or_collect(
+            path, ignored, ecosystem=ecosystem, install_hook_detector=install_hook_detector
+        ):
+            continue
+        inspected_modified.append(path)
+
+    for path in raw_removed:
+        if _filter_or_collect(
+            path, ignored, ecosystem=ecosystem, install_hook_detector=install_hook_detector
+        ):
+            continue
+        inspected_removed.append(path)
+
+    payload["inspected_counts"] = (
+        len(inspected_added), len(inspected_modified), len(inspected_removed),
+    )
+    payload["ignored_changed_paths"] = ignored
+    payload["removed"] = inspected_removed
+
+    install_hooks: list[str] = []
+    top_level: list[str] = []
+    truncated: list[str] = []
+
+    for path in inspected_added:
+        blob = new_files[path]
+        if blob is None:
+            ignored.append(path + " (oversize)")
+            continue
+        text = safe_decode(blob)
+        is_hook = install_hook_detector(ecosystem, path)
+        truncated_text, was_trunc = truncate_content(text, install_hook=is_hook)
+        payload["added"][path] = truncated_text
+        if was_trunc:
+            truncated.append(path)
+        if is_hook:
+            install_hooks.append(path)
+        elif is_top_level_code(path):
+            top_level.append(path)
+
+    for path in inspected_modified:
+        old_blob = old_files[path]
+        new_blob = new_files[path]
+        if old_blob is None or new_blob is None:
+            ignored.append(path + " (oversize)")
+            continue
+        old_text = safe_decode(old_blob)
+        new_text = safe_decode(new_blob)
+        diff = unified_diff(old_text, new_text, path)
+        is_hook = install_hook_detector(ecosystem, path)
+        diff_truncated, was_trunc = truncate_content(diff, install_hook=is_hook)
+        payload["modified"][path] = (
+            "[unified diff follows]\n" + diff_truncated,
+            "",
+        )
+        if was_trunc:
+            truncated.append(path)
+        if is_hook:
+            install_hooks.append(path)
+        elif is_top_level_code(path):
+            top_level.append(path)
+
+    payload["install_hook_paths"] = install_hooks
+    payload["top_level_code_paths"] = top_level
+    payload["truncated_files"] = truncated
