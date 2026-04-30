@@ -426,7 +426,7 @@ SHIELDOO_GATE_DATABASE_SQLITE_PATH=/tmp/sg-smoke.db \
 
 ## What this phase ships
 
-- Two migration files (one per backend) — atomic, idempotent (re-running produces no error because of `IF NOT EXISTS` on the index in Postgres; SQLite handles re-runs because the new table name `version_diff_results_v24` only exists between BEGIN/COMMIT).
+- Two migration files (one per backend) — atomic, idempotent (re-running produces no error because of `IF NOT EXISTS` on the index in Postgres; SQLite handles re-runs because the migration uses `IF NOT EXISTS` / `IF EXISTS` guards on the staging-table operations, matching migration 007's pattern). Note: re-running the SQLite migration on a database that already has the v2.0 schema would NULL the `ai_*` columns of all rows, since the SELECT hardcodes NULL for those columns. This is acceptable because `runMigrations` (db.go) tracks applied migrations in `schema_migrations` and skips already-applied ones in production; only `TestInitDB_Idempotent` exercises the raw second-run path, and it does not assert on data preservation.
 - A Go-side test that asserts the post-migration schema and unique-constraint behavior.
 
 ## What this phase deliberately does NOT ship

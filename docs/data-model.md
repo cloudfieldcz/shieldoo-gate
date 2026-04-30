@@ -26,8 +26,9 @@ Shieldoo Gate uses **SQLite** (default, WAL mode, foreign keys enabled) or **Pos
 - `015_popular_packages.sql` — Popular packages table for typosquat scanner
 - `016_version_diff_results.sql` — Version diff results table + composite artifact index
 - `017_package_reputation.sql` — Package reputation scores table
+- `024_version_diff_ai_columns.sql` — Extend `version_diff_results` with AI scanner columns, relax NOT NULL on legacy heuristic columns, deduplicate existing rows, and add the idempotency `UNIQUE INDEX uq_version_diff_pair`
 
-**PostgreSQL** (`internal/config/migrations/postgres/`) — same 17 migrations with PostgreSQL syntax.
+**PostgreSQL** (`internal/config/migrations/postgres/`) — same migrations with PostgreSQL syntax (including `024_version_diff_ai_columns.sql`).
 
 SQLite PRAGMAs applied at startup:
 ```sql
@@ -413,7 +414,7 @@ Stores popular package names per ecosystem, used by the typosquat scanner for na
 
 ### `version_diff_results`
 
-Stores the results of cross-version comparison analysis performed by the version diff scanner.
+Stores the results of cross-version comparison analysis performed by the version diff scanner. The schema was extended by migration `024_version_diff_ai_columns.sql` to support both the legacy heuristic scanner (rows with all-NULL AI columns) and the new AI-driven scanner (rows with non-NULL `ai_model_used` + `ai_prompt_version`).
 
 | Column | Type | Description |
 |---|---|---|
@@ -421,18 +422,30 @@ Stores the results of cross-version comparison analysis performed by the version
 | `artifact_id` | TEXT NOT NULL | Artifact being analyzed |
 | `previous_artifact` | TEXT NOT NULL FK | References `artifacts.id` — the previously cached version |
 | `diff_at` | DATETIME NOT NULL | When the diff was performed |
-| `files_added` | INTEGER NOT NULL | Number of new files in new version |
-| `files_removed` | INTEGER NOT NULL | Number of removed files |
-| `files_modified` | INTEGER NOT NULL | Number of modified files |
-| `size_ratio` | REAL NOT NULL | Ratio of new version size to old version size |
-| `max_entropy_delta` | REAL NOT NULL | Maximum Shannon entropy increase across files |
-| `new_dependencies` | TEXT | JSON array of newly added dependencies |
-| `sensitive_changes` | TEXT | JSON array of changed security-sensitive files |
 | `verdict` | TEXT NOT NULL | Scanner verdict (`CLEAN` or `SUSPICIOUS`) |
 | `findings_json` | TEXT NOT NULL | JSON array of `Finding` objects |
+| `previous_version` | TEXT | Version string of the previous artifact (nullable; populated by AI scanner) |
+| `files_added` | INTEGER | Number of new files in new version (nullable since migration 024) |
+| `files_removed` | INTEGER | Number of removed files (nullable since migration 024) |
+| `files_modified` | INTEGER | Number of modified files (nullable since migration 024) |
+| `size_ratio` | REAL | Ratio of new version size to old version size (nullable since migration 024) |
+| `max_entropy_delta` | REAL | Maximum Shannon entropy increase across files (nullable since migration 024) |
+| `new_dependencies` | TEXT | JSON array of newly added dependencies |
+| `sensitive_changes` | TEXT | JSON array of changed security-sensitive files |
+| `ai_verdict` | TEXT | AI scanner verdict (nullable; NULL for legacy heuristic rows) |
+| `ai_confidence` | REAL | AI confidence score 0.0–1.0 (nullable) |
+| `ai_explanation` | TEXT | Human-readable AI explanation of the verdict (nullable) |
+| `ai_model_used` | TEXT | AI model identifier (e.g. `gpt-5.4-mini`) (nullable) |
+| `ai_prompt_version` | TEXT | SHA[:12] of the AI bridge system prompt at scan time (nullable) |
+| `ai_tokens_used` | INTEGER | Total tokens consumed by the AI call (nullable) |
 
 **Indexes:**
-- `idx_version_diff_artifact ON (artifact_id)`
+- `idx_version_diff_artifact ON (artifact_id)` — legacy artifact lookup index
+- `uq_version_diff_pair UNIQUE ON (artifact_id, previous_artifact, ai_model_used, ai_prompt_version)` — idempotency cache key; rolling out a new model or prompt version invalidates all previous cache entries automatically
+
+**NULL-distinct semantics of `uq_version_diff_pair`:** SQL `UNIQUE` treats `NULL` as distinct from every other value (including another `NULL`). This means legacy heuristic rows (with `ai_model_used = NULL` and `ai_prompt_version = NULL`) coexist in the same table alongside new AI-scanner rows that carry non-NULL values for both columns. A fresh AI scan with the same artifact pair but a different model or prompt version inserts a new row rather than colliding with an existing one.
+
+**Indexes on `artifacts` table (added by migration 016, not 024):**
 - `idx_artifacts_eco_name_cached ON artifacts(ecosystem, name, cached_at DESC)` — composite index for efficient previous-version lookup
 
 ### `package_reputation`

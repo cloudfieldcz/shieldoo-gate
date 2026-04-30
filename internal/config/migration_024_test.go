@@ -12,6 +12,10 @@ func TestMigration024_AddsAIColumnsAndUniqueIndex(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
+	// The col struct must include ALL columns returned by PRAGMA table_info:
+	// cid, name, type, notnull, dflt_value, pk.
+	// sqlx.Select errors with "missing destination name <col>" if any returned
+	// column has no matching struct field — trimming to fewer fields is not possible.
 	type col struct {
 		Cid     int            `db:"cid"`
 		Name    string         `db:"name"`
@@ -74,5 +78,53 @@ func TestMigration024_UniqueIndexEnforced(t *testing.T) {
 	}
 
 	require.NoError(t, insert(), "first insert must succeed")
-	require.Error(t, insert(), "second insert with identical AI key must fail unique constraint")
+	require.ErrorContains(t, insert(), "UNIQUE constraint failed", "second insert with identical AI key must fail unique constraint")
+}
+
+func TestMigration024_LegacyNullRowCoexistsWithAIRow(t *testing.T) {
+	db, err := InitDB(SQLiteMemoryConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, err = db.Exec(
+		`INSERT INTO artifacts (id, ecosystem, name, version, upstream_url, sha256, size_bytes, cached_at, last_accessed_at, storage_path)
+		 VALUES (?, 'pypi', 'foo', '1.0', 'https://up/foo-1.0', 'h1', 100, datetime('now'), datetime('now'), '/tmp/a1'),
+		        (?, 'pypi', 'foo', '0.9', 'https://up/foo-0.9', 'h2', 100, datetime('now', '-1 day'), datetime('now', '-1 day'), '/tmp/a2')`,
+		"art-new", "art-old",
+	)
+	require.NoError(t, err)
+
+	// Legacy row: NULL ai_model_used + NULL ai_prompt_version
+	_, err = db.Exec(
+		`INSERT INTO version_diff_results
+		 (artifact_id, previous_artifact, diff_at, verdict, findings_json)
+		 VALUES (?, ?, datetime('now'), 'CLEAN', '[]')`,
+		"art-new", "art-old",
+	)
+	require.NoError(t, err, "legacy row insert must succeed")
+
+	// New v2.0 row: same (artifact_id, previous_artifact) but non-NULL ai_model_used + ai_prompt_version
+	_, err = db.Exec(
+		`INSERT INTO version_diff_results
+		 (artifact_id, previous_artifact, diff_at, verdict, findings_json,
+		  ai_verdict, ai_confidence, ai_model_used, ai_prompt_version, ai_tokens_used)
+		 VALUES (?, ?, datetime('now'), 'CLEAN', '[]', 'CLEAN', 0.9, 'gpt-5.4-mini', 'abc123', 1500)`,
+		"art-new", "art-old",
+	)
+	require.NoError(t, err, "v2.0 row with non-NULL AI columns must coexist with legacy NULL row")
+
+	// Different prompt_version: also coexists
+	_, err = db.Exec(
+		`INSERT INTO version_diff_results
+		 (artifact_id, previous_artifact, diff_at, verdict, findings_json,
+		  ai_verdict, ai_confidence, ai_model_used, ai_prompt_version, ai_tokens_used)
+		 VALUES (?, ?, datetime('now'), 'CLEAN', '[]', 'CLEAN', 0.9, 'gpt-5.4-mini', 'def456', 1500)`,
+		"art-new", "art-old",
+	)
+	require.NoError(t, err, "different prompt_version must coexist")
+
+	// Sanity: row count == 3
+	var count int
+	require.NoError(t, db.Get(&count, "SELECT COUNT(*) FROM version_diff_results WHERE artifact_id = ? AND previous_artifact = ?", "art-new", "art-old"))
+	require.Equal(t, 3, count)
 }
