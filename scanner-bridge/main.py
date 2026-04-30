@@ -169,6 +169,47 @@ class ScannerBridgeServicer(scanner_pb2_grpc.ScannerBridgeServicer):
                 tokens_used=0,
             )
 
+    def ScanArtifactDiff(self, request, context):
+        """AI-driven version-diff analysis between two consecutive package versions."""
+        if self._ai_scanner is None:
+            return scanner_pb2.DiffScanResponse(
+                verdict="UNKNOWN",
+                confidence=0.0,
+                explanation="AI scanner not enabled",
+                model_used="none",
+                tokens_used=0,
+            )
+
+        try:
+            import diff_scanner
+            future = asyncio.run_coroutine_threadsafe(
+                diff_scanner.scan(request), self._ai_loop
+            )
+            result = future.result(timeout=50)
+
+            return scanner_pb2.DiffScanResponse(
+                verdict=result.get("verdict", "UNKNOWN"),
+                confidence=result.get("confidence", 0.0),
+                findings=result.get("findings", []),
+                explanation=result.get("explanation", ""),
+                model_used=result.get("model_used", ""),
+                tokens_used=result.get("tokens_used", 0),
+                files_added=result.get("files_added", 0),
+                files_modified=result.get("files_modified", 0),
+                files_removed=result.get("files_removed", 0),
+                prompt_version=result.get("prompt_version", ""),
+                input_truncated=result.get("input_truncated", False),
+            )
+        except Exception as e:
+            logger.error("Diff scan error for %s: %s", request.artifact_id, e)
+            return scanner_pb2.DiffScanResponse(
+                verdict="UNKNOWN",
+                confidence=0.0,
+                explanation=f"Diff scan error: {e}",
+                model_used="none",
+                tokens_used=0,
+            )
+
     def TriageFindings(self, request, context):
         """AI-based triage of vulnerability findings for balanced policy mode."""
         if self._ai_scanner is None:
@@ -220,7 +261,7 @@ def serve():
     if os.path.exists(socket_path):
         os.unlink(socket_path)
 
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=32))
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=64))
     scanner_pb2_grpc.add_ScannerBridgeServicer_to_server(
         ScannerBridgeServicer(), server
     )
