@@ -77,13 +77,13 @@ message HealthResponse {
 
 message DiffScanRequest {
     string artifact_id            = 1;
-    string ecosystem              = 2;   // pypi, npm, nuget, maven, rubygems, go
+    string ecosystem              = 2;   // pypi, npm, nuget, maven, rubygems, go (go added vs AIScanRequest — diff scanning supported for Go modules)
     string name                   = 3;
     string version                = 4;
     string previous_version       = 5;
     string local_path             = 6;   // path to NEW artifact on disk (in shared volume)
     string previous_path          = 7;   // path to PREVIOUS artifact on disk
-    string original_filename      = 8;
+    string original_filename      = 8;   // original filename of the NEW artifact (e.g. "requests-2.32.3-py3-none-any.whl")
     string local_path_sha256      = 9;   // expected hash, bridge re-verifies before extraction (TOCTOU)
     string previous_path_sha256   = 10;  // expected hash, bridge re-verifies before extraction
     string prompt_version         = 11;  // SHA256[:12] of system prompt — bridge attaches to response
