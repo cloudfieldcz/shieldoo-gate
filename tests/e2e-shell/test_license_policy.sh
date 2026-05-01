@@ -174,24 +174,25 @@ test_license_policy() {
     mode=$(echo "$lp" | jq -r '.mode')
     assert_eq "License: default per-project mode is 'inherit'" "inherit" "$mode"
 
-    # PUT mode=override — strict succeeds, lazy returns 403 (S-01 guard).
+    # PUT mode=override — succeeds in BOTH lazy and strict projects modes.
+    # ADR-004 (2026-04-30) removed the legacy S-01 lazy-mode 403 guard:
+    # per-project license policy authoring is gated by admin API auth (OIDC),
+    # which is independent of the PAT/proxy-traffic auth boundary that
+    # `projects.mode` controls.
     local put_status
     put_status=$(curl -s -o /dev/null -w "%{http_code}" \
         -X PUT "${E2E_ADMIN_URL}/api/v1/projects/${pid}/license-policy" \
         -H "Content-Type: application/json" \
         -d '{"mode":"override","blocked":["GPL-3.0-only"]}')
+    assert_eq "License: PUT override returns 200 (ADR-004: applies in both lazy and strict)" "200" "$put_status"
 
-    if [ "${SGW_PROJECTS_MODE:-lazy}" = "strict" ]; then
-        assert_eq "License: PUT override in strict mode returns 200" "200" "$put_status"
-    else
-        assert_eq "License: PUT override in lazy mode returns 403 (S-01 guard)" "403" "$put_status"
-        local inherit_status
-        inherit_status=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X PUT "${E2E_ADMIN_URL}/api/v1/projects/${pid}/license-policy" \
-            -H "Content-Type: application/json" \
-            -d '{"mode":"inherit"}')
-        assert_eq "License: PUT mode=inherit succeeds in lazy mode" "200" "$inherit_status"
-    fi
+    # Round-trip: PUT mode=inherit must always succeed (no projects.mode gating).
+    local inherit_status
+    inherit_status=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X PUT "${E2E_ADMIN_URL}/api/v1/projects/${pid}/license-policy" \
+        -H "Content-Type: application/json" \
+        -d '{"mode":"inherit"}')
+    assert_eq "License: PUT mode=inherit returns 200" "200" "$inherit_status"
 
     # GET surfaces strict_required when override is ineffective.
     local strict_req

@@ -108,7 +108,7 @@ test_docker_registry() {
     assert_eq "Docker Registry: /v2/ returns 200 (local response)" "200" "$v2_status"
 
     local v2_header
-    v2_header=$(curl -s -D - -o /dev/null "${E2E_CURL_AUTH[@]}" "${E2E_DOCKER_URL}/v2/" | grep -i "Docker-Distribution-API-Version")
+    v2_header=$(curl -s -D - -o /dev/null "${E2E_CURL_AUTH[@]}" "${E2E_DOCKER_URL}/v2/" | grep -i "Docker-Distribution-API-Version" || true)
     assert_contains "Docker Registry: /v2/ has API version header" "registry/2.0" "$v2_header"
 
     # Allowlist enforcement (instant — no scan needed)
@@ -163,11 +163,15 @@ test_docker_registry() {
     if [ "$manifest_exit" -eq 0 ]; then
         # X-Shieldoo-Scanned header on cached manifest (instant — already cached)
         local scanned_header
+        # `|| true` swallows the grep-no-match exit code; without it, the
+        # `set -euo pipefail` inherited from run_all.sh kills the suite when
+        # the X-Shieldoo-Scanned header is missing instead of letting the
+        # next assertion log_skip.
         scanned_header=$(curl -s -D - -o /dev/null \
             "${E2E_CURL_AUTH[@]}" \
             -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
             "${E2E_DOCKER_URL}/v2/ghcr.io/jitesoft/alpine/manifests/latest" 2>/dev/null \
-            | grep -i "X-Shieldoo-Scanned")
+            | grep -i "X-Shieldoo-Scanned" || true)
         if grep -qi "true" <<< "$scanned_header"; then
             log_pass "Docker Registry: X-Shieldoo-Scanned: true on cached manifest"
         else
