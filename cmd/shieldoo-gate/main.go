@@ -619,6 +619,14 @@ func main() {
 		log.Info().Msg("rescan scheduler enabled")
 	}
 
+	// Start version-diff retention scheduler (90-day CLEAN row cleanup) only when
+	// the version-diff scanner is enabled. SUSPICIOUS+ rows are kept indefinitely.
+	if cfg.Scanners.VersionDiff.Enabled {
+		vdiffRetention := scheduler.NewVersionDiffRetentionScheduler(db)
+		vdiffRetention.Start()
+		defer vdiffRetention.Stop()
+	}
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 

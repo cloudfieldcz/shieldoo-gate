@@ -162,7 +162,11 @@ scanners:
     allowlist: []                       # package names to skip (FP suppression)
     min_confidence: 0.6                 # SUSPICIOUS below this is downgraded to CLEAN with audit_log entry
     per_package_rate_limit: 10          # max LLM calls per package per hour; 0 = unlimited
-    daily_cost_limit_usd: 5.0           # alerting / future hard-cap; soft signal in v2.0
+    daily_cost_limit_usd: 5.0           # ADVISORY in v2.0 — current implementation records spend in
+                                        # version_diff_results.ai_tokens_used but does not auto-disable
+                                        # the scanner on overrun. Use Prometheus alerting on the daily
+                                        # token-sum query (docs/scanners/version-diff.md). Hard cap
+                                        # tracked in docs/plans/follow-ups.md (v2.1).
     circuit_breaker_threshold: 5        # consecutive bridge errors trigger 60s degraded mode
   # Maintainer reputation & package risk scoring. Queries upstream registry APIs
   # for metadata (maintainer history, publication patterns, download counts) and

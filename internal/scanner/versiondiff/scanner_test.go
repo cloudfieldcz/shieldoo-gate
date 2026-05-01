@@ -784,3 +784,34 @@ func TestScan_PreviousSHAMismatch_FailsOpenWithoutBridge(t *testing.T) {
 	assert.Equal(t, scanner.VerdictClean, res.Verdict)
 	assert.Equal(t, int32(0), mb.calls.Load(), "bridge must not be called on SHA mismatch")
 }
+
+func TestScan_PersistsScannerVersionColumn(t *testing.T) {
+	prevContent := []byte("p")
+	prevSHA := sha256Hex(prevContent)
+	mb := &mockBridge{
+		scanFn: func(_ context.Context, _ *pb.DiffScanRequest) (*pb.DiffScanResponse, error) {
+			return &pb.DiffScanResponse{
+				Verdict: "CLEAN", Confidence: 0.6,
+				ModelUsed: "gpt-5.4-mini", PromptVersion: "abc123",
+			}, nil
+		},
+	}
+	sock := startMockBridge(t, mb)
+	db := newTestDB(t)
+	cs := newFakeCache(t, map[string][]byte{"pypi:sv:0.9": prevContent})
+	seedArtifactPair(t, db, "pypi", "sv",
+		"pypi:sv:1.0", "1.0", "n",
+		"pypi:sv:0.9", "0.9", prevSHA, true)
+
+	s, _ := NewVersionDiffScanner(db, cs, defaultCfg(sock))
+	defer s.Close()
+	_, err := s.Scan(context.Background(), scanner.Artifact{
+		ID: "pypi:sv:1.0", Ecosystem: scanner.EcosystemPyPI, Name: "sv", Version: "1.0", SHA256: "n",
+	})
+	require.NoError(t, err)
+
+	var got string
+	require.NoError(t, db.Get(&got,
+		"SELECT scanner_version FROM version_diff_results WHERE artifact_id = ?", "pypi:sv:1.0"))
+	assert.Equal(t, "2.0.0", got)
+}

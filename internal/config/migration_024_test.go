@@ -128,3 +128,44 @@ func TestMigration024_LegacyNullRowCoexistsWithAIRow(t *testing.T) {
 	require.NoError(t, db.Get(&count, "SELECT COUNT(*) FROM version_diff_results WHERE artifact_id = ? AND previous_artifact = ?", "art-new", "art-old"))
 	require.Equal(t, 3, count)
 }
+
+func TestMigration025_AddsScannerVersionColumnAndIndexes(t *testing.T) {
+	db, err := InitDB(SQLiteMemoryConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	type col struct {
+		Cid     int            `db:"cid"`
+		Name    string         `db:"name"`
+		Type    string         `db:"type"`
+		Notnull int            `db:"notnull"`
+		DfltVal sql.NullString `db:"dflt_value"`
+		Pk      int            `db:"pk"`
+	}
+	var cols []col
+	require.NoError(t, db.Select(&cols, "PRAGMA table_info(version_diff_results)"))
+	found := false
+	for _, c := range cols {
+		if c.Name == "scanner_version" {
+			found = true
+			require.Equal(t, 0, c.Notnull, "scanner_version must be nullable so legacy rows survive")
+		}
+	}
+	require.True(t, found, "scanner_version column missing after migration 025")
+
+	type idx struct {
+		Seq     int    `db:"seq"`
+		Name    string `db:"name"`
+		Unique  int    `db:"unique"`
+		Origin  string `db:"origin"`
+		Partial int    `db:"partial"`
+	}
+	var idxs []idx
+	require.NoError(t, db.Select(&idxs, "PRAGMA index_list(version_diff_results)"))
+	names := map[string]bool{}
+	for _, i := range idxs {
+		names[i.Name] = true
+	}
+	require.True(t, names["idx_version_diff_scanner_version"], "idx_version_diff_scanner_version index missing")
+	require.True(t, names["idx_version_diff_verdict_diff_at"], "idx_version_diff_verdict_diff_at index missing")
+}

@@ -441,13 +441,13 @@ func (s *VersionDiffScanner) persistRow(
 		  size_ratio, max_entropy_delta,
 		  verdict, findings_json,
 		  ai_verdict, ai_confidence, ai_explanation, ai_model_used, ai_prompt_version,
-		  ai_tokens_used, previous_version)
+		  ai_tokens_used, previous_version, scanner_version)
 		 VALUES (?, ?, ?,
 		         ?, ?, ?,
 		         NULL, NULL,
 		         ?, ?,
 		         ?, ?, ?, ?, ?,
-		         ?, ?)
+		         ?, ?, ?)
 		 ON CONFLICT (artifact_id, previous_artifact, ai_model_used, ai_prompt_version) DO NOTHING`,
 		artifact.ID, prevID, time.Now().UTC(),
 		resp.FilesAdded, resp.FilesModified, resp.FilesRemoved,
@@ -455,7 +455,7 @@ func (s *VersionDiffScanner) persistRow(
 		string(findingsJSON),
 		strings.ToUpper(resp.Verdict), resp.Confidence, truncateUTF8(resp.Explanation, 500),
 		modelName, prompt,
-		resp.TokensUsed, prevVersion,
+		resp.TokensUsed, prevVersion, scannerVersion,
 	)
 	if err != nil {
 		log.Warn().Err(err).Str("artifact", artifact.ID).

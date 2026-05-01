@@ -62,9 +62,14 @@ scanners:
     allowlist: []
     min_confidence: 0.6             # SUSPICIOUS below this -> CLEAN + audit_log
     per_package_rate_limit: 10      # LLM calls / hour / package; 0 = unlimited
-    daily_cost_limit_usd: 5.0
+    daily_cost_limit_usd: 5.0       # ADVISORY only in v2.0 — see "Cost monitoring" below
     circuit_breaker_threshold: 5    # consecutive failures -> 60 s degraded mode
 ```
+
+> **`daily_cost_limit_usd` is advisory in v2.0.** The scanner records token usage in
+> `version_diff_results.ai_tokens_used` but does **not** auto-disable on overrun.
+> Use Prometheus alerting on the daily token-sum query (see "Cost monitoring" below).
+> A hard cap is tracked in [docs/plans/follow-ups.md](../plans/follow-ups.md) for v2.1.
 
 ## Verdict mapping
 
@@ -133,6 +138,41 @@ SELECT a.name, COUNT(*) AS suspicious_scans, AVG(vdr.ai_confidence) AS mean_conf
 
 (SQLite syntax differs slightly: replace `now() - INTERVAL '7 days'` with
 `datetime('now', '-7 days')`.)
+
+## Cost monitoring
+
+Daily token usage / approximate spend (Postgres):
+
+```sql
+SELECT DATE(diff_at) AS day,
+       SUM(ai_tokens_used) AS tokens,
+       ROUND(SUM(ai_tokens_used) * 0.0000003 :: numeric, 4) AS approx_cost_usd
+  FROM version_diff_results
+ WHERE diff_at > now() - INTERVAL '7 days'
+   AND ai_model_used IS NOT NULL  -- v2.0 rows only
+ GROUP BY day ORDER BY day;
+```
+
+`daily_cost_limit_usd` in the config is **advisory** — the field gates
+nothing in v2.0. Operators are expected to wire a Prometheus alert that
+runs the query above and pages on overrun. A hard cap (auto-disable on
+overrun) is tracked in [docs/plans/follow-ups.md](../plans/follow-ups.md)
+for v2.1.
+
+## Retention
+
+The table grows ~1 row per (new, prev) pair scanned. To cap unbounded
+growth, [`internal/scheduler/version_diff_retention.go`](../../internal/scheduler/version_diff_retention.go)
+runs a daily DELETE of `verdict = 'CLEAN'` rows older than 90 days.
+
+- **SUSPICIOUS+ rows are kept indefinitely** as audit evidence. If you
+  need to prune, do it manually with a tracked SQL DELETE.
+- The retention task starts only when `scanners.version_diff.enabled: true`.
+- Migration 025 adds an index on `(verdict, diff_at)` so the daily DELETE
+  is cheap even at millions of rows.
+- Migration 025 also adds a `scanner_version` column. New rows from v2.0+
+  write `'2.0.0'`; legacy v1.x rows have NULL. Future UI filtering can
+  use `WHERE scanner_version >= '2'` to discriminate.
 
 ## Migration from v1.x
 

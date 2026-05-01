@@ -22,7 +22,7 @@
 | 7.5 | Pre-rollout validation | [plan-7-5-pre-rollout-validation.md](./2026-04-30-version-diff-ai-rebuild-plan-7-5-pre-rollout-validation.md) | 🔨 In progress (tools shipped; replay against prod data is operational) | Phase 7 |
 | 8a | Shadow rollout (7 days) | [plan-8a-shadow-rollout.md](./2026-04-30-version-diff-ai-rebuild-plan-8a-shadow-rollout.md) | ⬚ Not started | Phase 7.5 |
 | 8b | Activation + E2E | [plan-8b-activation-e2e.md](./2026-04-30-version-diff-ai-rebuild-plan-8b-activation-e2e.md) | ⬚ Not started | Phase 8a |
-| 9 | Retention + cleanup | [plan-9-retention-cleanup.md](./2026-04-30-version-diff-ai-rebuild-plan-9-retention-cleanup.md) | ⬚ Not started | Phase 8b |
+| 9 | Retention + cleanup | [plan-9-retention-cleanup.md](./2026-04-30-version-diff-ai-rebuild-plan-9-retention-cleanup.md) | ✅ Complete (shipped ahead of 8a/8b — code is independent and safe) | Phase 8b (deployment ordering only) |
 
 **Status legend:** ⬚ Not started · 🔨 In progress · ✅ Complete · ⏸ Blocked
 
