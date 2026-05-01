@@ -50,6 +50,18 @@ test-e2e-containerized:
 		-f tests/e2e-shell/docker-compose.e2e.yml \
 		-f tests/e2e-shell/docker-compose.e2e.azurite.yml \
 		down -v --remove-orphans
+	@echo "=== E2E Run 4: AI bridge enabled (Azure OpenAI) — exercises version-diff LLM path ==="
+	@if [ ! -f tests/e2e-shell/.env ]; then \
+		echo "SKIP: tests/e2e-shell/.env missing — copy .env.example and fill in Azure OpenAI creds to run pass 4"; \
+	else \
+		set -a; . tests/e2e-shell/.env; set +a; \
+		SGW_POLICY_MODE=balanced \
+		docker compose -f tests/e2e-shell/docker-compose.e2e.yml up \
+			--abort-on-container-exit --exit-code-from test-runner; \
+		rc=$$?; \
+		docker compose -f tests/e2e-shell/docker-compose.e2e.yml down -v --remove-orphans; \
+		exit $$rc; \
+	fi
 
 lint:
 	go vet ./...

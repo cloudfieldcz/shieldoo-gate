@@ -238,6 +238,21 @@ func (s *VersionDiffScanner) Scan(ctx context.Context, artifact scanner.Artifact
 	// 10. Verdict mapping
 	mapping := s.mapVerdict(resp)
 
+	// Observability: surface successful AI verdicts at INFO level so operators
+	// (and e2e tests) can confirm the bridge actually reached the LLM. UNKNOWN
+	// stays at the default DEBUG via the fail-open path below.
+	if !strings.EqualFold(resp.Verdict, "UNKNOWN") {
+		log.Info().
+			Str("artifact", artifact.ID).
+			Str("prev", prevID).
+			Str("ai_verdict", resp.Verdict).
+			Float32("ai_confidence", resp.Confidence).
+			Str("ai_model", resp.ModelUsed).
+			Int32("ai_tokens", resp.TokensUsed).
+			Bool("input_truncated", resp.InputTruncated).
+			Msg("version-diff: ai scan completed")
+	}
+
 	// 11. Persist (skip on UNKNOWN; also skip on SUSPICIOUS→CLEAN downgrade so
 	// a future prompt improvement can re-evaluate without being shadowed by
 	// a cached "downgraded CLEAN" row).

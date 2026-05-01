@@ -119,20 +119,25 @@ scanners:
       - "-tool"
       - "-sdk"
     allowlist: []
-  # Version diff analysis: enabled in e2e to test diff detection when previous versions are cached.
+  # AI-driven version diff scanner (v2.0). Compares each new package version
+  # against the most recent CLEAN/SUSPICIOUS cached version through the Python
+  # scanner-bridge. The bridge needs AI_SCANNER_ENABLED=true (pass 4 sets it
+  # via tests/e2e-shell/.env); the other passes leave the bridge AI disabled,
+  # so the scanner falls back to UNKNOWN→fail-open and only the wiring is
+  # exercised. `mode: shadow` means the verdict never escalates to policy.
   version_diff:
     enabled: true
-    max_artifact_size_mb: 20
-    max_extracted_size_mb: 200
-    max_extracted_files: 10000
-    scanner_timeout: "10s"
-    entropy_sample_bytes: 8192
+    mode: "shadow"
+    max_artifact_size_mb: 50
+    max_extracted_size_mb: 50
+    max_extracted_files: 5000
+    scanner_timeout: "55s"          # AI calls take 5–20s; outer scanners.timeout 120s gives the +5s buffer
+    bridge_socket: ""               # inherit from scanners.guarddog.bridge_socket
     allowlist: []
-    thresholds:
-      code_volume_ratio: 5.0
-      max_new_files: 20
-      entropy_delta: 2.0
-    sensitive_patterns: []
+    min_confidence: 0.6
+    per_package_rate_limit: 0       # unlimited in e2e for deterministic runs
+    daily_cost_limit_usd: 5.0
+    circuit_breaker_threshold: 5
   # Reputation scanner: enabled in e2e to test upstream metadata risk scoring.
   reputation:
     enabled: true

@@ -131,6 +131,23 @@ test_version_diff() {
     fi
 
     # ------------------------------------------------------------------
+    # 5b. When the AI bridge is enabled, assert the LLM path actually ran.
+    #     The scanner emits "version-diff: ai scan completed" at INFO level
+    #     only when the bridge returned a non-UNKNOWN verdict. With AI
+    #     disabled the bridge returns UNKNOWN (fail-open) and that line
+    #     never appears.
+    # ------------------------------------------------------------------
+    if [ "${AI_SCANNER_ENABLED:-false}" = "true" ]; then
+        if [[ "$gate_logs" == *"docker_logs not available"* ]]; then
+            log_skip "VersionDiff: gate logs unavailable; cannot assert AI path"
+        elif [[ "$gate_logs" == *"version-diff: ai scan completed"* ]]; then
+            log_pass "VersionDiff: AI bridge actually ran (LLM verdict observed in gate logs)"
+        else
+            log_fail "VersionDiff: AI_SCANNER_ENABLED=true but no 'ai scan completed' log line — AI path did not run"
+        fi
+    fi
+
+    # ------------------------------------------------------------------
     # 6. Verify version-diff works for npm via API (skip npm install to
     #    avoid scan-pipeline latency issues in containerized E2E).
     #    test_npm already installs ms:2.1.3 and is-odd:3.0.1 — check
