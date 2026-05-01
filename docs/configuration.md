@@ -72,7 +72,7 @@ cache:
     secret_key_env: ""                 # Env var name for secret key (optional)
   azure_blob:
     account_name: ""                   # Azure storage account name
-    container_name: ""                 # Blob container name (required when backend is "azure_blob")
+    container_name: ""                 # Blob container name (required when backend is "azure_blob"); auto-created at startup if missing
     connection_string_env: ""          # Env var name for connection string (optional)
     prefix: ""                         # Optional key prefix for all blobs
   gcs:

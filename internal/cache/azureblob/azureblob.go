@@ -89,6 +89,19 @@ func NewAzureBlobStore(cfg config.AzureBlobConfig) (*AzureBlobStore, error) {
 		prefix:        strings.TrimSuffix(cfg.Prefix, "/"),
 	}
 
+	// Ensure the container exists. The Azure SDK's UploadFile does not
+	// auto-create the container, so a first-deploy or fresh Azurite/storage
+	// account would otherwise fail every Get/Put with ContainerNotFound.
+	// 409 ContainerAlreadyExists is the expected steady-state response.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := client.CreateContainer(ctx, cfg.ContainerName, nil); err != nil {
+		if !strings.Contains(err.Error(), "ContainerAlreadyExists") {
+			log.Warn().Err(err).Str("container", cfg.ContainerName).
+				Msg("azure blob cache: ensure-container failed; subsequent Get/Put may fail with ContainerNotFound")
+		}
+	}
+
 	log.Info().
 		Str("account_name", cfg.AccountName).
 		Str("container", cfg.ContainerName).
