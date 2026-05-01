@@ -75,3 +75,4 @@ config.yaml
 .deploy/
 # Claude Code local state
 .claude/
+tools/version-diff-replay/known-malicious/out/

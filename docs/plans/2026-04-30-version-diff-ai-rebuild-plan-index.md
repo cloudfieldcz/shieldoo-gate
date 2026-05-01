@@ -19,7 +19,7 @@
 | 6b | Go Scan flow integration | [plan-6b-go-scan-flow.md](./2026-04-30-version-diff-ai-rebuild-plan-6b-go-scan-flow.md) | ✅ Complete | Phases 5, 6a |
 | 6c | Go tests | [plan-6c-go-tests.md](./2026-04-30-version-diff-ai-rebuild-plan-6c-go-tests.md) | ✅ Complete | Phase 6b |
 | 7 | Config + documentation | [plan-7-config-docs.md](./2026-04-30-version-diff-ai-rebuild-plan-7-config-docs.md) | ✅ Complete | Phase 6c |
-| 7.5 | Pre-rollout validation | [plan-7-5-pre-rollout-validation.md](./2026-04-30-version-diff-ai-rebuild-plan-7-5-pre-rollout-validation.md) | ⬚ Not started | Phase 7 |
+| 7.5 | Pre-rollout validation | [plan-7-5-pre-rollout-validation.md](./2026-04-30-version-diff-ai-rebuild-plan-7-5-pre-rollout-validation.md) | 🔨 In progress (tools shipped; replay against prod data is operational) | Phase 7 |
 | 8a | Shadow rollout (7 days) | [plan-8a-shadow-rollout.md](./2026-04-30-version-diff-ai-rebuild-plan-8a-shadow-rollout.md) | ⬚ Not started | Phase 7.5 |
 | 8b | Activation + E2E | [plan-8b-activation-e2e.md](./2026-04-30-version-diff-ai-rebuild-plan-8b-activation-e2e.md) | ⬚ Not started | Phase 8a |
 | 9 | Retention + cleanup | [plan-9-retention-cleanup.md](./2026-04-30-version-diff-ai-rebuild-plan-9-retention-cleanup.md) | ⬚ Not started | Phase 8b |
@@ -84,6 +84,43 @@ before sign-off. Key fixes incorporated across the per-phase files:
   `idx_version_diff_verdict_diff_at` so the daily DELETE is indexed. Test
   uses `strconv.Itoa` instead of a hand-rolled itoa. Daily cost breaker
   explicitly noted as advisory-only with follow-up task.
+
+## Implementation findings (2026-05-01)
+
+While wiring the e2e harness for Phase 7.5 / 8b, two latent bugs in the v2.0
+implementation were uncovered and fixed in the same branch:
+
+- **Scanner-bridge image was missing the version-diff sources.**
+  `scanner-bridge/Dockerfile` did not `COPY diff_scanner.py` or
+  `extractors_diff/`. The bridge crashed on startup with
+  `ModuleNotFoundError: No module named 'diff_scanner'` whenever the new
+  image was deployed — production rollout would have hit this on the very
+  first restart.
+- **Bridge had no read access to the gate cache.** Version-diff sends
+  `previous_path` (a path under `/var/cache/shieldoo-gate/...`) over gRPC,
+  but the `scanner-bridge` container only mounted `bridge-socket:/tmp`.
+  Every diff scan hit `FileNotFoundError`, the bridge returned `UNKNOWN`,
+  the Go scanner fail-opened, and the LLM step was silently bypassed for
+  the entire Phase 5/6 lifetime. Fix: mount `gate-cache:/var/cache/shieldoo-gate:ro`
+  into the bridge in all three compose files
+  (`tests/e2e-shell/docker-compose.e2e.yml`, `docker/docker-compose.yml`,
+  `.deploy/compose.yaml`). Now documented in
+  [`docs/scanners/version-diff.md`](../scanners/version-diff.md#deployment-requirement-shared-cache-mount).
+- **Azure Blob backend did not auto-create the container.**
+  `cache.azureblob` skipped a `CreateContainer` call at init, so a
+  fresh deployment using the Azure Blob backend would 404 on every Get/Put
+  with `ContainerNotFound` until the operator pre-provisioned the container
+  by hand. Fixed in `internal/cache/azureblob/azureblob.go` —
+  `CreateContainerIfNotExists` is invoked at init (idempotent;
+  `ContainerAlreadyExists` is the steady-state response and is silenced).
+
+A new INFO log line `version-diff: ai scan completed` is emitted by the Go
+scanner when the bridge returns a non-UNKNOWN verdict. The e2e suite asserts
+its presence whenever `AI_SCANNER_ENABLED=true`, which would have caught
+the cache-mount bug at the Phase 5 e2e gate had it been in place earlier.
+A 4th e2e pass (`make test-e2e-containerized`, run 4) loads
+`tests/e2e-shell/.env` and exercises the full LLM diff path. All 4 passes
+are now fully green with five `ai scan completed` lines per run.
 
 ## Notes
 
