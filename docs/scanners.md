@@ -68,7 +68,7 @@ Eight scanners are available built-in (six core + typosquatting + version diff).
 | **PTH Inspector** | `pth-inspector` | PyPI | Detects `.pth` files with executable code — the exact attack vector from the LiteLLM incident |
 | **Threat Feed Checker** | `builtin-threat-feed` | PyPI, npm, NuGet, Docker | Fast-path SHA-256 lookup against the local threat feed database. If a match is found, immediately returns `MALICIOUS` |
 | **Typosquat Scanner** | `builtin-typosquat` | PyPI, npm, NuGet, Docker, Maven, RubyGems, Go | Detects typosquatting, homoglyph substitution, combosquatting, and namespace confusion by checking package names against popular packages |
-| **Version Diff Scanner** | `version-diff` | PyPI, npm, NuGet, Maven, RubyGems, Go | Compares new versions against cached previous versions to detect suspicious changes (install hooks, size anomaly, high entropy, new deps) |
+| **Version Diff Scanner (AI-driven, v2.0)** | `version-diff` | PyPI, npm, NuGet, Maven, RubyGems | Compares each new version against its most recent cached predecessor by sending the extracted diff (added/modified/removed files, install hooks, top-level executable code, all secret-redacted) to an LLM that classifies the cross-version delta as CLEAN / SUSPICIOUS / MALICIOUS. Replaces the v1.x static heuristic — see [§ Version Diff Scanner — AI-Driven Cross-Version Analysis (v2.0)](#version-diff-scanner--ai-driven-cross-version-analysis-v20) below and [ADR-005](adr/ADR-005-ai-driven-version-diff.md) |
 
 All built-in scanners are in `internal/scanner/builtin/` (except version-diff in `internal/scanner/versiondiff/`):
 - `hash_verifier.go`

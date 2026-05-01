@@ -101,7 +101,7 @@ Shieldoo Gate ships with a layered scanning pipeline — from fast hash checks t
 | **Threat Feed Checker** | Instant lookup against known-malicious package hashes from the community threat feed | Sync |
 | **Built-in Heuristics** | Static pattern detectors — install-hook injection, data exfiltration, obfuscation, path traversal (.pth) | Sync |
 | **Typosquatting Detection** | Edit distance, homoglyph, combosquatting, and namespace confusion analysis against top 5000 packages per ecosystem | Sync |
-| **Version Diff Analysis** | Compares new versions against cached previous versions — detects anomalous code additions, new install hooks, entropy spikes, new dependencies | Sync |
+| **Version Diff Analysis (AI-driven, v2.0)** | Compares each new package version against its previously cached predecessor (PyPI, npm, NuGet, Maven, RubyGems). Install hooks and top-level executable code from both sides are extracted, secrets redacted, and analysed by an LLM that reasons about cross-version malicious intent — catching maintainer-takeover and dependency-confusion variants that single-version scanners miss. See [docs/scanners/version-diff.md](docs/scanners/version-diff.md) and [ADR-005](docs/adr/ADR-005-ai-driven-version-diff.md). | Sync |
 | **Reputation Scoring** | Queries upstream registry APIs for maintainer history, publication patterns, download counts. Produces a composite risk score from 14 signals (dormant reactivation, yanked versions, ownership change, etc.) | Sync |
 | **GuardDog** | Open-source malware scanner for PyPI & npm (via Python sidecar over gRPC) | Sync |
 | **Trivy** | Vulnerability scanner for container images and filesystem artifacts | Sync |
