@@ -23,6 +23,30 @@ as `CLEAN`, `SUSPICIOUS`, or `MALICIOUS`. The Go side maps the verdict to a
   - The per-package rate limiter has exhausted the hourly quota.
   - The consecutive-failure circuit breaker is open.
 
+## Deployment requirement: shared cache mount
+
+The Python `scanner-bridge` opens the **previous artifact** directly from the
+gate's local filesystem (path arrives in
+`ScanArtifactDiff.previous_path`). For that to work the bridge container
+**must mount the gate cache read-only** at the same path the gate writes to:
+
+```yaml
+# scanner-bridge service in docker-compose / .deploy/compose.yaml
+volumes:
+  - bridge-socket:/tmp                         # already required for gRPC + new artifact
+  - gate-cache:/var/cache/shieldoo-gate:ro     # NEW: required for version-diff (>= v2.0)
+```
+
+Without this mount, every diff scan raises `FileNotFoundError`, the bridge
+returns `UNKNOWN`, and the Go scanner fail-opens. The shipped compose files
+(`tests/e2e-shell/docker-compose.e2e.yml`, `docker/docker-compose.yml`,
+`.deploy/compose.yaml`) already include the mount; custom deployments need
+to mirror it.
+
+The current artifact is reachable through the existing `bridge-socket:/tmp`
+mount — the gate writes downloads into `/tmp/shieldoo-gate-<eco>-*.tmp`,
+which is shared with the bridge.
+
 ## Configuration
 
 ```yaml

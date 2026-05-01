@@ -57,6 +57,12 @@ services:
     platform: linux/amd64
     volumes:
       - e2e-bridge-socket:/tmp
+      # Read-only access to the gate cache so the AI-driven version-diff scanner
+      # can open the previously-cached artifact via the path the gate sends in
+      # ScanArtifactDiff.previous_path. Without this mount the bridge raises
+      # FileNotFoundError, falls back to UNKNOWN, and the gate fail-opens —
+      # silently bypassing the LLM diff step.
+      - e2e-gate-cache:/var/cache/shieldoo-gate:ro
     environment:
       BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
       AI_SCANNER_ENABLED: "${AI_SCANNER_ENABLED:-false}"
@@ -97,6 +103,7 @@ services:
     build:
       context: ../..
       dockerfile: tests/e2e-shell/Dockerfile.test-runner
+    platform: linux/amd64
     depends_on:
       shieldoo-gate:
         condition: service_healthy
@@ -114,8 +121,12 @@ services:
       SGW_ADMIN_URL: "http://shieldoo-gate:8080"
       SGW_DOCKER_PORT: "5002"
       SGW_PUSH_REGISTRY_URL: "http://push-registry:5000"
-      # AI scanner (pass through from host env for test assertions)
+      # AI scanner (pass through from host env for test assertions).
+      # Both Go-side toggle and bridge-side toggle must be visible to the test
+      # script so test_version_diff.sh can decide whether to assert that the
+      # LLM diff path actually ran (only fires when AI_SCANNER_ENABLED=true).
       SGW_SCANNERS_AI_ENABLED: "${SGW_SCANNERS_AI_ENABLED:-false}"
+      AI_SCANNER_ENABLED: "${AI_SCANNER_ENABLED:-false}"
       # Policy mode (pass through from host env for test assertions)
       SGW_POLICY_MODE: "${SGW_POLICY_MODE:-strict}"
       # Proxy auth (pass through from host env)

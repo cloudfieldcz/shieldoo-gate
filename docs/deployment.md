@@ -57,9 +57,9 @@ The `docker/docker-compose.yml` defines two services:
 
 | Volume | Purpose |
 |---|---|
-| `bridge-socket` | Shared Unix socket for gRPC communication between Go and Python |
+| `bridge-socket` | Shared Unix socket for gRPC + the gate's `/tmp` download staging area (the bridge reads new artifacts directly from this path) |
 | `gate-data` | SQLite database (`/var/lib/shieldoo-gate/`) |
-| `gate-cache` | Cached artifacts (`/var/cache/shieldoo-gate/`) |
+| `gate-cache` | Cached artifacts (`/var/cache/shieldoo-gate/`). **Also mounted read-only into `scanner-bridge`** so the AI-driven version-diff scanner can open the previous artifact. |
 | `trivy-cache` | Trivy vulnerability database (`/var/cache/trivy/`) |
 
 **Port mapping:**

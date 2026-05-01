@@ -35,9 +35,11 @@ COPY proto/ proto/
 RUN python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. proto/scanner.proto
 
 COPY extractors/ extractors/
+COPY extractors_diff/ extractors_diff/
 COPY prompts/ prompts/
 COPY ai_scanner.py .
 COPY ai_triage.py .
+COPY diff_scanner.py .
 COPY main.py .
 
 ENV BRIDGE_SOCKET=/tmp/shieldoo-bridge.sock

@@ -42,6 +42,10 @@ services:
     platform: linux/amd64
     volumes:
       - bridge-socket:/tmp
+      # Read-only access to the gate cache for AI-driven version-diff:
+      # the bridge needs to open the previously-cached artifact via the
+      # path the gate sends in ScanArtifactDiff.previous_path.
+      - gate-cache:/var/cache/shieldoo-gate:ro
     environment:
       BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
       AI_SCANNER_ENABLED: "${AI_SCANNER_ENABLED:-false}"
