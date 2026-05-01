@@ -41,6 +41,31 @@ metric `version_diff_cost_breaker_open=1`.
 different windows (e.g. high-volume environments wanting 30 days), promote
 the constant to `scanners.version_diff.retention_days` with a default of 90.
 
+### Replay tool: blob-storage backend support (no target date)
+
+**Source:** [Phase 7.5](./2026-04-30-version-diff-ai-rebuild-plan-7-5-pre-rollout-validation.md), historical-FP replay attempt 2026-05-01.
+
+**Currently shipped:** [`tools/version-diff-replay/main.go`](../../tools/version-diff-replay/main.go)
+opens cached artifacts directly from the filesystem path stored in
+`artifacts.storage_path`.
+
+**Missing:** when the gate is configured with `cache.backend: azure_blob`
+(or `s3` / `gcs`), `storage_path` is a transient `/tmp/shieldoo-gate-…tmp`
+download path that does not survive container restarts. The replay tool
+reports every row as "new artifact not on disk" and skips it, defeating
+the historical-FP measurement.
+
+**Why deferred:** the production gate at `shieldoo-gate.cloudfield.cz`
+runs the Azure Blob backend, so the historical-FP rate measurement was
+delegated to the live shadow window (the v2.0 scanner sees real prod
+traffic in shadow mode for 7 days). The known-malicious test set
+provides FN coverage independent of the replay tool.
+
+**What would unblock it:** make the replay tool import
+`internal/cache/...` and call `cache.Get(ctx, artifactID)` through the
+configured backend (passing config via env or flags). That gives the
+tool the same artifact-resolution semantics the gate uses.
+
 ### UI filter for v1.x vs v2.0+ rows (out of scope for backend)
 
 **Source:** [Phase 9](./2026-04-30-version-diff-ai-rebuild-plan-9-retention-cleanup.md).

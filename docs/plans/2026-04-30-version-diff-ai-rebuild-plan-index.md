@@ -19,8 +19,8 @@
 | 6b | Go Scan flow integration | [plan-6b-go-scan-flow.md](./2026-04-30-version-diff-ai-rebuild-plan-6b-go-scan-flow.md) | ✅ Complete | Phases 5, 6a |
 | 6c | Go tests | [plan-6c-go-tests.md](./2026-04-30-version-diff-ai-rebuild-plan-6c-go-tests.md) | ✅ Complete | Phase 6b |
 | 7 | Config + documentation | [plan-7-config-docs.md](./2026-04-30-version-diff-ai-rebuild-plan-7-config-docs.md) | ✅ Complete | Phase 6c |
-| 7.5 | Pre-rollout validation | [plan-7-5-pre-rollout-validation.md](./2026-04-30-version-diff-ai-rebuild-plan-7-5-pre-rollout-validation.md) | 🔨 In progress (tools shipped; replay against prod data is operational) | Phase 7 |
-| 8a | Shadow rollout (7 days) | [plan-8a-shadow-rollout.md](./2026-04-30-version-diff-ai-rebuild-plan-8a-shadow-rollout.md) | ⬚ Not started | Phase 7.5 |
+| 7.5 | Pre-rollout validation | [plan-7-5-pre-rollout-validation.md](./2026-04-30-version-diff-ai-rebuild-plan-7-5-pre-rollout-validation.md) | ✅ Complete (known-malicious 10/10 PASS; historical replay deferred — see findings) | Phase 7 |
+| 8a | Shadow rollout (7 days) | [plan-8a-shadow-rollout.md](./2026-04-30-version-diff-ai-rebuild-plan-8a-shadow-rollout.md) | 🔨 Deployed 2026-05-01 — observation in progress | Phase 7.5 |
 | 8b | Activation + E2E | [plan-8b-activation-e2e.md](./2026-04-30-version-diff-ai-rebuild-plan-8b-activation-e2e.md) | ⬚ Not started | Phase 8a |
 | 9 | Retention + cleanup | [plan-9-retention-cleanup.md](./2026-04-30-version-diff-ai-rebuild-plan-9-retention-cleanup.md) | ✅ Complete (shipped ahead of 8a/8b — code is independent and safe) | Phase 8b (deployment ordering only) |
 
@@ -121,6 +121,74 @@ the cache-mount bug at the Phase 5 e2e gate had it been in place earlier.
 A 4th e2e pass (`make test-e2e-containerized`, run 4) loads
 `tests/e2e-shell/.env` and exercises the full LLM diff path. All 4 passes
 are now fully green with five `ai scan completed` lines per run.
+
+## Tagged release + production deployment (2026-05-01)
+
+`v0.6.0` was cut from `main` (commit `4dded6d`) and the GitHub Actions
+release workflow built and pushed both `ghcr.io/cloudfieldcz/shieldoo-gate:0.6.0`
+and `ghcr.io/cloudfieldcz/scanner-bridge:0.6.0`. The production stack at
+`shieldoo-gate.cloudfield.cz` was updated:
+
+- `.deploy/.env` pinned to `SGW_VERSION=0.6.0` (no longer floating on `latest`).
+- `.deploy/config.yaml` enables `scanners.version_diff` with `mode: "shadow"`
+  and the full v2.0 config block. `scanners.timeout: "60s"` was already in
+  place from earlier work.
+- `.deploy/compose.yaml` adds `mem_limit: 2g` to the bridge container.
+- A pre-deploy `pg_dump` backup was taken (14 MB, 21 tables) — kept locally
+  at `/tmp/sg-backup-20260501-1115.sql` on the operator's machine.
+- `docker compose pull && up -d --force-recreate` succeeded; both gate and
+  bridge came up clean. Migrations 024 and 025 applied automatically.
+- Smoke-test of `\d version_diff_results` confirms the AI columns,
+  `scanner_version`, the `idx_version_diff_verdict_diff_at` retention
+  index, and `uq_version_diff_pair` are all present.
+- The retention scheduler logged `version-diff retention: pruned CLEAN
+  rows rows_deleted=0 cutoff=2026-01-31` on the immediate-run pass —
+  expected for a fresh table.
+
+### Phase 7.5 known-malicious validation against the deployed bridge
+
+The replay tool was cross-compiled (`CGO_ENABLED=0 GOOS=linux`), the proto
+file copied to the prod box, and the 10-case synthetic-malicious set
+generated locally and `scp`'d into the running bridge container at
+`/tmp/cases/`. Each case was driven through `grpcurl` against the bridge's
+`unix:///tmp/sock/shieldoo-bridge.sock`:
+
+| Case | Expected | Actual | Confidence |
+|------|----------|--------|------------|
+| pypi-curl-pipe-sh | SUSPICIOUS | MALICIOUS | 0.99 |
+| pypi-pth-import-hook | SUSPICIOUS | MALICIOUS | 0.99 |
+| npm-postinstall-evil | SUSPICIOUS | MALICIOUS | 0.99 |
+| pypi-aws-cred-read | SUSPICIOUS | MALICIOUS | 0.99 |
+| pypi-imds-query | SUSPICIOUS | MALICIOUS | 0.99 |
+| npm-base64-exec | SUSPICIOUS | MALICIOUS | 0.99 |
+| nuget-install-ps1-network | SUSPICIOUS | MALICIOUS | 0.99 |
+| rubygems-extconf-spawn | SUSPICIOUS | MALICIOUS | 0.99 |
+| pypi-clean-bump | CLEAN | CLEAN | 0.99 |
+| npm-clean-docs | CLEAN | CLEAN | 0.99 |
+
+**Result: 10 / 10 PASS.** The bridge logged 10 INFO lines
+`diff_scanner: calling LLM model=gpt-5.4-mini system_prompt_version=bf40690ec8a0`
+with the prompt SHA reflecting the production prompt file. The Go-side
+asymmetric downgrade (MALICIOUS → SUSPICIOUS) was not exercised here
+because the replay used grpcurl directly against the bridge — verdicts
+above are the bridge's raw classifications, which the gate would map to
+SUSPICIOUS in the active path.
+
+### Phase 7.5 historical-FP replay: deferred (Azure Blob backend mismatch)
+
+The replay tool reads cached artifacts via `os.Open(storage_path)`,
+which assumes the local-filesystem cache backend. **Production uses
+Azure Blob Storage** (`cache.backend: azure_blob`), so the
+`storage_path` column on rows produced before v2.0 is a transient
+`/tmp/shieldoo-gate-{eco}-N.tmp` path that does not survive container
+restarts. All 100 sampled SUSPICIOUS rows reported "new artifact not on
+disk" and were skipped.
+
+**Decision:** the historical-FP measurement is deferred to the live
+shadow window (Phase 8a). The known-malicious set above provides FN
+coverage independently. To unlock historical replay against blob-backed
+deployments, the replay tool would need to call `cache.Get()` through
+the storage backend interface (tracked in `docs/plans/follow-ups.md`).
 
 ## Notes
 
