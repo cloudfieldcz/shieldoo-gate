@@ -254,6 +254,136 @@ test_typosquat() {
     fi
 
     # ------------------------------------------------------------------
+    # 6e. NuGet typosquat: "Newtonsoft.Jsom" is ed=1 from "Newtonsoft.Json".
+    # The pre-scan hook in handleRegistration must block it before any
+    # upstream call, persist the synthetic row at nuget:Newtonsoft.Jsom:*,
+    # and the override Release must let subsequent requests through.
+    # ------------------------------------------------------------------
+    local nuget_typo_status
+    nuget_typo_status=$(curl -s -o /dev/null -w "%{http_code}" \
+        "${E2E_CURL_AUTH[@]}" \
+        "${E2E_NUGET_URL}/v3/registration/Newtonsoft.Jsom/index.json")
+    if [ "$nuget_typo_status" = "403" ]; then
+        log_pass "Typosquat: NuGet typosquat 'Newtonsoft.Jsom' blocked with HTTP 403"
+        local nuget_id_enc="nuget:Newtonsoft.Jsom:%2A"
+        local nuget_status_persist
+        nuget_status_persist=$(api_jq "/api/v1/artifacts/${nuget_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
+        assert_eq "Typosquat: NuGet synthetic row persisted as QUARANTINED (version=*)" \
+            "QUARANTINED" "$nuget_status_persist"
+        # Release and verify it sticks.
+        curl -sf -X POST "${E2E_ADMIN_URL}/api/v1/artifacts/${nuget_id_enc}/release" >/dev/null 2>&1 || true
+        local nuget_after_release
+        nuget_after_release=$(api_jq "/api/v1/artifacts/${nuget_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
+        assert_eq "Typosquat: NuGet status CLEAN after release" "CLEAN" "$nuget_after_release"
+    else
+        log_skip "Typosquat: NuGet 'Newtonsoft.Jsom' returned HTTP $nuget_typo_status (skipping override sub-tests)"
+    fi
+
+    # ------------------------------------------------------------------
+    # 6f. Maven typosquat: 4-segment ID maven:com.google.guava:guave:*.
+    # URL-encoding for Release: the trailing `*` becomes %2A.
+    # ------------------------------------------------------------------
+    local maven_typo_status
+    maven_typo_status=$(curl -s -o /dev/null -w "%{http_code}" \
+        "${E2E_CURL_AUTH[@]}" \
+        "${E2E_MAVEN_URL}/com/google/guava/guave/32.0.1-jre/guave-32.0.1-jre.jar")
+    if [ "$maven_typo_status" = "403" ]; then
+        log_pass "Typosquat: Maven typosquat 'com.google.guava:guave' blocked with HTTP 403"
+        local maven_id_enc="maven:com.google.guava:guave:%2A"
+        local maven_status_persist
+        maven_status_persist=$(api_jq "/api/v1/artifacts/${maven_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
+        assert_eq "Typosquat: Maven 4-segment synthetic row persisted as QUARANTINED" \
+            "QUARANTINED" "$maven_status_persist"
+        curl -sf -X POST "${E2E_ADMIN_URL}/api/v1/artifacts/${maven_id_enc}/release" >/dev/null 2>&1 || true
+        local maven_after_release
+        maven_after_release=$(api_jq "/api/v1/artifacts/${maven_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
+        assert_eq "Typosquat: Maven status CLEAN after release" "CLEAN" "$maven_after_release"
+    else
+        log_skip "Typosquat: Maven 'com.google.guava:guave' returned HTTP $maven_typo_status"
+    fi
+
+    # ------------------------------------------------------------------
+    # 6g. RubyGems typosquat: "railz" is ed=1 from "rails".
+    # ------------------------------------------------------------------
+    local rubygems_typo_status
+    rubygems_typo_status=$(curl -s -o /dev/null -w "%{http_code}" \
+        "${E2E_CURL_AUTH[@]}" \
+        "${E2E_RUBYGEMS_URL}/gems/railz-7.1.3.gem")
+    if [ "$rubygems_typo_status" = "403" ]; then
+        log_pass "Typosquat: RubyGems typosquat 'railz' blocked with HTTP 403"
+        local rubygems_id_enc="rubygems:railz:%2A"
+        local rubygems_status_persist
+        rubygems_status_persist=$(api_jq "/api/v1/artifacts/${rubygems_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
+        assert_eq "Typosquat: RubyGems synthetic row persisted as QUARANTINED" \
+            "QUARANTINED" "$rubygems_status_persist"
+        curl -sf -X POST "${E2E_ADMIN_URL}/api/v1/artifacts/${rubygems_id_enc}/release" >/dev/null 2>&1 || true
+        local rubygems_after_release
+        rubygems_after_release=$(api_jq "/api/v1/artifacts/${rubygems_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
+        assert_eq "Typosquat: RubyGems status CLEAN after release" "CLEAN" "$rubygems_after_release"
+    else
+        log_skip "Typosquat: RubyGems 'railz' returned HTTP $rubygems_typo_status"
+    fi
+
+    # ------------------------------------------------------------------
+    # 6h. gomod typosquat: "github.com/spf13/vipper" is ed=1 from
+    # "github.com/spf13/viper". The block returns HTTP 410 Gone (GOPROXY
+    # convention), and the slash-bearing artifact ID requires both %2F
+    # (slashes) and %2A (star) URL-encoding for the Release endpoint.
+    # ------------------------------------------------------------------
+    local gomod_typo_status
+    gomod_typo_status=$(curl -s -o /dev/null -w "%{http_code}" \
+        "${E2E_CURL_AUTH[@]}" \
+        "${E2E_GOMOD_URL}/github.com/spf13/vipper/@v/v1.0.0.info")
+    if [ "$gomod_typo_status" = "410" ]; then
+        log_pass "Typosquat: gomod typosquat 'github.com/spf13/vipper' blocked with HTTP 410"
+        local gomod_id_enc="go:github.com%2Fspf13%2Fvipper:%2A"
+        local gomod_status_persist
+        gomod_status_persist=$(api_jq "/api/v1/artifacts/${gomod_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
+        assert_eq "Typosquat: gomod synthetic row persisted as QUARANTINED" \
+            "QUARANTINED" "$gomod_status_persist"
+        curl -sf -X POST "${E2E_ADMIN_URL}/api/v1/artifacts/${gomod_id_enc}/release" >/dev/null 2>&1 || true
+        local gomod_after_release
+        gomod_after_release=$(api_jq "/api/v1/artifacts/${gomod_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
+        assert_eq "Typosquat: gomod status CLEAN after release" "CLEAN" "$gomod_after_release"
+    else
+        log_skip "Typosquat: gomod 'github.com/spf13/vipper' returned HTTP $gomod_typo_status"
+    fi
+
+    # gomod /@v/list and /@latest must NOT be gated (decision B).
+    local gomod_list_status
+    gomod_list_status=$(curl -s -o /dev/null -w "%{http_code}" \
+        "${E2E_CURL_AUTH[@]}" \
+        "${E2E_GOMOD_URL}/github.com/spf13/vipper/@v/list")
+    if [ "$gomod_list_status" = "410" ]; then
+        log_fail "Typosquat: gomod /@v/list must not be gated (decision B), got 410"
+    else
+        log_pass "Typosquat: gomod /@v/list passes through without typosquat block (HTTP $gomod_list_status)"
+    fi
+
+    # ------------------------------------------------------------------
+    # 6i. Docker typosquat: "library/nginxx" — pre-scan strips library/
+    # for Docker Hub before consulting the bare-name seed.
+    # ------------------------------------------------------------------
+    local docker_typo_status
+    docker_typo_status=$(curl -s -o /dev/null -w "%{http_code}" \
+        "${E2E_CURL_AUTH[@]}" \
+        "${E2E_DOCKER_URL}/v2/library/nginxx/manifests/latest")
+    if [ "$docker_typo_status" = "403" ]; then
+        log_pass "Typosquat: Docker 'library/nginxx' blocked with HTTP 403"
+        local docker_id_enc="docker:docker_io_library_nginxx:%2A"
+        local docker_status_persist
+        docker_status_persist=$(api_jq "/api/v1/artifacts/${docker_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
+        assert_eq "Typosquat: Docker synthetic row persisted as QUARANTINED" \
+            "QUARANTINED" "$docker_status_persist"
+        curl -sf -X POST "${E2E_ADMIN_URL}/api/v1/artifacts/${docker_id_enc}/release" >/dev/null 2>&1 || true
+        local docker_after_release
+        docker_after_release=$(api_jq "/api/v1/artifacts/${docker_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
+        assert_eq "Typosquat: Docker status CLEAN after release" "CLEAN" "$docker_after_release"
+    else
+        log_skip "Typosquat: Docker 'library/nginxx' returned HTTP $docker_typo_status"
+    fi
+
+    # ------------------------------------------------------------------
     # 7. Verify gate logs contain typosquat scanner activity
     # ------------------------------------------------------------------
     local gate_logs

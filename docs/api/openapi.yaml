@@ -265,9 +265,16 @@ paths:
         Releases the artifact and creates a policy override so it is not re-quarantined.
         The override scope is normally `version` (specific version only). If the artifact's
         stored `version` is the typosquat placeholder `*` — produced by the typosquat
-        pre-scan when no version was known at the time of the block (e.g. npm metadata
-        fetches) — the override is created with scope `package`, covering all versions of
-        the package.
+        pre-scan across PyPI, npm, NuGet, Maven, RubyGems, gomod, and Docker — the override
+        is created with scope `package`, covering all versions of the name. The placeholder
+        applies uniformly to typosquat blocks regardless of whether the original request
+        carried a version, because typosquat detection is name-based.
+
+        Artifact IDs may need URL encoding when they contain special characters: `%2A` for
+        the trailing `*` (typosquat synthetic rows), and `%2F` for slashes inside gomod
+        module paths (e.g. `go:github.com%2Fspf13%2Fviper:%2A`). Maven typosquat IDs are
+        4-segment (`maven:groupId:artifactId:%2A`) and round-trip through the Release
+        endpoint without further encoding of the colons.
       operationId: releaseArtifact
       tags: [artifacts]
       responses:
