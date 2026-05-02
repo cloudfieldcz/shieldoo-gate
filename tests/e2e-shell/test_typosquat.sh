@@ -184,8 +184,10 @@ test_typosquat() {
     # the legitimate fetch). Exercises the PyPI flow end-to-end.
     # ------------------------------------------------------------------
     # Trigger a PyPI typosquat block by fetching a tarball URL with a
-    # typosquat name. parseFilename extracts version from the filename,
-    # so the synthetic artifact ID is "pypi:requestes:1.0.0".
+    # typosquat name. Phase 0 of the rollout switched all typosquat synthetic
+    # rows to version="*" (decision C) regardless of whether the original
+    # request carried a version, so the synthetic artifact ID is
+    # "pypi:requestes:*", URL-encoded as "pypi:requestes:%2A".
     local pypi_typo_block_status
     pypi_typo_block_status=$(curl -s -o /dev/null -w "%{http_code}" \
         "${E2E_CURL_AUTH[@]}" \
@@ -196,7 +198,7 @@ test_typosquat() {
         log_pass "Typosquat regression (pypi): 'requestes' blocked with HTTP 403"
 
         # Synthetic row should exist as QUARANTINED with empty sha256.
-        local pypi_typo_id_enc="pypi:requestes:1.0.0"
+        local pypi_typo_id_enc="pypi:requestes:%2A"
         local pypi_typo_status pypi_typo_sha
         pypi_typo_status=$(api_jq "/api/v1/artifacts/${pypi_typo_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
         pypi_typo_sha=$(api_jq "/api/v1/artifacts/${pypi_typo_id_enc}" '.sha256 // ""' 2>/dev/null || echo "")
@@ -246,9 +248,12 @@ test_typosquat() {
             "CLEAN" "$pypi_final_status"
 
         # And no INTEGRITY_VIOLATION event for this artifact in the audit log.
+        # The audit_log.artifact_id column stores the literal (unencoded)
+        # ID, so the jq filter uses the unencoded form, not %2A.
+        local pypi_typo_id_literal="pypi:requestes:*"
         local integrity_events
         integrity_events=$(api_jq "/api/v1/audit?event_type=INTEGRITY_VIOLATION&per_page=200" \
-            "[.data[] | select(.artifact_id == \"${pypi_typo_id_enc}\")] | length" 2>/dev/null || echo "0")
+            "[.data[] | select(.artifact_id == \"${pypi_typo_id_literal}\")] | length" 2>/dev/null || echo "0")
         assert_eq "Typosquat regression (pypi): no INTEGRITY_VIOLATION event for synthetic row" \
             "0" "$integrity_events"
     fi
