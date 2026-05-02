@@ -300,3 +300,106 @@ func TestInsertScanResults_EmptySlice_NoError(t *testing.T) {
 	// Empty results should succeed (commit an empty transaction).
 	require.NoError(t, adapter.InsertScanResults(db, "pypi:foo:1.0.0", nil))
 }
+
+// ---------------------------------------------------------------------------
+// PersistTyposquatBlock
+// ---------------------------------------------------------------------------
+
+func TestPersistTyposquatBlock_NameOnly_UsesPlaceholder(t *testing.T) {
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	result := scanner.ScanResult{
+		ScannerID:  "builtin-typosquat",
+		Verdict:    scanner.VerdictSuspicious,
+		Confidence: 0.85,
+		ScannedAt:  now,
+		Findings: []scanner.Finding{{
+			Category:    "edit-distance",
+			Severity:    scanner.SeverityHigh,
+			Description: "lodsah is similar to lodash",
+		}},
+	}
+
+	artifactID := "npm:lodsah:" + adapter.TyposquatPlaceholderVersion
+	require.NoError(t, adapter.PersistTyposquatBlock(db, artifactID, scanner.EcosystemNPM, "lodsah", "", result, now))
+
+	// artifacts row exists with placeholder version
+	var version, name string
+	require.NoError(t, db.QueryRow(`SELECT version, name FROM artifacts WHERE id = ?`, artifactID).Scan(&version, &name))
+	assert.Equal(t, adapter.TyposquatPlaceholderVersion, version)
+	assert.Equal(t, "lodsah", name)
+
+	// status is QUARANTINED with a typosquat reason
+	status, err := adapter.GetArtifactStatus(db, artifactID)
+	require.NoError(t, err)
+	require.NotNil(t, status)
+	assert.Equal(t, model.StatusQuarantined, status.Status)
+	assert.Contains(t, status.QuarantineReason, "typosquat")
+	assert.Contains(t, status.QuarantineReason, "lodash")
+
+	// scan_results row recorded with typosquat scanner ID
+	var scannerName string
+	require.NoError(t, db.QueryRow(`SELECT scanner_name FROM scan_results WHERE artifact_id = ?`, artifactID).Scan(&scannerName))
+	assert.Equal(t, "builtin-typosquat", scannerName)
+}
+
+func TestPersistTyposquatBlock_WithVersion_PreservesVersion(t *testing.T) {
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	result := scanner.ScanResult{
+		ScannerID:  "builtin-typosquat",
+		Verdict:    scanner.VerdictSuspicious,
+		Confidence: 0.85,
+		ScannedAt:  now,
+		Findings: []scanner.Finding{{
+			Category:    "edit-distance",
+			Severity:    scanner.SeverityHigh,
+			Description: "reqeusts is similar to requests",
+		}},
+	}
+
+	artifactID := "pypi:reqeusts:1.0.0:reqeusts-1.0.0.tar.gz"
+	require.NoError(t, adapter.PersistTyposquatBlock(db, artifactID, scanner.EcosystemPyPI, "reqeusts", "1.0.0", result, now))
+
+	var version string
+	require.NoError(t, db.QueryRow(`SELECT version FROM artifacts WHERE id = ?`, artifactID).Scan(&version))
+	assert.Equal(t, "1.0.0", version)
+}
+
+func TestPersistTyposquatBlock_RepeatedCalls_AreIdempotent(t *testing.T) {
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	result := scanner.ScanResult{
+		ScannerID:  "builtin-typosquat",
+		Verdict:    scanner.VerdictSuspicious,
+		Confidence: 0.85,
+		ScannedAt:  now,
+		Findings: []scanner.Finding{{
+			Category:    "edit-distance",
+			Severity:    scanner.SeverityHigh,
+			Description: "lodsah is similar to lodash",
+		}},
+	}
+
+	artifactID := "npm:lodsah:" + adapter.TyposquatPlaceholderVersion
+	require.NoError(t, adapter.PersistTyposquatBlock(db, artifactID, scanner.EcosystemNPM, "lodsah", "", result, now))
+	require.NoError(t, adapter.PersistTyposquatBlock(db, artifactID, scanner.EcosystemNPM, "lodsah", "", result, now))
+
+	// Single artifacts row, but two scan_results entries (history-style).
+	var artifactCount int
+	require.NoError(t, db.Get(&artifactCount, `SELECT COUNT(*) FROM artifacts WHERE id = ?`, artifactID))
+	assert.Equal(t, 1, artifactCount)
+
+	var scanCount int
+	require.NoError(t, db.Get(&scanCount, `SELECT COUNT(*) FROM scan_results WHERE artifact_id = ?`, artifactID))
+	assert.Equal(t, 2, scanCount)
+}

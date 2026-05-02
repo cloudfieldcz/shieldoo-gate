@@ -257,6 +257,122 @@ func TestNPMAdapter_VitestNotBlocked_RegressionForTyposquatFalsePositive(t *test
 	assert.NotContains(t, w.Body.String(), "typosquatting detected")
 }
 
+// setupTestNPMOverrideAware wires the typosquat scanner AND the policy engine
+// against a shared in-memory DB, so HasOverride() can read policy_overrides.
+// Returns the adapter, the upstream, and the DB so tests can seed overrides
+// and inspect persisted typosquat-block rows.
+func setupTestNPMOverrideAware(t *testing.T, upstreamHandler http.HandlerFunc) (*npm.NPMAdapter, *httptest.Server, *config.GateDB) {
+	t.Helper()
+	upstream := httptest.NewServer(upstreamHandler)
+	t.Cleanup(upstream.Close)
+
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	cacheStore, err := local.NewLocalCacheStore(t.TempDir(), 10)
+	require.NoError(t, err)
+
+	tsq, err := builtin.NewTyposquatScanner(db, config.TyposquatConfig{
+		Enabled:          true,
+		MaxEditDistance:  2,
+		TopPackagesCount: 5000,
+	})
+	require.NoError(t, err)
+
+	scanEngine := scanner.NewEngine([]scanner.Scanner{tsq}, 30*time.Second, 0)
+	policyEngine := policy.NewEngine(policy.EngineConfig{
+		BlockIfVerdict:      scanner.VerdictMalicious,
+		QuarantineIfVerdict: scanner.VerdictSuspicious,
+		MinimumConfidence:   0.7,
+	}, db)
+	a := npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL, config.TagMutabilityConfig{})
+	return a, upstream, db
+}
+
+// TestNPMAdapter_TyposquatBlock_PersistsArtifactRow verifies that a 403'd
+// typosquat name produces a synthetic artifacts/artifact_status/scan_results
+// triple so admins can manage it from the Artifacts pane.
+func TestNPMAdapter_TyposquatBlock_PersistsArtifactRow(t *testing.T) {
+	a, _, db := setupTestNPMOverrideAware(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("upstream must not be reached for blocked typosquat")
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/lodahs", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusForbidden, w.Code)
+
+	artifactID := "npm:lodahs:*"
+
+	// artifacts row exists with placeholder version
+	var name, version string
+	require.NoError(t, db.QueryRow(`SELECT name, version FROM artifacts WHERE id = ?`, artifactID).Scan(&name, &version))
+	assert.Equal(t, "lodahs", name)
+	assert.Equal(t, "*", version)
+
+	// status is QUARANTINED
+	var status, reason string
+	require.NoError(t, db.QueryRow(`SELECT status, COALESCE(quarantine_reason,'') FROM artifact_status WHERE artifact_id = ?`, artifactID).Scan(&status, &reason))
+	assert.Equal(t, "QUARANTINED", status)
+	assert.Contains(t, reason, "typosquat")
+
+	// scan_results row recorded
+	var scannerName string
+	require.NoError(t, db.QueryRow(`SELECT scanner_name FROM scan_results WHERE artifact_id = ?`, artifactID).Scan(&scannerName))
+	assert.Equal(t, "builtin-typosquat", scannerName)
+}
+
+// TestNPMAdapter_TyposquatPackageOverride_AllowsThrough verifies that an active
+// package-scoped override suppresses the typosquat pre-scan block and lets
+// the request reach upstream as if the package were never flagged.
+func TestNPMAdapter_TyposquatPackageOverride_AllowsThrough(t *testing.T) {
+	upstreamHit := false
+	a, _, db := setupTestNPMOverrideAware(t, func(w http.ResponseWriter, r *http.Request) {
+		upstreamHit = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"name":"lodahs","versions":{}}`))
+	})
+
+	now := time.Now().UTC()
+	_, err := db.Exec(
+		`INSERT INTO policy_overrides (ecosystem, name, version, scope, reason, created_by, created_at, revoked)
+		 VALUES ('npm', 'lodahs', '', 'package', 'manual release', 'test', ?, 0)`, now)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/lodahs", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code, "package-scope override must suppress typosquat block")
+	assert.True(t, upstreamHit, "request must reach upstream after override")
+
+	// No synthetic artifact row should be persisted on the override path.
+	var count int
+	require.NoError(t, db.Get(&count, `SELECT COUNT(*) FROM artifacts WHERE id = 'npm:lodahs:*'`))
+	assert.Equal(t, 0, count, "override path must not persist a quarantined block row")
+}
+
+// TestNPMAdapter_TyposquatBlockTwice_IsIdempotent ensures the persistence
+// layer tolerates repeated blocks for the same name without producing
+// duplicate artifact rows.
+func TestNPMAdapter_TyposquatBlockTwice_IsIdempotent(t *testing.T) {
+	a, _, db := setupTestNPMOverrideAware(t, func(w http.ResponseWriter, r *http.Request) {})
+
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/lodahs", nil)
+		w := httptest.NewRecorder()
+		a.ServeHTTP(w, req)
+		require.Equal(t, http.StatusForbidden, w.Code)
+	}
+
+	var artCount int
+	require.NoError(t, db.Get(&artCount, `SELECT COUNT(*) FROM artifacts WHERE id = 'npm:lodahs:*'`))
+	assert.Equal(t, 1, artCount, "repeated typosquat blocks must reuse the same artifact row")
+}
+
 // TestNPMAdapter_TyposquatStillBlocksGenuineSquats is the positive control:
 // a genuine typosquat (close to a popular package but not itself popular) MUST
 // still be blocked, ensuring the seed expansion did not disable the scanner.

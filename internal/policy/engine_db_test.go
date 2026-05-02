@@ -134,6 +134,63 @@ func TestEngine_Evaluate_ExpiredDBOverride_StillBlocks(t *testing.T) {
 	assert.Equal(t, policy.ActionBlock, result.Action)
 }
 
+func TestEngine_HasOverride_PackageScope_MatchesAnyVersion(t *testing.T) {
+	db := setupTestDB(t)
+
+	now := time.Now().UTC()
+	_, err := db.Exec(
+		`INSERT INTO policy_overrides (ecosystem, name, version, scope, reason, created_by, created_at, revoked)
+		 VALUES ('npm', 'vitest', '', 'package', 'legitimate', 'test', ?, 0)`, now)
+	require.NoError(t, err)
+
+	engine := policy.NewEngine(policy.EngineConfig{}, db)
+
+	// Name-only call (no version) — must match the package-scoped override.
+	assert.True(t, engine.HasOverride(context.Background(), scanner.EcosystemNPM, "vitest", ""))
+	// Specific version — must also match (package-scope covers all versions).
+	assert.True(t, engine.HasOverride(context.Background(), scanner.EcosystemNPM, "vitest", "1.0.0"))
+	// Different package — must not match.
+	assert.False(t, engine.HasOverride(context.Background(), scanner.EcosystemNPM, "lodsah", ""))
+}
+
+func TestEngine_HasOverride_VersionScope_DoesNotMatchNameOnly(t *testing.T) {
+	db := setupTestDB(t)
+
+	now := time.Now().UTC()
+	_, err := db.Exec(
+		`INSERT INTO policy_overrides (ecosystem, name, version, scope, reason, created_by, created_at, revoked)
+		 VALUES ('pypi', 'requests', '2.32.3', 'version', 'fp', 'test', ?, 0)`, now)
+	require.NoError(t, err)
+
+	engine := policy.NewEngine(policy.EngineConfig{}, db)
+
+	// Name-only call must NOT see a version-scoped override.
+	assert.False(t, engine.HasOverride(context.Background(), scanner.EcosystemPyPI, "requests", ""))
+	// Matching version — must match.
+	assert.True(t, engine.HasOverride(context.Background(), scanner.EcosystemPyPI, "requests", "2.32.3"))
+	// Different version — must not match.
+	assert.False(t, engine.HasOverride(context.Background(), scanner.EcosystemPyPI, "requests", "2.31.0"))
+}
+
+func TestEngine_HasOverride_RevokedOverride_DoesNotMatch(t *testing.T) {
+	db := setupTestDB(t)
+
+	now := time.Now().UTC()
+	_, err := db.Exec(
+		`INSERT INTO policy_overrides (ecosystem, name, version, scope, reason, created_by, created_at, revoked, revoked_at)
+		 VALUES ('npm', 'vitest', '', 'package', 'legitimate', 'test', ?, 1, ?)`, now, now)
+	require.NoError(t, err)
+
+	engine := policy.NewEngine(policy.EngineConfig{}, db)
+
+	assert.False(t, engine.HasOverride(context.Background(), scanner.EcosystemNPM, "vitest", ""))
+}
+
+func TestEngine_HasOverride_NilDB_ReturnsFalse(t *testing.T) {
+	engine := policy.NewEngine(policy.EngineConfig{}, nil)
+	assert.False(t, engine.HasOverride(context.Background(), scanner.EcosystemNPM, "vitest", ""))
+}
+
 func TestEngine_Evaluate_NoDB_FallsBackToStaticAllowlist(t *testing.T) {
 	engine := policy.NewEngine(policy.EngineConfig{
 		BlockIfVerdict:      scanner.VerdictMalicious,

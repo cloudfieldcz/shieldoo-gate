@@ -542,6 +542,67 @@ func InsertArtifact(db *config.GateDB, artifactID string, artifact model.Artifac
 	return nil
 }
 
+// TyposquatPlaceholderVersion is the sentinel version stored on synthetic
+// artifact rows produced by the typosquat pre-scan when the request did not
+// include a version (e.g. npm metadata fetches). When an admin clicks Release
+// on such a row, the API creates a package-scoped policy override.
+const TyposquatPlaceholderVersion = "*"
+
+// PersistTyposquatBlock writes a synthetic artifact + status + scan_results
+// triple representing a typosquat pre-scan block. The artifact carries empty
+// upstream_url / sha256 / storage_path and size_bytes=0 because no file was
+// fetched; the row exists purely so admins can see and override the block via
+// the Artifacts pane.
+//
+// artifactID is the row's primary key — callers should pre-sanitize it to
+// match the convention used by their full-scan persistence path (e.g. npm
+// replaces "/" and "@" so scoped packages get IDs like "npm:scope_pkg:*").
+// rawName is stored verbatim in artifacts.name so that override matching
+// (which compares against scanner.Artifact.Name) works correctly.
+//
+// Pass version=TyposquatPlaceholderVersion when the pre-scan ran on a
+// name-only request, or the actual version string when the block happened on
+// a tarball/version-scoped request. Repeated calls for the same artifactID
+// are idempotent: the existing row is refreshed and an additional
+// scan_results row is appended (matching full-scan persistence).
+func PersistTyposquatBlock(db *config.GateDB, artifactID string, ecosystem scanner.Ecosystem, rawName, version string, result scanner.ScanResult, now time.Time) error {
+	if version == "" {
+		version = TyposquatPlaceholderVersion
+	}
+	art := model.Artifact{
+		Ecosystem:      string(ecosystem),
+		Name:           rawName,
+		Version:        version,
+		UpstreamURL:    "",
+		SHA256:         "",
+		SizeBytes:      0,
+		CachedAt:       now,
+		LastAccessedAt: now,
+		StoragePath:    "",
+	}
+
+	reason := "typosquat pre-scan: " + string(result.Verdict)
+	if len(result.Findings) > 0 {
+		reason = "typosquat: " + result.Findings[0].Description
+	}
+
+	quarantinedAt := now
+	status := model.ArtifactStatus{
+		ArtifactID:       artifactID,
+		Status:           model.StatusQuarantined,
+		QuarantineReason: reason,
+		QuarantinedAt:    &quarantinedAt,
+	}
+
+	if err := InsertArtifact(db, artifactID, art, status); err != nil {
+		return err
+	}
+	if err := InsertScanResults(db, artifactID, []scanner.ScanResult{result}); err != nil {
+		return err
+	}
+	return nil
+}
+
 // ComputeSHA256 returns the hex-encoded SHA256 hash of the file at the given path.
 func ComputeSHA256(path string) (string, error) {
 	f, err := os.Open(path)

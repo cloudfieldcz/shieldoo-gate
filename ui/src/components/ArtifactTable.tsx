@@ -55,7 +55,9 @@ export default function ArtifactTable({ artifacts, onRowClick, selectedId }: Art
                   </div>
                 )}
               </td>
-              <td className="px-4 py-3 text-sm text-gray-600 font-mono">{a.version}</td>
+              <td className="px-4 py-3 text-sm text-gray-600 font-mono">
+                {a.version === '*' ? <span className="italic text-gray-500">(any version)</span> : a.version}
+              </td>
               <td className="px-4 py-3 text-sm">
                 {a.licenses?.length ? (
                   <div className="flex flex-wrap gap-1">

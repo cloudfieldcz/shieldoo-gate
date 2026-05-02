@@ -76,8 +76,9 @@ scanners:
 
 ### Considerations
 
-- **False positives:** Legitimate packages may have similar names (e.g. `vitest` vs `vite`, `nest` vs `next`). Two layers of mitigation:
+- **False positives:** Legitimate packages may have similar names (e.g. `vitest` vs `vite`, `nest` vs `next`, `nx-js` vs `rxjs`). Three layers of mitigation:
   1. Both names are added to `popular_packages` so Strategy 1 short-circuits before edit-distance check.
-  2. Operators can extend `scanners.typosquat.allowlist` in `config.yaml` for any case the seed doesn't cover. Note that pre-scan blocks happen *before* an artifact is fetched, so blocked names never appear in the Artifacts UI — the allowlist is the only operator-facing escape hatch until UI-managed seed editing ships.
+  2. Operators can extend `scanners.typosquat.allowlist` in `config.yaml` for any case the seed doesn't cover.
+  3. Blocked names are persisted as `QUARANTINED` artifacts (with `version="*"` when no version is known at metadata-fetch time) so admins can review and release them from the Artifacts pane. Releasing creates a package-scoped policy override that the pre-scan consults via `engine.go:HasOverride()` on every subsequent request — see [policy.md](../policy.md#policy-overrides).
 - **Maintenance:** The popular package list needs periodic refresh. Consider shipping a default list with the release and allowing custom overrides.
 - **Privacy:** If fetching download stats from upstream registries, ensure no internal package names leak in the queries.

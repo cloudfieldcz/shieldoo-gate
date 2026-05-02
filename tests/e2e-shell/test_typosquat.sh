@@ -118,6 +118,61 @@ test_typosquat() {
     fi
 
     # ------------------------------------------------------------------
+    # 6b. Typosquat blocks must persist as quarantined artifacts so admins
+    # can release/override them from the Artifacts pane.
+    # ------------------------------------------------------------------
+    local lodsah_artifact_id="npm:lodsah:*"
+    local lodsah_artifact_id_enc="npm:lodsah:%2A"
+    local lodsah_status
+    lodsah_status=$(api_jq "/api/v1/artifacts/${lodsah_artifact_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
+    if [ "$lodsah_status" = "QUARANTINED" ]; then
+        log_pass "Typosquat: name-only npm block 'lodsah' persisted as QUARANTINED artifact (version=*)"
+    else
+        log_fail "Typosquat: expected lodsah to be persisted as QUARANTINED artifact, got status='$lodsah_status'"
+    fi
+
+    # ------------------------------------------------------------------
+    # 6c. Override flow — releasing a typosquat-blocked artifact must
+    # create a package-scoped policy override and let subsequent installs
+    # through.
+    # ------------------------------------------------------------------
+    if [ "$lodsah_status" = "QUARANTINED" ]; then
+        local release_response
+        release_response=$(curl -sf -X POST "${E2E_ADMIN_URL}/api/v1/artifacts/${lodsah_artifact_id_enc}/release" 2>/dev/null || echo "")
+        if [ -n "$release_response" ]; then
+            log_pass "Typosquat override: release endpoint accepted POST"
+        else
+            log_fail "Typosquat override: release endpoint returned no response"
+        fi
+
+        # Status must now be CLEAN
+        local after_release_status
+        after_release_status=$(api_jq "/api/v1/artifacts/${lodsah_artifact_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
+        assert_eq "Typosquat override: artifact status is CLEAN after release" \
+            "CLEAN" "$after_release_status"
+
+        # Policy override must exist with scope='package' and empty version
+        local override_scope
+        override_scope=$(api_jq "/api/v1/overrides?ecosystem=npm" \
+            '[.data[] | select(.name=="lodsah" and .revoked==false)][0].scope' 2>/dev/null || echo "")
+        assert_eq "Typosquat override: policy override created with scope=package" \
+            "package" "$override_scope"
+
+        # Re-fetch the package: must NOT return 403 anymore (404 from upstream miss is OK).
+        local recheck_status
+        recheck_status=$(curl -s -o /dev/null -w "%{http_code}" \
+            "${E2E_CURL_AUTH[@]}" \
+            "${E2E_NPM_URL}/lodsah")
+        if [ "$recheck_status" = "403" ]; then
+            log_fail "Typosquat override: re-fetch of 'lodsah' still 403 (override not honored)"
+        else
+            log_pass "Typosquat override: re-fetch of 'lodsah' no longer blocked (HTTP $recheck_status)"
+        fi
+    else
+        log_skip "Typosquat override: lodsah artifact not QUARANTINED — cannot exercise release flow"
+    fi
+
+    # ------------------------------------------------------------------
     # 7. Verify gate logs contain typosquat scanner activity
     # ------------------------------------------------------------------
     local gate_logs

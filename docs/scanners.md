@@ -94,6 +94,8 @@ The typosquat scanner (`builtin-typosquat`) detects supply chain attacks based o
 
 The scanner seeds the `popular_packages` table from embedded data on first run. All checks run in <1ms with no file I/O. Configuration is under `scanners.typosquat` in `config.yaml` — see the [feature documentation](features/typosquatting-detection.md) for details.
 
+**Override workflow.** Typosquat blocks happen at metadata-fetch time, before the artifact is downloaded. To keep parity with other scanners, blocked packages are persisted as quarantined artifacts (with `version="*"` for name-only blocks, e.g. npm metadata fetches) so admins can review and release them from the Artifacts pane. Clicking **Release** on a `version="*"` row creates a **package-scoped** policy override, which the pre-scan path consults on every subsequent request. Tarball-level blocks (PyPI, npm tarball URL) record the actual version and create a version-scoped override on release. See [policy.md](policy.md#overrides) for the override lifecycle.
+
 ### Version Diff Scanner — AI-Driven Cross-Version Analysis (v2.0)
 
 The version diff scanner (`version-diff`) detects malicious supply-chain attacks by comparing each new package version against its most recent CLEAN/SUSPICIOUS cached predecessor. Both versions are sent to the Python `scanner-bridge` over gRPC; the bridge extracts a `DiffPayload` (added/modified/removed files, install hooks, top-level executable code) and asks the LLM (gpt-5.4-mini default) whether the changes show malicious supply-chain intent. It lives in `internal/scanner/versiondiff/` (separate package due to cache dependency).

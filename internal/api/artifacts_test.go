@@ -179,6 +179,40 @@ func TestHandleRelease_ScopedNpmPackage_OverrideUsesOriginalName(t *testing.T) {
 		"policy override must use original package name, not sanitized ID name")
 }
 
+func TestHandleRelease_TyposquatPlaceholder_CreatesPackageScopeOverride(t *testing.T) {
+	srv, db := newTestServer(t)
+
+	// Synthetic typosquat-block artifact: version="*" indicates a name-only block.
+	insertTestArtifact(t, db, "npm:lodsah:*", "npm", "lodsah", "*")
+
+	// Quarantine to mirror the real pre-scan state.
+	router := srv.Routes()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts/npm:lodsah:*/quarantine", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	// Release: must create a PACKAGE-scoped override with empty version.
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts/npm:lodsah:*/release", nil)
+	rec2 := httptest.NewRecorder()
+	router.ServeHTTP(rec2, req2)
+	require.Equal(t, http.StatusOK, rec2.Code)
+
+	var scope, version string
+	err := db.QueryRow(
+		`SELECT scope, version FROM policy_overrides
+		 WHERE ecosystem = 'npm' AND name = 'lodsah' AND revoked = FALSE`,
+	).Scan(&scope, &version)
+	require.NoError(t, err)
+	assert.Equal(t, "package", scope, "typosquat placeholder release must create package-scoped override")
+	assert.Equal(t, "", version, "package-scoped override must have empty version")
+
+	// Status should be CLEAN.
+	var status string
+	require.NoError(t, db.QueryRow(`SELECT status FROM artifact_status WHERE artifact_id = 'npm:lodsah:*'`).Scan(&status))
+	assert.Equal(t, "CLEAN", status)
+}
+
 func TestHandleRescanArtifact_Exists_Returns202(t *testing.T) {
 	srv, db := newTestServer(t)
 

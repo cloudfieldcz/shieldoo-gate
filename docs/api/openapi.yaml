@@ -261,6 +261,13 @@ paths:
       - $ref: "#/components/parameters/artifactId"
     post:
       summary: Release a quarantined artifact back to CLEAN status and create a policy override
+      description: |
+        Releases the artifact and creates a policy override so it is not re-quarantined.
+        The override scope is normally `version` (specific version only). If the artifact's
+        stored `version` is the typosquat placeholder `*` — produced by the typosquat
+        pre-scan when no version was known at the time of the block (e.g. npm metadata
+        fetches) — the override is created with scope `package`, covering all versions of
+        the package.
       operationId: releaseArtifact
       tags: [artifacts]
       responses:
