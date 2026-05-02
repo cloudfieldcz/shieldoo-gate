@@ -94,7 +94,15 @@ The typosquat scanner (`builtin-typosquat`) detects supply chain attacks based o
 
 The scanner seeds the `popular_packages` table from embedded data on first run. All checks run in <1ms with no file I/O. Configuration is under `scanners.typosquat` in `config.yaml` — see the [feature documentation](features/typosquatting-detection.md) for details.
 
-**Override workflow.** Typosquat blocks happen at metadata-fetch time, before the artifact is downloaded. To keep parity with other scanners, blocked packages are persisted as quarantined artifacts (with `version="*"` for name-only blocks, e.g. npm metadata fetches) so admins can review and release them from the Artifacts pane. Clicking **Release** on a `version="*"` row creates a **package-scoped** policy override, which the pre-scan path consults on every subsequent request. Tarball-level blocks (PyPI, npm tarball URL) record the actual version and create a version-scoped override on release. See [policy.md](policy.md#policy-overrides) for the override lifecycle.
+**Override workflow.** Typosquat blocks happen at metadata-fetch time, before the artifact is downloaded. To keep parity with other scanners, blocked packages are persisted as quarantined artifacts so admins can review and release them from the Artifacts pane. Synthetic typosquat rows **always** carry `version="*"` (regardless of whether the request was name-only or version-scoped) because typosquat detection is name-based and the override scope is therefore always package-wide. Clicking **Release** on a typosquat row creates a **package-scoped** policy override, which the pre-scan path consults on every subsequent request — a future version of the same name will not re-block. To apply a tighter scope, revoke the package override and create a manual version-scoped override. See [policy.md](policy.md#policy-overrides) for the override lifecycle.
+
+**Public 403 wording.** The 403 JSON body returned to the package client says only `"typosquatting detected"` — it does NOT name the popular package the seed flagged the request against. The richer description (`"X is within edit distance N of popular package Y"`) is preserved in `scan_results.findings_json` and `audit_log.reason` for admin investigation. This keeps an attacker from enumerating the seed by probing names and reading the response.
+
+**Producer-side dedup.** Repeated typosquat probes against the same package within `scanners.typosquat.persist_dedup_window_seconds` (default 300 = 5 minutes) collapse to a single set of `artifacts` / `artifact_status` / `scan_results` writes. The 403 response itself is unaffected — every probe is still blocked. This bounds DB-write growth under typosquat-name flooding without retaining `audit_log` rows (which stay append-only per the security invariant).
+
+**Retention.** A daily scheduler (`scan_results_retention`, 90-day window) prunes old `scan_results` rows that are no longer referenced by `artifact_status.last_scan_id`. `audit_log` is intentionally never pruned automatically.
+
+**Override-allowed audit metadata.** When a typosquat block is suppressed by an active override, the audit `EVENT_SERVED` entry's `metadata_json` carries `{"override_id": <id>}` so operators can trace which override let a request through.
 
 ### Version Diff Scanner — AI-Driven Cross-Version Analysis (v2.0)
 

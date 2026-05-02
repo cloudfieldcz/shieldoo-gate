@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/npm"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/cache/local"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
@@ -263,6 +264,9 @@ func TestNPMAdapter_VitestNotBlocked_RegressionForTyposquatFalsePositive(t *test
 // and inspect persisted typosquat-block rows.
 func setupTestNPMOverrideAware(t *testing.T, upstreamHandler http.HandlerFunc) (*npm.NPMAdapter, *httptest.Server, *config.GateDB) {
 	t.Helper()
+	// Process-wide dedup is shared across tests — reset it so each case sees
+	// a clean slate and previous tests' artifactIDs don't suppress this run.
+	adapter.ResetTyposquatPersistDedup()
 	upstream := httptest.NewServer(upstreamHandler)
 	t.Cleanup(upstream.Close)
 

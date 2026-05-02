@@ -259,6 +259,23 @@ func TestTyposquatScanner_AllSupportedEcosystemsHaveSeed(t *testing.T) {
 	}
 }
 
+// TestTyposquatScanner_HomoglyphSkeletonIsPrecomputed asserts that every
+// loaded popular package carries a non-empty pre-computed homoglyph skeleton,
+// matching what normalizeHomoglyphs would produce on demand. This avoids
+// recomputing the skeleton on every checkHomoglyph call (hot path).
+func TestTyposquatScanner_HomoglyphSkeletonIsPrecomputed(t *testing.T) {
+	s := newTestScanner(t, config.TyposquatConfig{})
+	require.NotEmpty(t, s.popularPackages)
+
+	for eco, pkgs := range s.popularPackages {
+		for _, pkg := range pkgs {
+			expected := normalizeHomoglyphs(pkg.Name)
+			assert.Equal(t, expected, pkg.HomoglyphSkeleton,
+				"ecosystem=%s name=%q: HomoglyphSkeleton must equal normalizeHomoglyphs(Name)", eco, pkg.Name)
+		}
+	}
+}
+
 func TestLevenshtein_KnownDistances(t *testing.T) {
 	tests := []struct {
 		a, b string

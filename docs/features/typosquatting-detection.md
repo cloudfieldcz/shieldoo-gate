@@ -79,6 +79,14 @@ scanners:
 - **False positives:** Legitimate packages may have similar names (e.g. `vitest` vs `vite`, `nest` vs `next`, `nx-js` vs `rxjs`). Three layers of mitigation:
   1. Both names are added to `popular_packages` so Strategy 1 short-circuits before edit-distance check.
   2. Operators can extend `scanners.typosquat.allowlist` in `config.yaml` for any case the seed doesn't cover.
-  3. Blocked names are persisted as `QUARANTINED` artifacts (with `version="*"` when no version is known at metadata-fetch time) so admins can review and release them from the Artifacts pane. Releasing creates a package-scoped policy override that the pre-scan consults via `engine.go:HasOverride()` on every subsequent request — see [policy.md](../policy.md#policy-overrides).
+  3. Blocked names are persisted as `QUARANTINED` artifacts with `version="*"` (always — typosquat detection is name-based, so the override scope is always package-wide regardless of whether the original request carried a version). Admins review and release them from the Artifacts pane. Releasing creates a package-scoped policy override that the pre-scan consults via `engine.go:HasOverride()` on every subsequent request — see [policy.md](../policy.md#policy-overrides). To apply a tighter scope, revoke the package override and create a manual version-scoped override.
+
+### Producer-side dedup and audit growth
+
+`PersistTyposquatBlock` collapses repeated probes for the same artifact ID within `scanners.typosquat.persist_dedup_window_seconds` (default 300, i.e. 5 minutes) into a single set of DB writes. The 403 response is **not** affected — every probe is still blocked at HTTP. The dedup only suppresses the synthetic-row insert and the `scan_results` / `audit_log` writes that follow it. This is the in-process growth control for `audit_log`, which stays append-only per the security invariant in [CLAUDE.md](../../CLAUDE.md). `scan_results` rows are additionally pruned by a daily scheduler (90-day window, but rows currently referenced by `artifact_status.last_scan_id` are retained even when older).
+
+When an active policy override suppresses a typosquat block, the audit `EVENT_SERVED` entry includes `{"override_id": <id>}` in `metadata_json`. Operators can use this to trace which override let a given request through.
+
+The public 403 response body says only `"typosquatting detected"` and does **not** include the popular package name the seed matched against. The full description ("`X is within edit distance N of popular package Y`") is preserved in `scan_results.findings_json` and `audit_log.reason` for admin investigation. The canonical query for typosquat-block evidence is `audit_log.event_type='BLOCKED' AND reason LIKE 'typosquat%'`, not HTTP status.
 - **Maintenance:** The popular package list needs periodic refresh. Consider shipping a default list with the release and allowing custom overrides.
 - **Privacy:** If fetching download stats from upstream registries, ensure no internal package names leak in the queries.

@@ -138,38 +138,56 @@ func TestEngine_HasOverride_PackageScope_MatchesAnyVersion(t *testing.T) {
 	db := setupTestDB(t)
 
 	now := time.Now().UTC()
-	_, err := db.Exec(
+	res, err := db.Exec(
 		`INSERT INTO policy_overrides (ecosystem, name, version, scope, reason, created_by, created_at, revoked)
 		 VALUES ('npm', 'vitest', '', 'package', 'legitimate', 'test', ?, 0)`, now)
+	require.NoError(t, err)
+	wantID, err := res.LastInsertId()
 	require.NoError(t, err)
 
 	engine := policy.NewEngine(policy.EngineConfig{}, db)
 
 	// Name-only call (no version) — must match the package-scoped override.
-	assert.True(t, engine.HasOverride(context.Background(), scanner.EcosystemNPM, "vitest", ""))
+	gotID, ok := engine.HasOverride(context.Background(), scanner.EcosystemNPM, "vitest", "")
+	assert.True(t, ok)
+	assert.Equal(t, wantID, gotID)
+
 	// Specific version — must also match (package-scope covers all versions).
-	assert.True(t, engine.HasOverride(context.Background(), scanner.EcosystemNPM, "vitest", "1.0.0"))
+	gotID, ok = engine.HasOverride(context.Background(), scanner.EcosystemNPM, "vitest", "1.0.0")
+	assert.True(t, ok)
+	assert.Equal(t, wantID, gotID)
+
 	// Different package — must not match.
-	assert.False(t, engine.HasOverride(context.Background(), scanner.EcosystemNPM, "lodsah", ""))
+	gotID, ok = engine.HasOverride(context.Background(), scanner.EcosystemNPM, "lodsah", "")
+	assert.False(t, ok)
+	assert.Equal(t, int64(0), gotID)
 }
 
 func TestEngine_HasOverride_VersionScope_DoesNotMatchNameOnly(t *testing.T) {
 	db := setupTestDB(t)
 
 	now := time.Now().UTC()
-	_, err := db.Exec(
+	res, err := db.Exec(
 		`INSERT INTO policy_overrides (ecosystem, name, version, scope, reason, created_by, created_at, revoked)
 		 VALUES ('pypi', 'requests', '2.32.3', 'version', 'fp', 'test', ?, 0)`, now)
+	require.NoError(t, err)
+	wantID, err := res.LastInsertId()
 	require.NoError(t, err)
 
 	engine := policy.NewEngine(policy.EngineConfig{}, db)
 
 	// Name-only call must NOT see a version-scoped override.
-	assert.False(t, engine.HasOverride(context.Background(), scanner.EcosystemPyPI, "requests", ""))
-	// Matching version — must match.
-	assert.True(t, engine.HasOverride(context.Background(), scanner.EcosystemPyPI, "requests", "2.32.3"))
+	_, ok := engine.HasOverride(context.Background(), scanner.EcosystemPyPI, "requests", "")
+	assert.False(t, ok)
+
+	// Matching version — must match and return the override ID.
+	gotID, ok := engine.HasOverride(context.Background(), scanner.EcosystemPyPI, "requests", "2.32.3")
+	assert.True(t, ok)
+	assert.Equal(t, wantID, gotID)
+
 	// Different version — must not match.
-	assert.False(t, engine.HasOverride(context.Background(), scanner.EcosystemPyPI, "requests", "2.31.0"))
+	_, ok = engine.HasOverride(context.Background(), scanner.EcosystemPyPI, "requests", "2.31.0")
+	assert.False(t, ok)
 }
 
 func TestEngine_HasOverride_RevokedOverride_DoesNotMatch(t *testing.T) {
@@ -183,12 +201,16 @@ func TestEngine_HasOverride_RevokedOverride_DoesNotMatch(t *testing.T) {
 
 	engine := policy.NewEngine(policy.EngineConfig{}, db)
 
-	assert.False(t, engine.HasOverride(context.Background(), scanner.EcosystemNPM, "vitest", ""))
+	gotID, ok := engine.HasOverride(context.Background(), scanner.EcosystemNPM, "vitest", "")
+	assert.False(t, ok)
+	assert.Equal(t, int64(0), gotID)
 }
 
 func TestEngine_HasOverride_NilDB_ReturnsFalse(t *testing.T) {
 	engine := policy.NewEngine(policy.EngineConfig{}, nil)
-	assert.False(t, engine.HasOverride(context.Background(), scanner.EcosystemNPM, "vitest", ""))
+	gotID, ok := engine.HasOverride(context.Background(), scanner.EcosystemNPM, "vitest", "")
+	assert.False(t, ok)
+	assert.Equal(t, int64(0), gotID)
 }
 
 func TestEngine_Evaluate_NoDB_FallsBackToStaticAllowlist(t *testing.T) {

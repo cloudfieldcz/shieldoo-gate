@@ -647,25 +647,32 @@ func (a *NPMAdapter) blockIfTyposquat(w http.ResponseWriter, r *http.Request, pk
 	// Build the canonical artifact ID up front so audit logs (override-allowed
 	// path included) and the synthetic-row write all reference the same ID.
 	// Sanitization mirrors downloadScanServe so a later cache fetch lines up.
+	// Synthetic typosquat rows always carry version="*" — override scope is
+	// package-wide because typosquat detection is name-based.
 	safeNamePart := strings.NewReplacer("/", "_", "@", "").Replace(pkgName)
-	persistVersion := version
-	if persistVersion == "" {
-		persistVersion = adapter.TyposquatPlaceholderVersion
-	}
-	artifactID := fmt.Sprintf("%s:%s:%s", string(scanner.EcosystemNPM), safeNamePart, persistVersion)
+	artifactID := fmt.Sprintf("%s:%s:%s", string(scanner.EcosystemNPM), safeNamePart, adapter.TyposquatPlaceholderVersion)
+
+	// Detached audit context — the request may be canceled (slow client) but
+	// audit-log writes must still land. Mirrors policy.hasDBOverride rationale.
+	auditCtx, auditCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer auditCancel()
 
 	// Active policy override allows the request through.
-	if a.policyEngine != nil && a.policyEngine.HasOverride(r.Context(), scanner.EcosystemNPM, pkgName, version) {
-		log.Info().Str("artifact", artifactID).Str("verdict", string(result.Verdict)).
-			Msg("typosquat pre-scan: allowed by policy override")
-		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
-			EventType:  model.EventServed,
-			ArtifactID: artifactID,
-			ClientIP:   r.RemoteAddr,
-			UserAgent:  r.UserAgent(),
-			Reason:     "typosquat pre-scan overridden",
-		})
-		return false
+	if a.policyEngine != nil {
+		if overrideID, ok := a.policyEngine.HasOverride(r.Context(), scanner.EcosystemNPM, pkgName, version); ok {
+			log.Info().Str("artifact", artifactID).Str("verdict", string(result.Verdict)).
+				Int64("override_id", overrideID).
+				Msg("typosquat pre-scan: allowed by policy override")
+			_ = adapter.WriteAuditLogCtx(auditCtx, a.db, model.AuditEntry{
+				EventType:    model.EventServed,
+				ArtifactID:   artifactID,
+				ClientIP:     r.RemoteAddr,
+				UserAgent:    r.UserAgent(),
+				Reason:       "typosquat pre-scan overridden",
+				MetadataJSON: fmt.Sprintf(`{"override_id":%d}`, overrideID),
+			})
+			return false
+		}
 	}
 
 	log.Warn().Str("artifact", artifactID).Str("verdict", string(result.Verdict)).
@@ -673,29 +680,35 @@ func (a *NPMAdapter) blockIfTyposquat(w http.ResponseWriter, r *http.Request, pk
 
 	// Persist a synthetic artifact + status + scan_results so the block is
 	// visible in the Artifacts pane and overridable from there.
-	if err := adapter.PersistTyposquatBlock(a.db, artifactID, scanner.EcosystemNPM, pkgName, version, result, time.Now().UTC()); err != nil {
+	if err := adapter.PersistTyposquatBlock(a.db, artifactID, scanner.EcosystemNPM, pkgName, result, time.Now().UTC()); err != nil {
 		log.Error().Err(err).Str("artifact", artifactID).Msg("typosquat pre-scan: failed to persist block record")
 	}
 
-	// Findings is normally non-empty for Suspicious/Malicious verdicts, but
-	// we don't want a misbehaving scanner to crash the proxy — fall back to
-	// a generic reason string when the slice is empty.
-	reason := "typosquatting detected"
-	if len(result.Findings) > 0 {
-		reason = "typosquatting detected: " + result.Findings[0].Description
-	}
-
+	// Public 403 response: keep the reason generic so we don't leak which
+	// popular package the seed flagged us against (an attacker probing names
+	// could enumerate the seed otherwise). The full description still lands
+	// in scan_results.findings_json and audit_log.reason for admins.
 	adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
 		Error:    "blocked",
 		Artifact: artifactID,
-		Reason:   reason,
+		Reason:   "typosquatting detected",
 	})
-	_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
+	_ = adapter.WriteAuditLogCtx(auditCtx, a.db, model.AuditEntry{
 		EventType:  model.EventBlocked,
 		ArtifactID: artifactID,
 		ClientIP:   r.RemoteAddr,
 		UserAgent:  r.UserAgent(),
-		Reason:     "typosquat pre-scan: " + string(result.Verdict),
+		Reason:     typosquatBlockReason(result),
 	})
 	return true
+}
+
+// typosquatBlockReason returns the rich admin-only description used in audit
+// log entries — keeps the popular-package name in the audit trail while the
+// public 403 response stays generic.
+func typosquatBlockReason(result scanner.ScanResult) string {
+	if len(result.Findings) > 0 {
+		return "typosquat pre-scan: " + result.Findings[0].Description
+	}
+	return "typosquat pre-scan: " + string(result.Verdict)
 }

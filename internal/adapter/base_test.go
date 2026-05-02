@@ -305,10 +305,11 @@ func TestInsertScanResults_EmptySlice_NoError(t *testing.T) {
 // PersistTyposquatBlock
 // ---------------------------------------------------------------------------
 
-func TestPersistTyposquatBlock_NameOnly_UsesPlaceholder(t *testing.T) {
+func TestPersistTyposquatBlock_AlwaysStoresPlaceholderVersion(t *testing.T) {
 	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
+	adapter.ResetTyposquatPersistDedup()
 
 	now := time.Now().UTC().Truncate(time.Second)
 	result := scanner.ScanResult{
@@ -324,9 +325,9 @@ func TestPersistTyposquatBlock_NameOnly_UsesPlaceholder(t *testing.T) {
 	}
 
 	artifactID := "npm:lodsah:" + adapter.TyposquatPlaceholderVersion
-	require.NoError(t, adapter.PersistTyposquatBlock(db, artifactID, scanner.EcosystemNPM, "lodsah", "", result, now))
+	require.NoError(t, adapter.PersistTyposquatBlock(db, artifactID, scanner.EcosystemNPM, "lodsah", result, now))
 
-	// artifacts row exists with placeholder version
+	// artifacts row exists with placeholder version (always "*", regardless of caller)
 	var version, name string
 	require.NoError(t, db.QueryRow(`SELECT version, name FROM artifacts WHERE id = ?`, artifactID).Scan(&version, &name))
 	assert.Equal(t, adapter.TyposquatPlaceholderVersion, version)
@@ -346,36 +347,14 @@ func TestPersistTyposquatBlock_NameOnly_UsesPlaceholder(t *testing.T) {
 	assert.Equal(t, "builtin-typosquat", scannerName)
 }
 
-func TestPersistTyposquatBlock_WithVersion_PreservesVersion(t *testing.T) {
+func TestPersistTyposquatBlock_RepeatedCalls_DedupedWithinWindow(t *testing.T) {
 	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
-
-	now := time.Now().UTC().Truncate(time.Second)
-	result := scanner.ScanResult{
-		ScannerID:  "builtin-typosquat",
-		Verdict:    scanner.VerdictSuspicious,
-		Confidence: 0.85,
-		ScannedAt:  now,
-		Findings: []scanner.Finding{{
-			Category:    "edit-distance",
-			Severity:    scanner.SeverityHigh,
-			Description: "reqeusts is similar to requests",
-		}},
-	}
-
-	artifactID := "pypi:reqeusts:1.0.0:reqeusts-1.0.0.tar.gz"
-	require.NoError(t, adapter.PersistTyposquatBlock(db, artifactID, scanner.EcosystemPyPI, "reqeusts", "1.0.0", result, now))
-
-	var version string
-	require.NoError(t, db.QueryRow(`SELECT version FROM artifacts WHERE id = ?`, artifactID).Scan(&version))
-	assert.Equal(t, "1.0.0", version)
-}
-
-func TestPersistTyposquatBlock_RepeatedCalls_AreIdempotent(t *testing.T) {
-	db, err := config.InitDB(config.SQLiteMemoryConfig())
-	require.NoError(t, err)
-	defer db.Close()
+	adapter.ResetTyposquatPersistDedup()
+	// 1-hour window: the second call within the test window must be deduped.
+	adapter.SetTyposquatPersistDedupWindow(time.Hour)
+	t.Cleanup(func() { adapter.SetTyposquatPersistDedupWindow(5 * time.Minute) })
 
 	now := time.Now().UTC().Truncate(time.Second)
 	result := scanner.ScanResult{
@@ -391,15 +370,81 @@ func TestPersistTyposquatBlock_RepeatedCalls_AreIdempotent(t *testing.T) {
 	}
 
 	artifactID := "npm:lodsah:" + adapter.TyposquatPlaceholderVersion
-	require.NoError(t, adapter.PersistTyposquatBlock(db, artifactID, scanner.EcosystemNPM, "lodsah", "", result, now))
-	require.NoError(t, adapter.PersistTyposquatBlock(db, artifactID, scanner.EcosystemNPM, "lodsah", "", result, now))
+	require.NoError(t, adapter.PersistTyposquatBlock(db, artifactID, scanner.EcosystemNPM, "lodsah", result, now))
+	require.NoError(t, adapter.PersistTyposquatBlock(db, artifactID, scanner.EcosystemNPM, "lodsah", result, now))
+	require.NoError(t, adapter.PersistTyposquatBlock(db, artifactID, scanner.EcosystemNPM, "lodsah", result, now))
 
-	// Single artifacts row, but two scan_results entries (history-style).
+	// Single artifacts row.
 	var artifactCount int
 	require.NoError(t, db.Get(&artifactCount, `SELECT COUNT(*) FROM artifacts WHERE id = ?`, artifactID))
 	assert.Equal(t, 1, artifactCount)
 
+	// Only one scan_results row — the repeated calls must be deduped at the
+	// producer to bound DB write growth under typosquat-name flooding.
+	var scanCount int
+	require.NoError(t, db.Get(&scanCount, `SELECT COUNT(*) FROM scan_results WHERE artifact_id = ?`, artifactID))
+	assert.Equal(t, 1, scanCount)
+}
+
+func TestPersistTyposquatBlock_RepeatedCalls_AfterWindow_PersistAgain(t *testing.T) {
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+	adapter.ResetTyposquatPersistDedup()
+	// Sub-millisecond window: by the time the second call runs the window has expired.
+	adapter.SetTyposquatPersistDedupWindow(1 * time.Nanosecond)
+	t.Cleanup(func() { adapter.SetTyposquatPersistDedupWindow(5 * time.Minute) })
+
+	now := time.Now().UTC().Truncate(time.Second)
+	result := scanner.ScanResult{
+		ScannerID:  "builtin-typosquat",
+		Verdict:    scanner.VerdictSuspicious,
+		Confidence: 0.85,
+		ScannedAt:  now,
+		Findings: []scanner.Finding{{
+			Category:    "edit-distance",
+			Severity:    scanner.SeverityHigh,
+			Description: "lodsah is similar to lodash",
+		}},
+	}
+
+	artifactID := "npm:lodsah:" + adapter.TyposquatPlaceholderVersion
+	require.NoError(t, adapter.PersistTyposquatBlock(db, artifactID, scanner.EcosystemNPM, "lodsah", result, now))
+	time.Sleep(2 * time.Nanosecond)
+	require.NoError(t, adapter.PersistTyposquatBlock(db, artifactID, scanner.EcosystemNPM, "lodsah", result, now))
+
+	// Two scan_results rows expected — the dedup window expired between calls.
 	var scanCount int
 	require.NoError(t, db.Get(&scanCount, `SELECT COUNT(*) FROM scan_results WHERE artifact_id = ?`, artifactID))
 	assert.Equal(t, 2, scanCount)
+}
+
+func TestPersistTyposquatBlock_NameOver128Chars_ReturnsError(t *testing.T) {
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+	adapter.ResetTyposquatPersistDedup()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	result := scanner.ScanResult{
+		ScannerID:  "builtin-typosquat",
+		Verdict:    scanner.VerdictSuspicious,
+		Confidence: 0.85,
+		ScannedAt:  now,
+	}
+
+	// 129 chars — over the cap.
+	longName := ""
+	for i := 0; i < 129; i++ {
+		longName += "a"
+	}
+	artifactID := "npm:" + longName + ":" + adapter.TyposquatPlaceholderVersion
+	err = adapter.PersistTyposquatBlock(db, artifactID, scanner.EcosystemNPM, longName, result, now)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "name too long")
+
+	// No artifact row inserted.
+	var count int
+	require.NoError(t, db.Get(&count, `SELECT COUNT(*) FROM artifacts WHERE id = ?`, artifactID))
+	assert.Equal(t, 0, count)
 }

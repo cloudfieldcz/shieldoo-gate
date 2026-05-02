@@ -134,6 +134,7 @@ scanners:
       - "-tool"
       - "-sdk"
     allowlist: []                     # package names to skip (false positive suppression)
+    persist_dedup_window_seconds: 300 # collapse repeat synthetic-row writes within this window (default 300; 0 disables)
   # AI-driven version diff scanner (v2.0+). Compares each new package version
   # against the most recent CLEAN/SUSPICIOUS cached version, sends both to the
   # scanner-bridge over gRPC, and asks the LLM (gpt-5.4-mini default) whether

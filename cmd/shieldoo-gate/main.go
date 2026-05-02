@@ -223,7 +223,14 @@ func main() {
 			log.Warn().Err(err).Msg("typosquat scanner disabled: failed to init")
 		} else {
 			scanners = append(scanners, ts)
-			log.Info().Msg("typosquat scanner enabled")
+			// Configure the per-process dedup window for synthetic-row writes
+			// from PersistTyposquatBlock. Default 5 minutes when unset.
+			dedupSecs := cfg.Scanners.Typosquat.PersistDedupWindowSeconds
+			if dedupSecs == 0 {
+				dedupSecs = 300
+			}
+			adapter.SetTyposquatPersistDedupWindow(time.Duration(dedupSecs) * time.Second)
+			log.Info().Int("persist_dedup_window_seconds", dedupSecs).Msg("typosquat scanner enabled")
 		}
 	}
 
@@ -626,6 +633,13 @@ func main() {
 		vdiffRetention.Start()
 		defer vdiffRetention.Stop()
 	}
+
+	// Always-on scan_results retention (90-day cleanup; rows referenced by
+	// artifact_status.last_scan_id are retained). audit_log stays append-only
+	// per security invariant — producer-side dedup gates its growth.
+	scanResultsRetention := scheduler.NewScanResultsRetentionScheduler(db)
+	scanResultsRetention.Start()
+	defer scanResultsRetention.Stop()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
