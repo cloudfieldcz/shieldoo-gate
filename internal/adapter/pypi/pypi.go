@@ -269,10 +269,16 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 				if err := adapter.PersistTyposquatBlock(a.db, artifactID, scanner.EcosystemPyPI, pkgName, pkgVersion, result, time.Now().UTC()); err != nil {
 					log.Error().Err(err).Str("artifact", artifactID).Msg("typosquat pre-scan: failed to persist block record")
 				}
+				// Defensive: a misbehaving scanner could return Suspicious with
+				// no findings — fall back to a generic reason rather than panic.
+				reason := "typosquatting detected"
+				if len(result.Findings) > 0 {
+					reason = "typosquatting detected: " + result.Findings[0].Description
+				}
 				adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
 					Error:    "blocked",
 					Artifact: artifactID,
-					Reason:   "typosquatting detected: " + result.Findings[0].Description,
+					Reason:   reason,
 				})
 				_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 					EventType:  model.EventBlocked,

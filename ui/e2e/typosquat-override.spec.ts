@@ -59,12 +59,16 @@ test('typosquat block is overridable from the artifacts pane', async ({ page }) 
   await expect(page.getByText('Active Override')).toBeVisible({ timeout: 10_000 })
   await expect(page.getByText('All versions')).toBeVisible()
 
-  // 5. Refetch the same name through the proxy — must NOT be 403 anymore.
+  // 5. Refetch the same name through the proxy — must succeed (proxied to
+  // upstream). lodsah is npm's "security holding package" so upstream returns
+  // 200; assert a real 2xx range so unrelated errors (5xx, network, etc.) do
+  // not silently pass.
   const recheck = await proxyCtx.get(`${NPM_PROXY}/${TYPO_NAME}`)
   expect(
     recheck.status(),
-    `expected ${TYPO_NAME} to be allowed after override; got ${recheck.status()}`,
-  ).not.toBe(403)
+    `expected ${TYPO_NAME} to be allowed (2xx) after override; got ${recheck.status()}`,
+  ).toBeGreaterThanOrEqual(200)
+  expect(recheck.status()).toBeLessThan(300)
 
   await proxyCtx.dispose()
   await adminCtx.dispose()

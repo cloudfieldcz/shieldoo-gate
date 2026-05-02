@@ -121,7 +121,7 @@ test_typosquat() {
     # 6b. Typosquat blocks must persist as quarantined artifacts so admins
     # can release/override them from the Artifacts pane.
     # ------------------------------------------------------------------
-    local lodsah_artifact_id="npm:lodsah:*"
+    # URL-encoded form of "npm:lodsah:*" — chi treats `*` as a wildcard otherwise.
     local lodsah_artifact_id_enc="npm:lodsah:%2A"
     local lodsah_status
     lodsah_status=$(api_jq "/api/v1/artifacts/${lodsah_artifact_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
@@ -151,10 +151,14 @@ test_typosquat() {
         assert_eq "Typosquat override: artifact status is CLEAN after release" \
             "CLEAN" "$after_release_status"
 
-        # Policy override must exist with scope='package' and empty version
+        # Policy override must exist with scope='package' and empty version.
+        # `// empty` makes jq emit nothing (instead of the literal "null") when
+        # no matching override is present, so a missing override fails loudly
+        # against the "package" assertion below rather than masquerading as a
+        # different value.
         local override_scope
         override_scope=$(api_jq "/api/v1/overrides?ecosystem=npm" \
-            '[.data[] | select(.name=="lodsah" and .revoked==false)][0].scope' 2>/dev/null || echo "")
+            '[.data[] | select(.name=="lodsah" and .revoked==false)][0].scope // empty' 2>/dev/null || echo "")
         assert_eq "Typosquat override: policy override created with scope=package" \
             "package" "$override_scope"
 

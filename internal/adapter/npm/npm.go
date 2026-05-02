@@ -644,24 +644,9 @@ func (a *NPMAdapter) blockIfTyposquat(w http.ResponseWriter, r *http.Request, pk
 		return false
 	}
 
-	// Active policy override allows the request through.
-	if a.policyEngine != nil && a.policyEngine.HasOverride(r.Context(), scanner.EcosystemNPM, pkgName, version) {
-		log.Info().Str("package", pkgName).Str("version", version).Str("verdict", string(result.Verdict)).
-			Msg("typosquat pre-scan: allowed by policy override")
-		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
-			EventType: model.EventServed,
-			ClientIP:  r.RemoteAddr,
-			UserAgent: r.UserAgent(),
-			Reason:    "typosquat pre-scan overridden",
-		})
-		return false
-	}
-
-	log.Warn().Str("package", pkgName).Str("version", version).Str("verdict", string(result.Verdict)).
-		Float32("confidence", result.Confidence).Msg("typosquat pre-scan: blocked before upstream fetch")
-
-	// Build the canonical artifact ID using the same sanitization as
-	// downloadScanServe so a later cache fetch lines up with the synthetic row.
+	// Build the canonical artifact ID up front so audit logs (override-allowed
+	// path included) and the synthetic-row write all reference the same ID.
+	// Sanitization mirrors downloadScanServe so a later cache fetch lines up.
 	safeNamePart := strings.NewReplacer("/", "_", "@", "").Replace(pkgName)
 	persistVersion := version
 	if persistVersion == "" {
@@ -669,16 +654,41 @@ func (a *NPMAdapter) blockIfTyposquat(w http.ResponseWriter, r *http.Request, pk
 	}
 	artifactID := fmt.Sprintf("%s:%s:%s", string(scanner.EcosystemNPM), safeNamePart, persistVersion)
 
+	// Active policy override allows the request through.
+	if a.policyEngine != nil && a.policyEngine.HasOverride(r.Context(), scanner.EcosystemNPM, pkgName, version) {
+		log.Info().Str("artifact", artifactID).Str("verdict", string(result.Verdict)).
+			Msg("typosquat pre-scan: allowed by policy override")
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
+			EventType:  model.EventServed,
+			ArtifactID: artifactID,
+			ClientIP:   r.RemoteAddr,
+			UserAgent:  r.UserAgent(),
+			Reason:     "typosquat pre-scan overridden",
+		})
+		return false
+	}
+
+	log.Warn().Str("artifact", artifactID).Str("verdict", string(result.Verdict)).
+		Float32("confidence", result.Confidence).Msg("typosquat pre-scan: blocked before upstream fetch")
+
 	// Persist a synthetic artifact + status + scan_results so the block is
 	// visible in the Artifacts pane and overridable from there.
 	if err := adapter.PersistTyposquatBlock(a.db, artifactID, scanner.EcosystemNPM, pkgName, version, result, time.Now().UTC()); err != nil {
-		log.Error().Err(err).Str("package", pkgName).Msg("typosquat pre-scan: failed to persist block record")
+		log.Error().Err(err).Str("artifact", artifactID).Msg("typosquat pre-scan: failed to persist block record")
+	}
+
+	// Findings is normally non-empty for Suspicious/Malicious verdicts, but
+	// we don't want a misbehaving scanner to crash the proxy — fall back to
+	// a generic reason string when the slice is empty.
+	reason := "typosquatting detected"
+	if len(result.Findings) > 0 {
+		reason = "typosquatting detected: " + result.Findings[0].Description
 	}
 
 	adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
 		Error:    "blocked",
 		Artifact: artifactID,
-		Reason:   "typosquatting detected: " + result.Findings[0].Description,
+		Reason:   reason,
 	})
 	_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 		EventType:  model.EventBlocked,
