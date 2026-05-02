@@ -216,6 +216,10 @@ func (a *NuGetAdapter) handleRegistration(w http.ResponseWriter, r *http.Request
 		})
 		return
 	}
+	// Pre-scan for typosquatting BEFORE contacting upstream.
+	if a.blockIfTyposquat(w, r, id, "") {
+		return
+	}
 	a.proxyUpstreamRewrite(w, r, "/v3/registration/"+id+"/index.json")
 }
 
@@ -257,8 +261,92 @@ func (a *NuGetAdapter) handleNupkgDownload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Pre-scan for typosquatting BEFORE contacting upstream.
+	if a.blockIfTyposquat(w, r, id, version) {
+		return
+	}
+
 	upstreamPath := "/v3-flatcontainer/" + id + "/" + version + "/" + filename
 	a.downloadScanServe(w, r, a.upstreamURL+upstreamPath, id, version)
+}
+
+// blockIfTyposquat runs the typosquat pre-scan and returns true if the
+// request was blocked (response already written). Returns false if the
+// package id is clean, the scanner is not available, or an active policy
+// override permits the package through. Pass version="" for name-only
+// pre-scans (registration metadata); pass the real version on .nupkg
+// requests so version-scoped overrides match.
+func (a *NuGetAdapter) blockIfTyposquat(w http.ResponseWriter, r *http.Request, pkgID, version string) bool {
+	result, ok := a.scanEngine.PreScanTyposquat(r.Context(), pkgID, scanner.EcosystemNuGet)
+	if !ok {
+		return false
+	}
+	if result.Verdict != scanner.VerdictSuspicious && result.Verdict != scanner.VerdictMalicious {
+		return false
+	}
+
+	// Synthetic typosquat rows always carry version="*" — override scope is
+	// package-wide because typosquat detection is name-based.
+	artifactID := fmt.Sprintf("%s:%s:%s", string(scanner.EcosystemNuGet), pkgID, adapter.TyposquatPlaceholderVersion)
+
+	// Detached audit context — request may cancel mid-flight but audit-log
+	// writes must still land. Mirrors policy.hasDBOverride rationale.
+	auditCtx, auditCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer auditCancel()
+
+	// Active policy override allows the request through.
+	if a.policyEngine != nil {
+		if overrideID, hasOverride := a.policyEngine.HasOverride(r.Context(), scanner.EcosystemNuGet, pkgID, version); hasOverride {
+			log.Info().Str("artifact", artifactID).Str("verdict", string(result.Verdict)).
+				Int64("override_id", overrideID).
+				Msg("typosquat pre-scan: allowed by policy override")
+			_ = adapter.WriteAuditLogCtx(auditCtx, a.db, model.AuditEntry{
+				EventType:    model.EventServed,
+				ArtifactID:   artifactID,
+				ClientIP:     r.RemoteAddr,
+				UserAgent:    r.UserAgent(),
+				Reason:       "typosquat pre-scan overridden",
+				MetadataJSON: fmt.Sprintf(`{"override_id":%d}`, overrideID),
+			})
+			return false
+		}
+	}
+
+	log.Warn().Str("artifact", artifactID).Str("verdict", string(result.Verdict)).
+		Float32("confidence", result.Confidence).Msg("typosquat pre-scan: blocked before upstream fetch")
+
+	// Persist a synthetic artifact + status + scan_results so the block is
+	// visible in the Artifacts pane and overridable from there.
+	if err := adapter.PersistTyposquatBlock(a.db, artifactID, scanner.EcosystemNuGet, pkgID, result, time.Now().UTC()); err != nil {
+		log.Error().Err(err).Str("artifact", artifactID).Msg("typosquat pre-scan: failed to persist block record")
+	}
+
+	// Public 403 response: keep the reason generic so we don't leak which
+	// popular package the seed flagged us against. The full description still
+	// lands in scan_results.findings_json and audit_log.reason for admins.
+	adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+		Error:    "blocked",
+		Artifact: artifactID,
+		Reason:   "typosquatting detected",
+	})
+	_ = adapter.WriteAuditLogCtx(auditCtx, a.db, model.AuditEntry{
+		EventType:  model.EventBlocked,
+		ArtifactID: artifactID,
+		ClientIP:   r.RemoteAddr,
+		UserAgent:  r.UserAgent(),
+		Reason:     typosquatBlockReason(result),
+	})
+	return true
+}
+
+// typosquatBlockReason returns the rich admin-only description used in audit
+// log entries — keeps the popular-package name in the audit trail while the
+// public 403 response stays generic.
+func typosquatBlockReason(result scanner.ScanResult) string {
+	if len(result.Findings) > 0 {
+		return "typosquat pre-scan: " + result.Findings[0].Description
+	}
+	return "typosquat pre-scan: " + string(result.Verdict)
 }
 
 // downloadScanServe is the core scan pipeline for .nupkg packages.
