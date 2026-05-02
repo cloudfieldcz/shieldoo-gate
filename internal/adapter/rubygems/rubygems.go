@@ -176,6 +176,77 @@ func rubygemsArtifactID(name, version, filename string) string {
 	return fmt.Sprintf("%s:%s:%s:%s", string(scanner.EcosystemRubyGems), name, version, filename)
 }
 
+// handleTyposquatPreScan runs the typosquat scanner on name before any
+// upstream call. Returns true if the request was blocked (response already
+// written). Returns false if the name is clean, no scanner is registered, or
+// an active policy override permits the request. Synthetic typosquat rows
+// always carry version="*" — typosquat detection is name-based, so the
+// override scope is package-wide regardless of the request's gem version.
+func (a *RubyGemsAdapter) handleTyposquatPreScan(w http.ResponseWriter, r *http.Request, name, version string) bool {
+	result, ok := a.scanEngine.PreScanTyposquat(r.Context(), name, scanner.EcosystemRubyGems)
+	if !ok {
+		return false
+	}
+	if result.Verdict != scanner.VerdictSuspicious && result.Verdict != scanner.VerdictMalicious {
+		return false
+	}
+
+	// Synthetic 3-segment ID: rubygems:name:* (drop the filename slot — the
+	// override scope is name-based and a single row represents all versions).
+	artifactID := fmt.Sprintf("%s:%s:%s", string(scanner.EcosystemRubyGems), name, adapter.TyposquatPlaceholderVersion)
+
+	auditCtx, auditCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer auditCancel()
+
+	if a.policyEngine != nil {
+		if overrideID, hasOverride := a.policyEngine.HasOverride(r.Context(), scanner.EcosystemRubyGems, name, version); hasOverride {
+			log.Info().Str("artifact", artifactID).Str("verdict", string(result.Verdict)).
+				Int64("override_id", overrideID).
+				Msg("typosquat pre-scan: allowed by policy override")
+			_ = adapter.WriteAuditLogCtx(auditCtx, a.db, model.AuditEntry{
+				EventType:    model.EventServed,
+				ArtifactID:   artifactID,
+				ClientIP:     r.RemoteAddr,
+				UserAgent:    r.UserAgent(),
+				Reason:       "typosquat pre-scan overridden",
+				MetadataJSON: fmt.Sprintf(`{"override_id":%d}`, overrideID),
+			})
+			return false
+		}
+	}
+
+	log.Warn().Str("artifact", artifactID).Str("verdict", string(result.Verdict)).
+		Float32("confidence", result.Confidence).Msg("typosquat pre-scan: blocked before upstream fetch")
+
+	if err := adapter.PersistTyposquatBlock(a.db, artifactID, scanner.EcosystemRubyGems, name, result, time.Now().UTC()); err != nil {
+		log.Error().Err(err).Str("artifact", artifactID).Msg("typosquat pre-scan: failed to persist block record")
+	}
+
+	adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+		Error:    "blocked",
+		Artifact: artifactID,
+		Reason:   "typosquatting detected",
+	})
+	_ = adapter.WriteAuditLogCtx(auditCtx, a.db, model.AuditEntry{
+		EventType:  model.EventBlocked,
+		ArtifactID: artifactID,
+		ClientIP:   r.RemoteAddr,
+		UserAgent:  r.UserAgent(),
+		Reason:     typosquatBlockReason(result),
+	})
+	return true
+}
+
+// typosquatBlockReason returns the rich admin-only description used in audit
+// log entries — keeps the popular-package name in the audit trail while the
+// public 403 response stays generic.
+func typosquatBlockReason(result scanner.ScanResult) string {
+	if len(result.Findings) > 0 {
+		return "typosquat pre-scan: " + result.Findings[0].Description
+	}
+	return "typosquat pre-scan: " + string(result.Verdict)
+}
+
 // handleGemDownload handles GET /gems/{filename} — the main scan pipeline.
 func (a *RubyGemsAdapter) handleGemDownload(w http.ResponseWriter, r *http.Request) {
 	filename := chi.URLParam(r, "filename")
@@ -280,6 +351,11 @@ func (a *RubyGemsAdapter) handlePassThrough(w http.ResponseWriter, r *http.Reque
 func (a *RubyGemsAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, name, version, filename string) {
 	ctx := r.Context()
 	artifactID := rubygemsArtifactID(name, version, filename)
+
+	// Pre-scan for typosquatting BEFORE contacting upstream.
+	if a.handleTyposquatPreScan(w, r, name, version) {
+		return
+	}
 
 	// 1. Check if already in cache with a known status.
 	cachedPath, cacheErr := a.cache.Get(ctx, artifactID)
