@@ -672,6 +672,14 @@ func VerifyUpstreamIntegrity(db *config.GateDB, artifactID, newSHA256 string) er
 		return fmt.Errorf("integrity: reading SHA256 for %s: %w", artifactID, err)
 	}
 
+	// Synthetic rows (e.g. typosquat blocks persisted by PersistTyposquatBlock)
+	// store sha256="" because the proxy never downloaded any content. After an
+	// admin Release, the next legitimate fetch records a real SHA — there is
+	// nothing to compare against, so this is effectively a first download.
+	if existingSHA256 == "" {
+		return nil
+	}
+
 	if existingSHA256 != newSHA256 {
 		reason := fmt.Sprintf("INTEGRITY VIOLATION: upstream content changed (known=%s, downloaded=%s)", existingSHA256, newSHA256)
 		now := time.Now().UTC()

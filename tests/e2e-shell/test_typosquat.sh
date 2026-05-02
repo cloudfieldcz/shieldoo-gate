@@ -177,6 +177,83 @@ test_typosquat() {
     fi
 
     # ------------------------------------------------------------------
+    # 6d. Regression (integrity bug, fixed 2026-05): the synthetic typosquat
+    # row is persisted with sha256="" because the proxy never downloaded any
+    # content. After Release, a real fetch must NOT trip a false
+    # INTEGRITY_VIOLATION (which would re-quarantine the artifact and 403
+    # the legitimate fetch). Exercises the PyPI flow end-to-end.
+    # ------------------------------------------------------------------
+    # Trigger a PyPI typosquat block by fetching a tarball URL with a
+    # typosquat name. parseFilename extracts version from the filename,
+    # so the synthetic artifact ID is "pypi:requestes:1.0.0".
+    local pypi_typo_block_status
+    pypi_typo_block_status=$(curl -s -o /dev/null -w "%{http_code}" \
+        "${E2E_CURL_AUTH[@]}" \
+        "${E2E_PYPI_URL}/packages/requestes/requestes-1.0.0.tar.gz")
+    if [ "$pypi_typo_block_status" != "403" ]; then
+        log_skip "Typosquat regression (pypi): expected 403 block on 'requestes', got $pypi_typo_block_status — skipping integrity regression"
+    else
+        log_pass "Typosquat regression (pypi): 'requestes' blocked with HTTP 403"
+
+        # Synthetic row should exist as QUARANTINED with empty sha256.
+        local pypi_typo_id_enc="pypi:requestes:1.0.0"
+        local pypi_typo_status pypi_typo_sha
+        pypi_typo_status=$(api_jq "/api/v1/artifacts/${pypi_typo_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
+        pypi_typo_sha=$(api_jq "/api/v1/artifacts/${pypi_typo_id_enc}" '.sha256 // ""' 2>/dev/null || echo "")
+        assert_eq "Typosquat regression (pypi): synthetic row is QUARANTINED" \
+            "QUARANTINED" "$pypi_typo_status"
+        assert_eq "Typosquat regression (pypi): synthetic row has empty sha256" \
+            "" "$pypi_typo_sha"
+
+        # Release the block.
+        local pypi_release_response
+        pypi_release_response=$(curl -sf -X POST \
+            "${E2E_ADMIN_URL}/api/v1/artifacts/${pypi_typo_id_enc}/release" 2>/dev/null || echo "")
+        if [ -n "$pypi_release_response" ]; then
+            log_pass "Typosquat regression (pypi): release endpoint accepted POST"
+        else
+            log_fail "Typosquat regression (pypi): release endpoint returned no response"
+        fi
+
+        # Status must now be CLEAN.
+        local pypi_after_release_status
+        pypi_after_release_status=$(api_jq "/api/v1/artifacts/${pypi_typo_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
+        assert_eq "Typosquat regression (pypi): status CLEAN after release" \
+            "CLEAN" "$pypi_after_release_status"
+
+        # Real fetch — must NOT return 403. Upstream may return any status
+        # (200 if hosted, 502/404 otherwise); the regression assertion is
+        # that the gate's override path is honored, not the upstream
+        # availability. Crucially, the artifact must NOT be re-quarantined
+        # by a false integrity violation against the empty stored SHA.
+        local pypi_recheck_status
+        pypi_recheck_status=$(curl -s -o /dev/null -w "%{http_code}" \
+            "${E2E_CURL_AUTH[@]}" \
+            "${E2E_PYPI_URL}/packages/requestes/requestes-1.0.0.tar.gz")
+        if [ "$pypi_recheck_status" = "403" ]; then
+            log_fail "Typosquat regression (pypi): re-fetch still 403 — override or integrity short-circuit broken (got $pypi_recheck_status)"
+        else
+            log_pass "Typosquat regression (pypi): re-fetch no longer blocked (HTTP $pypi_recheck_status)"
+        fi
+
+        # Final guard: status must remain CLEAN. If the empty-SHA short-circuit
+        # in VerifyUpstreamIntegrity were missing, a successful upstream
+        # download would have flipped status back to QUARANTINED with an
+        # INTEGRITY_VIOLATION audit entry.
+        local pypi_final_status
+        pypi_final_status=$(api_jq "/api/v1/artifacts/${pypi_typo_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
+        assert_eq "Typosquat regression (pypi): status remains CLEAN after re-fetch (no false integrity violation)" \
+            "CLEAN" "$pypi_final_status"
+
+        # And no INTEGRITY_VIOLATION event for this artifact in the audit log.
+        local integrity_events
+        integrity_events=$(api_jq "/api/v1/audit?event_type=INTEGRITY_VIOLATION&per_page=200" \
+            "[.data[] | select(.artifact_id == \"${pypi_typo_id_enc}\")] | length" 2>/dev/null || echo "0")
+        assert_eq "Typosquat regression (pypi): no INTEGRITY_VIOLATION event for synthetic row" \
+            "0" "$integrity_events"
+    fi
+
+    # ------------------------------------------------------------------
     # 7. Verify gate logs contain typosquat scanner activity
     # ------------------------------------------------------------------
     local gate_logs

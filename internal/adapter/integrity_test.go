@@ -148,3 +148,31 @@ func TestVerifyUpstreamIntegrity_UnknownArtifact_ReturnsNil(t *testing.T) {
 	err := adapter.VerifyUpstreamIntegrity(db, "npm:new:1.0.0", "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890")
 	assert.NoError(t, err)
 }
+
+// Regression: synthetic typosquat-block rows persist with sha256="" because the
+// proxy never downloaded the artifact. When an admin Releases the block and a
+// real fetch happens, VerifyUpstreamIntegrity must treat the empty stored SHA
+// as "no prior content to compare against" — otherwise the legitimate fetch
+// trips a false integrity violation and the artifact gets re-quarantined.
+func TestVerifyUpstreamIntegrity_EmptyExistingSHA_ReturnsNil(t *testing.T) {
+	db := setupTestDB(t)
+	// Synthetic typosquat row: known artifact ID but no recorded SHA.
+	insertTestArtifact(t, db, "pypi:reqeusts:*", "")
+
+	err := adapter.VerifyUpstreamIntegrity(db, "pypi:reqeusts:*",
+		"abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890")
+	require.NoError(t, err)
+
+	// Status must remain CLEAN (no false-positive quarantine).
+	var status string
+	require.NoError(t, db.Get(&status,
+		`SELECT status FROM artifact_status WHERE artifact_id = ?`, "pypi:reqeusts:*"))
+	assert.Equal(t, "CLEAN", status)
+
+	// And no INTEGRITY_VIOLATION audit entry written.
+	var count int
+	require.NoError(t, db.Get(&count,
+		`SELECT COUNT(*) FROM audit_log WHERE event_type = ?`,
+		string(model.EventIntegrityViolation)))
+	assert.Equal(t, 0, count)
+}
