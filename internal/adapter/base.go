@@ -542,6 +542,151 @@ func InsertArtifact(db *config.GateDB, artifactID string, artifact model.Artifac
 	return nil
 }
 
+// TyposquatPlaceholderVersion is the sentinel version stored on synthetic
+// artifact rows produced by the typosquat pre-scan. Typosquat detection is
+// name-based, so the override scope is package-wide; the synthetic row's
+// version is always "*". When an admin clicks Release on such a row, the API
+// creates a package-scoped policy override.
+const TyposquatPlaceholderVersion = "*"
+
+// typosquatNameMaxLen is the upper bound on the rawName argument to
+// PersistTyposquatBlock. Mirrors maxNameLength in the typosquat scanner —
+// names longer than this never match a popular package and would only inflate
+// DB storage if persisted.
+const typosquatNameMaxLen = 128
+
+// typosquatPersistDedup gates DB writes from PersistTyposquatBlock so repeated
+// typosquat-name probes (a typical attacker pattern) don't multiply
+// scan_results / artifacts churn. Keyed by artifactID, value is the time the
+// last persist landed; entries past the configured window are treated as
+// expired. The window is mutated only at startup (via
+// SetTyposquatPersistDedupWindow) and from tests, so a single mutex is enough.
+var (
+	typosquatPersistMu     sync.Mutex
+	typosquatPersistLast   = make(map[string]time.Time)
+	typosquatPersistWindow = 5 * time.Minute
+)
+
+// SetTyposquatPersistDedupWindow updates the dedup TTL used by
+// PersistTyposquatBlock. Called once at startup from the config wiring.
+// d <= 0 disables dedup entirely (every call persists).
+func SetTyposquatPersistDedupWindow(d time.Duration) {
+	typosquatPersistMu.Lock()
+	defer typosquatPersistMu.Unlock()
+	typosquatPersistWindow = d
+}
+
+// ResetTyposquatPersistDedup clears the dedup state. Tests use this to make
+// each test case independent of others that ran before it.
+func ResetTyposquatPersistDedup() {
+	typosquatPersistMu.Lock()
+	defer typosquatPersistMu.Unlock()
+	typosquatPersistLast = make(map[string]time.Time)
+}
+
+// shouldPersistTyposquat returns true when the given artifactID has not been
+// persisted within the current dedup window, and records the current
+// wall-clock time as the persistence time. Opportunistically prunes expired
+// entries to keep the map size bounded by the count of distinct typosquat
+// probes per window. Wall-clock (time.Now) — not the caller-provided artifact
+// timestamp — is used so that the dedup tracks real-world cadence regardless
+// of what the caller passes for the persisted row's metadata.
+func shouldPersistTyposquat(artifactID string) bool {
+	typosquatPersistMu.Lock()
+	defer typosquatPersistMu.Unlock()
+
+	now := time.Now()
+	window := typosquatPersistWindow
+	if window <= 0 {
+		// Dedup disabled — record but never suppress.
+		typosquatPersistLast[artifactID] = now
+		return true
+	}
+
+	if last, ok := typosquatPersistLast[artifactID]; ok && now.Sub(last) < window {
+		return false
+	}
+
+	// Opportunistic GC of stale keys. O(N) on each persist is acceptable —
+	// N is at most "distinct typosquat names probed in the last window".
+	if len(typosquatPersistLast) > 0 {
+		cutoff := now.Add(-window)
+		for k, t := range typosquatPersistLast {
+			if t.Before(cutoff) {
+				delete(typosquatPersistLast, k)
+			}
+		}
+	}
+
+	typosquatPersistLast[artifactID] = now
+	return true
+}
+
+// PersistTyposquatBlock writes a synthetic artifact + status + scan_results
+// triple representing a typosquat pre-scan block. The artifact carries empty
+// upstream_url / sha256 / storage_path and size_bytes=0 because no file was
+// fetched; the row exists purely so admins can see and override the block via
+// the Artifacts pane.
+//
+// artifactID is the row's primary key — callers should pre-sanitize it to
+// match the convention used by their full-scan persistence path (e.g. npm
+// replaces "/" and "@" so scoped packages get IDs like "npm:scope_pkg:*").
+// rawName is stored verbatim in artifacts.name so that override matching
+// (which compares against scanner.Artifact.Name) works correctly.
+//
+// The synthetic row always stores version="*" because typosquat detection is
+// name-based — the override scope is always package-wide. Repeated calls for
+// the same artifactID within the dedup window (default 5 minutes; tunable via
+// SetTyposquatPersistDedupWindow) are no-ops, bounding DB write growth under
+// typosquat-name flooding.
+//
+// Returns an error when rawName exceeds typosquatNameMaxLen — names longer
+// than the scanner's match cap can never be popular-package matches and
+// would only inflate persisted state.
+func PersistTyposquatBlock(db *config.GateDB, artifactID string, ecosystem scanner.Ecosystem, rawName string, result scanner.ScanResult, now time.Time) error {
+	if len(rawName) > typosquatNameMaxLen {
+		return fmt.Errorf("adapter: typosquat block: name too long (%d > %d)", len(rawName), typosquatNameMaxLen)
+	}
+
+	if !shouldPersistTyposquat(artifactID) {
+		// Recently persisted — skip the DB churn.
+		return nil
+	}
+
+	art := model.Artifact{
+		Ecosystem:      string(ecosystem),
+		Name:           rawName,
+		Version:        TyposquatPlaceholderVersion,
+		UpstreamURL:    "",
+		SHA256:         "",
+		SizeBytes:      0,
+		CachedAt:       now,
+		LastAccessedAt: now,
+		StoragePath:    "",
+	}
+
+	reason := "typosquat pre-scan: " + string(result.Verdict)
+	if len(result.Findings) > 0 {
+		reason = "typosquat: " + result.Findings[0].Description
+	}
+
+	quarantinedAt := now
+	status := model.ArtifactStatus{
+		ArtifactID:       artifactID,
+		Status:           model.StatusQuarantined,
+		QuarantineReason: reason,
+		QuarantinedAt:    &quarantinedAt,
+	}
+
+	if err := InsertArtifact(db, artifactID, art, status); err != nil {
+		return err
+	}
+	if err := InsertScanResults(db, artifactID, []scanner.ScanResult{result}); err != nil {
+		return err
+	}
+	return nil
+}
+
 // ComputeSHA256 returns the hex-encoded SHA256 hash of the file at the given path.
 func ComputeSHA256(path string) (string, error) {
 	f, err := os.Open(path)
@@ -609,6 +754,14 @@ func VerifyUpstreamIntegrity(db *config.GateDB, artifactID, newSHA256 string) er
 			return nil
 		}
 		return fmt.Errorf("integrity: reading SHA256 for %s: %w", artifactID, err)
+	}
+
+	// Synthetic rows (e.g. typosquat blocks persisted by PersistTyposquatBlock)
+	// store sha256="" because the proxy never downloaded any content. After an
+	// admin Release, the next legitimate fetch records a real SHA — there is
+	// nothing to compare against, so this is effectively a first download.
+	if existingSHA256 == "" {
+		return nil
 	}
 
 	if existingSHA256 != newSHA256 {

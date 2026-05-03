@@ -248,25 +248,11 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 	// 2. Pre-scan for typosquatting BEFORE contacting upstream.
 	// The typosquat scanner only needs the package name — no file content.
 	// Blocking here avoids 502s for non-existent typosquat packages and
-	// prevents the proxy from fetching known-bad names.
-	if result, ok := a.scanEngine.PreScanTyposquat(ctx, pkgName, scanner.EcosystemPyPI); ok {
-		if result.Verdict == scanner.VerdictSuspicious || result.Verdict == scanner.VerdictMalicious {
-			log.Warn().Str("artifact", artifactID).Str("verdict", string(result.Verdict)).
-				Float32("confidence", result.Confidence).Msg("typosquat pre-scan: blocked before upstream fetch")
-			adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
-				Error:    "blocked",
-				Artifact: artifactID,
-				Reason:   "typosquatting detected: " + result.Findings[0].Description,
-			})
-			_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
-				EventType:  model.EventBlocked,
-				ArtifactID: artifactID,
-				ClientIP:   r.RemoteAddr,
-				UserAgent:  r.UserAgent(),
-				Reason:     "typosquat pre-scan: " + string(result.Verdict),
-			})
-			return
-		}
+	// prevents the proxy from fetching known-bad names. Active policy
+	// overrides (package- or version-scoped) suppress the block so admins
+	// can allow legitimate-but-similar names through.
+	if a.handleTyposquatPreScan(w, r, pkgName, pkgVersion) {
+		return
 	}
 
 	// 3. Acquire per-artifact lock to prevent concurrent download/scan races.
@@ -650,6 +636,75 @@ func parseFilename(filename string) (string, string) {
 		return filename, "unknown"
 	}
 	return CanonicalName(rawName), version
+}
+
+// handleTyposquatPreScan runs the typosquat scanner on pkgName before any
+// upstream fetch. Returns true when the request was blocked (response already
+// written) and false when the request should continue down the normal pipeline
+// (clean name, scanner unavailable, or active policy override).
+//
+// The synthetic artifact ID always uses version="*" — typosquat detection is
+// name-based, so the override scope is always package-wide. This ID is
+// distinct from the per-version artifactID used by the rest of the pipeline,
+// so a future legitimate fetch under a real version doesn't collide.
+func (a *PyPIAdapter) handleTyposquatPreScan(w http.ResponseWriter, r *http.Request, pkgName, pkgVersion string) bool {
+	result, ok := a.scanEngine.PreScanTyposquat(r.Context(), pkgName, scanner.EcosystemPyPI)
+	if !ok {
+		return false
+	}
+	if result.Verdict != scanner.VerdictSuspicious && result.Verdict != scanner.VerdictMalicious {
+		return false
+	}
+
+	typosquatArtifactID := fmt.Sprintf("%s:%s:%s", string(scanner.EcosystemPyPI), pkgName, adapter.TyposquatPlaceholderVersion)
+
+	// Detached audit context — request may cancel, audit must land.
+	auditCtx, auditCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer auditCancel()
+
+	if a.policyEngine != nil {
+		if overrideID, hasOverride := a.policyEngine.HasOverride(r.Context(), scanner.EcosystemPyPI, pkgName, pkgVersion); hasOverride {
+			log.Info().Str("artifact", typosquatArtifactID).Str("verdict", string(result.Verdict)).
+				Int64("override_id", overrideID).
+				Msg("typosquat pre-scan: allowed by policy override")
+			_ = adapter.WriteAuditLogCtx(auditCtx, a.db, model.AuditEntry{
+				EventType:    model.EventServed,
+				ArtifactID:   typosquatArtifactID,
+				ClientIP:     r.RemoteAddr,
+				UserAgent:    r.UserAgent(),
+				Reason:       "typosquat pre-scan overridden",
+				MetadataJSON: fmt.Sprintf(`{"override_id":%d}`, overrideID),
+			})
+			return false
+		}
+	}
+
+	log.Warn().Str("artifact", typosquatArtifactID).Str("verdict", string(result.Verdict)).
+		Float32("confidence", result.Confidence).Msg("typosquat pre-scan: blocked before upstream fetch")
+	if err := adapter.PersistTyposquatBlock(a.db, typosquatArtifactID, scanner.EcosystemPyPI, pkgName, result, time.Now().UTC()); err != nil {
+		log.Error().Err(err).Str("artifact", typosquatArtifactID).Msg("typosquat pre-scan: failed to persist block record")
+	}
+
+	// Public 403 reason kept generic so attackers can't enumerate the seed;
+	// rich description is preserved in scan_results.findings_json and
+	// audit_log.reason for admins.
+	adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+		Error:    "blocked",
+		Artifact: typosquatArtifactID,
+		Reason:   "typosquatting detected",
+	})
+	auditReason := "typosquat pre-scan: " + string(result.Verdict)
+	if len(result.Findings) > 0 {
+		auditReason = "typosquat pre-scan: " + result.Findings[0].Description
+	}
+	_ = adapter.WriteAuditLogCtx(auditCtx, a.db, model.AuditEntry{
+		EventType:  model.EventBlocked,
+		ArtifactID: typosquatArtifactID,
+		ClientIP:   r.RemoteAddr,
+		UserAgent:  r.UserAgent(),
+		Reason:     auditReason,
+	})
+	return true
 }
 
 // splitNameVersion splits a PyPI filename into its raw (pre-canonical) name

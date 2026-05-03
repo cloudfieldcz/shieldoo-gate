@@ -134,7 +134,9 @@ export default function ArtifactDetailPanel({ artifactId, search, onClose }: Art
           </div>
           <div className="flex justify-between text-sm">
             <span className="text-gray-500">Version</span>
-            <span className="font-mono text-gray-800">{detail.version}</span>
+            <span className="font-mono text-gray-800">
+              {detail.version === '*' ? <span className="italic text-gray-500">(any version)</span> : detail.version}
+            </span>
           </div>
           {detail.id.split(':').length >= 4 && (
             <div className="flex justify-between text-sm">

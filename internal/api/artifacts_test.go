@@ -179,6 +179,121 @@ func TestHandleRelease_ScopedNpmPackage_OverrideUsesOriginalName(t *testing.T) {
 		"policy override must use original package name, not sanitized ID name")
 }
 
+func TestHandleRelease_TyposquatPlaceholder_CreatesPackageScopeOverride(t *testing.T) {
+	srv, db := newTestServer(t)
+
+	// Synthetic typosquat-block artifact: version="*" indicates a name-only block.
+	insertTestArtifact(t, db, "npm:lodsah:*", "npm", "lodsah", "*")
+
+	// Quarantine to mirror the real pre-scan state.
+	router := srv.Routes()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts/npm:lodsah:*/quarantine", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	// Release: must create a PACKAGE-scoped override with empty version.
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts/npm:lodsah:*/release", nil)
+	rec2 := httptest.NewRecorder()
+	router.ServeHTTP(rec2, req2)
+	require.Equal(t, http.StatusOK, rec2.Code)
+
+	var scope, version string
+	err := db.QueryRow(
+		`SELECT scope, version FROM policy_overrides
+		 WHERE ecosystem = 'npm' AND name = 'lodsah' AND revoked = FALSE`,
+	).Scan(&scope, &version)
+	require.NoError(t, err)
+	assert.Equal(t, "package", scope, "typosquat placeholder release must create package-scoped override")
+	assert.Equal(t, "", version, "package-scoped override must have empty version")
+
+	// Status should be CLEAN.
+	var status string
+	require.NoError(t, db.QueryRow(`SELECT status FROM artifact_status WHERE artifact_id = 'npm:lodsah:*'`).Scan(&status))
+	assert.Equal(t, "CLEAN", status)
+}
+
+// TestHandleRelease_4SegmentMavenID_OK locks in the URL-decoding round-trip
+// for the 4-segment Maven typosquat synthetic IDs introduced in Phase 2 of
+// the typosquat-rollout. The synthetic ID is
+// `maven:groupId:artifactId:*` — the trailing `*` must be URL-encoded as
+// `%2A` by the client, and chi + the artifactID() helper must decode it
+// back to the colon-separated id with the literal `*` suffix.
+func TestHandleRelease_4SegmentMavenID_OK(t *testing.T) {
+	srv, db := newTestServer(t)
+
+	// Synthetic Maven typosquat block: 4-segment ID with version="*".
+	insertTestArtifact(t, db, "maven:com.google.guava:guave:*", "maven", "com.google.guava:guave", "*")
+
+	router := srv.Routes()
+
+	// Quarantine first to mirror the real pre-scan state.
+	quarReq := httptest.NewRequest(http.MethodPost,
+		"/api/v1/artifacts/maven:com.google.guava:guave:%2A/quarantine", nil)
+	quarRec := httptest.NewRecorder()
+	router.ServeHTTP(quarRec, quarReq)
+	require.Equal(t, http.StatusOK, quarRec.Code,
+		"quarantine on 4-segment maven ID with %2A-encoded star must round-trip")
+
+	// Release: must round-trip the encoded ID and create a package-scoped
+	// override carrying the original groupId:artifactId name.
+	relReq := httptest.NewRequest(http.MethodPost,
+		"/api/v1/artifacts/maven:com.google.guava:guave:%2A/release", nil)
+	relRec := httptest.NewRecorder()
+	router.ServeHTTP(relRec, relReq)
+	require.Equal(t, http.StatusOK, relRec.Code)
+
+	var scope, name, version string
+	err := db.QueryRow(
+		`SELECT scope, name, version FROM policy_overrides
+		  WHERE ecosystem = 'maven' AND revoked = FALSE`,
+	).Scan(&scope, &name, &version)
+	require.NoError(t, err)
+	assert.Equal(t, "package", scope)
+	assert.Equal(t, "com.google.guava:guave", name,
+		"override must keep the colon-separated groupId:artifactId form, not the synthetic ID slot split")
+	assert.Equal(t, "", version, "package-scoped overrides have empty version")
+}
+
+// TestHandleRelease_GoModSlashID_OK locks in the URL-decoding round-trip for
+// gomod typosquat synthetic IDs, whose module path contains slashes
+// (`go:github.com/spf13/vipper:*`). Both the slashes (%2F) and the trailing
+// star (%2A) must round-trip through chi.
+func TestHandleRelease_GoModSlashID_OK(t *testing.T) {
+	srv, db := newTestServer(t)
+
+	insertTestArtifact(t, db, "go:github.com/spf13/vipper:*", "go", "github.com/spf13/vipper", "*")
+
+	router := srv.Routes()
+
+	// Encoded form: go:github.com%2Fspf13%2Fvipper:%2A
+	encodedID := "go:github.com%2Fspf13%2Fvipper:%2A"
+
+	quarReq := httptest.NewRequest(http.MethodPost,
+		"/api/v1/artifacts/"+encodedID+"/quarantine", nil)
+	quarRec := httptest.NewRecorder()
+	router.ServeHTTP(quarRec, quarReq)
+	require.Equal(t, http.StatusOK, quarRec.Code,
+		"quarantine on slash-bearing gomod ID with %2F+%2A encoding must round-trip")
+
+	relReq := httptest.NewRequest(http.MethodPost,
+		"/api/v1/artifacts/"+encodedID+"/release", nil)
+	relRec := httptest.NewRecorder()
+	router.ServeHTTP(relRec, relReq)
+	require.Equal(t, http.StatusOK, relRec.Code)
+
+	var scope, name, version string
+	err := db.QueryRow(
+		`SELECT scope, name, version FROM policy_overrides
+		  WHERE ecosystem = 'go' AND revoked = FALSE`,
+	).Scan(&scope, &name, &version)
+	require.NoError(t, err)
+	assert.Equal(t, "package", scope)
+	assert.Equal(t, "github.com/spf13/vipper", name,
+		"override must keep the full module path with slashes intact")
+	assert.Equal(t, "", version)
+}
+
 func TestHandleRescanArtifact_Exists_Returns202(t *testing.T) {
 	srv, db := newTestServer(t)
 

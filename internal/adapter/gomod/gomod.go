@@ -128,6 +128,17 @@ func (a *GoModAdapter) handleRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Pre-scan for typosquatting on .info, .mod, and .zip requests only.
+	// /@v/list and /@latest are skipped (decision B) — they're the name-only
+	// enumeration phase used by `go mod tidy` and gating them adds latency
+	// without preventing real exploitation (the actual fetch is .info/.mod/.zip).
+	switch parsed.reqType {
+	case reqVersionInfo, reqGoMod, reqZipDownload:
+		if a.blockIfTyposquat(w, r, parsed.modulePath, parsed.version) {
+			return
+		}
+	}
+
 	switch parsed.reqType {
 	case reqZipDownload:
 		a.downloadScanServe(w, r, parsed, rawPath)
@@ -253,6 +264,82 @@ func validateModuleURLPath(p string) error {
 // gomodArtifactID returns the canonical artifact ID for DB/cache lookups.
 func gomodArtifactID(modulePath, version string) string {
 	return fmt.Sprintf("%s:%s:%s", string(scanner.EcosystemGo), modulePath, version)
+}
+
+// blockIfTyposquat runs the typosquat scanner on modulePath before any
+// upstream call. Returns true if the request was blocked (response already
+// written with HTTP 410 Gone — the GOPROXY convention for "module not
+// available, do not retry"). Returns false if the path is clean, no scanner
+// is registered, or an active policy override permits the request.
+//
+// Synthetic typosquat rows always carry version="*" — typosquat detection
+// is name-based, so the override scope is module-path-wide. The artifact ID
+// uses the "go:" prefix (EcosystemGo = "go", not "gomod").
+func (a *GoModAdapter) blockIfTyposquat(w http.ResponseWriter, r *http.Request, modulePath, version string) bool {
+	result, ok := a.scanEngine.PreScanTyposquat(r.Context(), modulePath, scanner.EcosystemGo)
+	if !ok {
+		return false
+	}
+	if result.Verdict != scanner.VerdictSuspicious && result.Verdict != scanner.VerdictMalicious {
+		return false
+	}
+
+	artifactID := fmt.Sprintf("%s:%s:%s", string(scanner.EcosystemGo), modulePath, adapter.TyposquatPlaceholderVersion)
+
+	auditCtx, auditCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer auditCancel()
+
+	if a.policyEngine != nil {
+		if overrideID, hasOverride := a.policyEngine.HasOverride(r.Context(), scanner.EcosystemGo, modulePath, version); hasOverride {
+			log.Info().Str("artifact", artifactID).Str("verdict", string(result.Verdict)).
+				Int64("override_id", overrideID).
+				Msg("typosquat pre-scan: allowed by policy override")
+			_ = adapter.WriteAuditLogCtx(auditCtx, a.db, model.AuditEntry{
+				EventType:    model.EventServed,
+				ArtifactID:   artifactID,
+				ClientIP:     r.RemoteAddr,
+				UserAgent:    r.UserAgent(),
+				Reason:       "typosquat pre-scan overridden",
+				MetadataJSON: fmt.Sprintf(`{"override_id":%d}`, overrideID),
+			})
+			return false
+		}
+	}
+
+	log.Warn().Str("artifact", artifactID).Str("verdict", string(result.Verdict)).
+		Float32("confidence", result.Confidence).Msg("typosquat pre-scan: blocked before upstream fetch")
+
+	if err := adapter.PersistTyposquatBlock(a.db, artifactID, scanner.EcosystemGo, modulePath, result, time.Now().UTC()); err != nil {
+		log.Error().Err(err).Str("artifact", artifactID).Msg("typosquat pre-scan: failed to persist block record")
+	}
+
+	// 410 Gone is the GOPROXY convention for "this module is not available
+	// — do not retry credentials". Appropriate for typosquat blocks: it tells
+	// the Go client to give up immediately rather than churning through
+	// auth retries.
+	adapter.WriteJSONError(w, http.StatusGone, adapter.ErrorResponse{
+		Error:    "blocked",
+		Artifact: artifactID,
+		Reason:   "typosquatting detected",
+	})
+	_ = adapter.WriteAuditLogCtx(auditCtx, a.db, model.AuditEntry{
+		EventType:  model.EventBlocked,
+		ArtifactID: artifactID,
+		ClientIP:   r.RemoteAddr,
+		UserAgent:  r.UserAgent(),
+		Reason:     typosquatBlockReason(result),
+	})
+	return true
+}
+
+// typosquatBlockReason returns the rich admin-only description used in audit
+// log entries — keeps the popular-package name in the audit trail while the
+// public 410 response stays generic.
+func typosquatBlockReason(result scanner.ScanResult) string {
+	if len(result.Findings) > 0 {
+		return "typosquat pre-scan: " + result.Findings[0].Description
+	}
+	return "typosquat pre-scan: " + string(result.Verdict)
 }
 
 // proxyPassThrough forwards a request to the upstream Go module proxy without scanning.

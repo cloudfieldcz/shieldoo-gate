@@ -20,11 +20,15 @@ var _ scanner.Scanner = (*TyposquatScanner)(nil)
 // maxNameLength is the guard against DoS via extremely long package names.
 const maxNameLength = 128
 
-// PopularPackage holds a popular package name and its pre-computed normalized form.
+// PopularPackage holds a popular package name and its pre-computed normalized
+// and homoglyph-skeleton forms. Pre-computing both at scanner construction
+// removes per-Scan() recomputation on the hot path (homoglyph check runs once
+// against every popular package per artifact).
 type PopularPackage struct {
-	Name       string
-	Normalized string
-	Rank       int
+	Name              string
+	Normalized        string
+	HomoglyphSkeleton string
+	Rank              int
 }
 
 // TyposquatScanner detects typosquatting, homoglyph substitution, combosquatting,
@@ -72,9 +76,10 @@ func NewTyposquatScanner(db *config.GateDB, cfg config.TyposquatConfig) (*Typosq
 	for _, r := range rows {
 		eco := scanner.Ecosystem(r.Ecosystem)
 		s.popularPackages[eco] = append(s.popularPackages[eco], PopularPackage{
-			Name:       r.Name,
-			Normalized: normalizeName(r.Name),
-			Rank:       r.Rank,
+			Name:              r.Name,
+			Normalized:        normalizeName(r.Name),
+			HomoglyphSkeleton: normalizeHomoglyphs(r.Name),
+			Rank:              r.Rank,
 		})
 	}
 
@@ -223,14 +228,16 @@ func (s *TyposquatScanner) checkEditDistance(normalized string, popular []Popula
 }
 
 // checkHomoglyph normalizes homoglyphs and compares against popular packages.
+// Uses pkg.HomoglyphSkeleton (pre-computed at scanner construction) so this
+// hot-path call doesn't recompute the same skeletons on every artifact.
 func (s *TyposquatScanner) checkHomoglyph(name string, popular []PopularPackage) []scanner.Finding {
 	var findings []scanner.Finding
 	skeleton := normalizeHomoglyphs(name)
+	normalized := normalizeName(name)
 
 	for _, pkg := range popular {
-		pkgSkeleton := normalizeHomoglyphs(pkg.Name)
 		// Only flag if the skeleton matches but the original name differs.
-		if skeleton == pkgSkeleton && normalizeName(name) != pkg.Normalized {
+		if skeleton == pkg.HomoglyphSkeleton && normalized != pkg.Normalized {
 			findings = append(findings, scanner.Finding{
 				Severity:    scanner.SeverityHigh,
 				Category:    "homoglyph-match",

@@ -583,6 +583,13 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 	safeName := MakeSafeName(registry, imagePath)
 	artifactID := fmt.Sprintf("docker:%s:%s", safeName, ref)
 
+	// Pre-scan for typosquatting BEFORE pulling the image. Pull-only
+	// (decision A): push to internal namespaces uses a separate handler
+	// and is NOT gated by typosquat.
+	if a.blockIfTyposquat(w, r, registry, imagePath, safeName) {
+		return
+	}
+
 	// 1. Check if already in cache with a known status. Fail closed on DB errors.
 	cachedPath, cacheErr := a.cache.Get(ctx, artifactID)
 	if cacheErr == nil {
@@ -1139,6 +1146,91 @@ func (a *DockerAdapter) proxyUpstream(w http.ResponseWriter, r *http.Request, up
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+}
+
+// blockIfTyposquat runs the typosquat scanner on a Docker pull request before
+// any upstream interaction. Returns true if the pull was blocked (response
+// already written). Returns false if the image name is clean, no typosquat
+// scanner is registered, or an active policy override permits the pull.
+//
+// imageNameForScan derivation: for Docker Hub paths (registry == "docker.io")
+// that begin with "library/", the prefix is stripped before consulting the
+// scanner so the bare-name seed entries match. For non-library/ paths and
+// non-Docker-Hub registries, the imagePath is passed as-is.
+//
+// The synthetic typosquat row uses safeName so the artifact ID matches the
+// existing post-scan path's MakeSafeName() shape. version="*" per decision C.
+//
+// Pull only (decision A) — handleManifestPut never calls this helper.
+func (a *DockerAdapter) blockIfTyposquat(w http.ResponseWriter, r *http.Request, registry, imagePath, safeName string) bool {
+	imageNameForScan := imagePath
+	if registry == "docker.io" && strings.HasPrefix(imagePath, "library/") {
+		imageNameForScan = strings.TrimPrefix(imagePath, "library/")
+	}
+
+	result, ok := a.scanEngine.PreScanTyposquat(r.Context(), imageNameForScan, scanner.EcosystemDocker)
+	if !ok {
+		return false
+	}
+	if result.Verdict != scanner.VerdictSuspicious && result.Verdict != scanner.VerdictMalicious {
+		return false
+	}
+
+	// Synthetic 3-segment ID: docker:{safeName}:* — drops the ref slot from
+	// the full runtime ID (typosquat is name-based; one row covers all tags).
+	artifactID := fmt.Sprintf("docker:%s:%s", safeName, adapter.TyposquatPlaceholderVersion)
+
+	auditCtx, auditCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer auditCancel()
+
+	if a.policyEng != nil {
+		// Override scope is name-based: match by safeName, ignoring the ref.
+		if overrideID, hasOverride := a.policyEng.HasOverride(r.Context(), scanner.EcosystemDocker, safeName, ""); hasOverride {
+			log.Info().Str("artifact", artifactID).Str("verdict", string(result.Verdict)).
+				Int64("override_id", overrideID).
+				Msg("typosquat pre-scan: allowed by policy override")
+			_ = adapter.WriteAuditLogCtx(auditCtx, a.db, model.AuditEntry{
+				EventType:    model.EventServed,
+				ArtifactID:   artifactID,
+				ClientIP:     r.RemoteAddr,
+				UserAgent:    r.UserAgent(),
+				Reason:       "typosquat pre-scan overridden",
+				MetadataJSON: fmt.Sprintf(`{"override_id":%d}`, overrideID),
+			})
+			return false
+		}
+	}
+
+	log.Warn().Str("artifact", artifactID).Str("verdict", string(result.Verdict)).
+		Float32("confidence", result.Confidence).Msg("typosquat pre-scan: blocked before upstream pull")
+
+	if err := adapter.PersistTyposquatBlock(a.db, artifactID, scanner.EcosystemDocker, safeName, result, time.Now().UTC()); err != nil {
+		log.Error().Err(err).Str("artifact", artifactID).Msg("typosquat pre-scan: failed to persist block record")
+	}
+
+	adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+		Error:    "blocked",
+		Artifact: artifactID,
+		Reason:   "typosquatting detected",
+	})
+	_ = adapter.WriteAuditLogCtx(auditCtx, a.db, model.AuditEntry{
+		EventType:  model.EventBlocked,
+		ArtifactID: artifactID,
+		ClientIP:   r.RemoteAddr,
+		UserAgent:  r.UserAgent(),
+		Reason:     typosquatBlockReason(result),
+	})
+	return true
+}
+
+// typosquatBlockReason returns the rich admin-only description used in audit
+// log entries — keeps the popular-image name in the audit trail while the
+// public 403 response stays generic.
+func typosquatBlockReason(result scanner.ScanResult) string {
+	if len(result.Findings) > 0 {
+		return "typosquat pre-scan: " + result.Findings[0].Description
+	}
+	return "typosquat pre-scan: " + string(result.Verdict)
 }
 
 // validateDockerName returns an error if the image name contains unsafe characters.

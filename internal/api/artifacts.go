@@ -550,6 +550,16 @@ func (s *Server) handleReleaseArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Typosquat pre-scan synthesizes artifact rows with version=adapter.TyposquatPlaceholderVersion
+	// for name-only blocks (e.g. npm metadata fetches). Releasing such a row
+	// must create a package-scoped override — there is no real version to pin.
+	overrideScope := "version"
+	overrideVersion := artVersion
+	if artVersion == adapter.TyposquatPlaceholderVersion {
+		overrideScope = "package"
+		overrideVersion = ""
+	}
+
 	tx, err := s.db.BeginTxx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to begin transaction")
@@ -562,13 +572,13 @@ func (s *Server) handleReleaseArtifact(w http.ResponseWriter, r *http.Request) {
 	var overrideID int64
 	_, _ = tx.ExecContext(r.Context(),
 		`INSERT INTO policy_overrides (ecosystem, name, version, scope, reason, created_by, created_at, revoked)
-		 VALUES (?, ?, ?, 'version', 'manual release', ?, ?, FALSE)
+		 VALUES (?, ?, ?, ?, 'manual release', ?, ?, FALSE)
 		 ON CONFLICT DO NOTHING`,
-		artEcosystem, artName, artVersion, userEmail, now)
+		artEcosystem, artName, overrideVersion, overrideScope, userEmail, now)
 	err = tx.QueryRowxContext(r.Context(),
 		`SELECT id FROM policy_overrides
-		 WHERE ecosystem = ? AND name = ? AND version = ? AND scope = 'version' AND revoked = FALSE`,
-		artEcosystem, artName, artVersion).Scan(&overrideID)
+		 WHERE ecosystem = ? AND name = ? AND version = ? AND scope = ? AND revoked = FALSE`,
+		artEcosystem, artName, overrideVersion, overrideScope).Scan(&overrideID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to resolve override")
 		return

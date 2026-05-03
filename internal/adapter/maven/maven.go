@@ -254,6 +254,79 @@ func mavenArtifactID(groupID, artifactID, version string) string {
 	return fmt.Sprintf("%s:%s:%s:%s", string(scanner.EcosystemMaven), groupID, artifactID, version)
 }
 
+// handleTyposquatPreScan runs the typosquat scanner on coordName
+// (groupId:artifactId form) before any upstream call. Returns true if the
+// request was blocked (response already written). Returns false if the name
+// is clean, no scanner is registered, or an active policy override permits
+// the request. Synthetic typosquat rows always carry version="*" — typosquat
+// detection is name-based, so the override scope is package-wide.
+func (a *MavenAdapter) handleTyposquatPreScan(w http.ResponseWriter, r *http.Request, coordName, version string) bool {
+	result, ok := a.scanEngine.PreScanTyposquat(r.Context(), coordName, scanner.EcosystemMaven)
+	if !ok {
+		return false
+	}
+	if result.Verdict != scanner.VerdictSuspicious && result.Verdict != scanner.VerdictMalicious {
+		return false
+	}
+
+	// 4-segment artifact ID: maven:groupId:artifactId:*
+	artifactID := fmt.Sprintf("%s:%s:%s", string(scanner.EcosystemMaven), coordName, adapter.TyposquatPlaceholderVersion)
+
+	// Detached audit context — the request may cancel mid-flight but audit
+	// writes must still land. Mirrors policy.hasDBOverride rationale.
+	auditCtx, auditCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer auditCancel()
+
+	// Active policy override allows the request through.
+	if a.policyEngine != nil {
+		if overrideID, hasOverride := a.policyEngine.HasOverride(r.Context(), scanner.EcosystemMaven, coordName, version); hasOverride {
+			log.Info().Str("artifact", artifactID).Str("verdict", string(result.Verdict)).
+				Int64("override_id", overrideID).
+				Msg("typosquat pre-scan: allowed by policy override")
+			_ = adapter.WriteAuditLogCtx(auditCtx, a.db, model.AuditEntry{
+				EventType:    model.EventServed,
+				ArtifactID:   artifactID,
+				ClientIP:     r.RemoteAddr,
+				UserAgent:    r.UserAgent(),
+				Reason:       "typosquat pre-scan overridden",
+				MetadataJSON: fmt.Sprintf(`{"override_id":%d}`, overrideID),
+			})
+			return false
+		}
+	}
+
+	log.Warn().Str("artifact", artifactID).Str("verdict", string(result.Verdict)).
+		Float32("confidence", result.Confidence).Msg("typosquat pre-scan: blocked before upstream fetch")
+
+	if err := adapter.PersistTyposquatBlock(a.db, artifactID, scanner.EcosystemMaven, coordName, result, time.Now().UTC()); err != nil {
+		log.Error().Err(err).Str("artifact", artifactID).Msg("typosquat pre-scan: failed to persist block record")
+	}
+
+	adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+		Error:    "blocked",
+		Artifact: artifactID,
+		Reason:   "typosquatting detected",
+	})
+	_ = adapter.WriteAuditLogCtx(auditCtx, a.db, model.AuditEntry{
+		EventType:  model.EventBlocked,
+		ArtifactID: artifactID,
+		ClientIP:   r.RemoteAddr,
+		UserAgent:  r.UserAgent(),
+		Reason:     typosquatBlockReason(result),
+	})
+	return true
+}
+
+// typosquatBlockReason returns the rich admin-only description used in audit
+// log entries — keeps the popular-package name in the audit trail while the
+// public 403 response stays generic.
+func typosquatBlockReason(result scanner.ScanResult) string {
+	if len(result.Findings) > 0 {
+		return "typosquat pre-scan: " + result.Findings[0].Description
+	}
+	return "typosquat pre-scan: " + string(result.Verdict)
+}
+
 // proxyPassThrough forwards a request to the upstream Maven repository without scanning.
 func (a *MavenAdapter) proxyPassThrough(w http.ResponseWriter, r *http.Request, repoPath string) {
 	target, err := url.JoinPath(a.upstream, repoPath)
@@ -291,6 +364,14 @@ func (a *MavenAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 	ctx := r.Context()
 
 	artifactID := mavenArtifactID(parsed.groupID, parsed.artifactID, parsed.version)
+	coordName := parsed.groupID + ":" + parsed.artifactID
+
+	// Pre-scan for typosquatting BEFORE contacting upstream.
+	// The typosquat scanner only needs the coordinate name — no file content.
+	// Active policy overrides (package- or version-scoped) suppress the block.
+	if a.handleTyposquatPreScan(w, r, coordName, parsed.version) {
+		return
+	}
 
 	// 1. Check if already in cache with a known status.
 	cachedPath, cacheErr := a.cache.Get(ctx, artifactID)

@@ -136,9 +136,11 @@ Created ──▶ Active ──▶ Revoked (soft-delete)
 | `POST` | `/api/v1/overrides` | Create override (specify ecosystem, name, version, scope, reason) |
 | `DELETE` | `/api/v1/overrides/{id}` | Revoke override (soft-delete) |
 | `POST` | `/api/v1/artifacts/{id}/override` | Create override from artifact (convenience shortcut) |
-| `POST` | `/api/v1/artifacts/{id}/release` | Release artifact from quarantine — also creates a version-scoped override |
+| `POST` | `/api/v1/artifacts/{id}/release` | Release artifact from quarantine — also creates a version-scoped override (or package-scoped if the artifact's `version` is `*`) |
 
 The release endpoint is the primary UI action for quarantined artifacts. It sets the artifact status to `CLEAN` and creates a policy override so the artifact is not re-quarantined on the next scan.
+
+**Typosquat block release.** The typosquat pre-scan persists name-only blocks (e.g. npm metadata fetches) with `version="*"` because no version is known at metadata-fetch time. Releasing such an artifact creates a **package-scoped** override (covers all versions). The pre-scan path consults overrides via `engine.go:HasOverride()` before blocking, so a future request for the same package will pass through to upstream as if it had never been flagged.
 
 ### Deduplication
 

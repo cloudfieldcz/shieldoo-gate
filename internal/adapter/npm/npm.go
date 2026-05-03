@@ -135,7 +135,7 @@ func (a *NPMAdapter) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	// Pre-scan for typosquatting BEFORE contacting upstream.
-	if a.blockIfTyposquat(w, r, pkg) {
+	if a.blockIfTyposquat(w, r, pkg, "") {
 		return
 	}
 	a.proxyUpstreamRewrite(w, r, "/"+pkg)
@@ -149,7 +149,7 @@ func (a *NPMAdapter) handleVersionMetadata(w http.ResponseWriter, r *http.Reques
 		adapter.WriteJSONError(w, http.StatusBadRequest, adapter.ErrorResponse{Error: "invalid package name"})
 		return
 	}
-	if a.blockIfTyposquat(w, r, pkg) {
+	if a.blockIfTyposquat(w, r, pkg, version) {
 		return
 	}
 	a.proxyUpstream(w, r, "/"+pkg+"/"+version)
@@ -176,7 +176,7 @@ func (a *NPMAdapter) handleScopedMetadata(w http.ResponseWriter, r *http.Request
 		adapter.WriteJSONError(w, http.StatusBadRequest, adapter.ErrorResponse{Error: "invalid package name"})
 		return
 	}
-	if a.blockIfTyposquat(w, r, "@"+scope+"/"+pkg) {
+	if a.blockIfTyposquat(w, r, "@"+scope+"/"+pkg, "") {
 		return
 	}
 	a.proxyUpstreamRewrite(w, r, "/@"+scope+"/"+pkg)
@@ -195,7 +195,7 @@ func (a *NPMAdapter) handleScopedVersionMetadata(w http.ResponseWriter, r *http.
 		adapter.WriteJSONError(w, http.StatusBadRequest, adapter.ErrorResponse{Error: "invalid package name"})
 		return
 	}
-	if a.blockIfTyposquat(w, r, "@"+scope+"/"+pkg) {
+	if a.blockIfTyposquat(w, r, "@"+scope+"/"+pkg, version) {
 		return
 	}
 	a.proxyUpstream(w, r, "/@"+scope+"/"+pkg+"/"+version)
@@ -285,7 +285,7 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 	}
 
 	// 2. Pre-scan for typosquatting BEFORE contacting upstream.
-	if a.blockIfTyposquat(w, r, pkgName) {
+	if a.blockIfTyposquat(w, r, pkgName, version) {
 		return
 	}
 
@@ -631,8 +631,11 @@ func extractNPMVersion(pkgName, tarball string) string {
 
 // blockIfTyposquat runs the typosquat pre-scan and returns true if the
 // request was blocked (response already written). Returns false if the
-// package name is clean or the scanner is not available.
-func (a *NPMAdapter) blockIfTyposquat(w http.ResponseWriter, r *http.Request, pkgName string) bool {
+// package name is clean, the scanner is not available, or an active policy
+// override permits the package through. Pass version="" for name-only
+// pre-scans (metadata fetches); pass the real version on tarball requests
+// so version-scoped overrides match.
+func (a *NPMAdapter) blockIfTyposquat(w http.ResponseWriter, r *http.Request, pkgName, version string) bool {
 	result, ok := a.scanEngine.PreScanTyposquat(r.Context(), pkgName, scanner.EcosystemNPM)
 	if !ok {
 		return false
@@ -640,17 +643,72 @@ func (a *NPMAdapter) blockIfTyposquat(w http.ResponseWriter, r *http.Request, pk
 	if result.Verdict != scanner.VerdictSuspicious && result.Verdict != scanner.VerdictMalicious {
 		return false
 	}
-	log.Warn().Str("package", pkgName).Str("verdict", string(result.Verdict)).
+
+	// Build the canonical artifact ID up front so audit logs (override-allowed
+	// path included) and the synthetic-row write all reference the same ID.
+	// Sanitization mirrors downloadScanServe so a later cache fetch lines up.
+	// Synthetic typosquat rows always carry version="*" — override scope is
+	// package-wide because typosquat detection is name-based.
+	safeNamePart := strings.NewReplacer("/", "_", "@", "").Replace(pkgName)
+	artifactID := fmt.Sprintf("%s:%s:%s", string(scanner.EcosystemNPM), safeNamePart, adapter.TyposquatPlaceholderVersion)
+
+	// Detached audit context — the request may be canceled (slow client) but
+	// audit-log writes must still land. Mirrors policy.hasDBOverride rationale.
+	auditCtx, auditCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer auditCancel()
+
+	// Active policy override allows the request through.
+	if a.policyEngine != nil {
+		if overrideID, ok := a.policyEngine.HasOverride(r.Context(), scanner.EcosystemNPM, pkgName, version); ok {
+			log.Info().Str("artifact", artifactID).Str("verdict", string(result.Verdict)).
+				Int64("override_id", overrideID).
+				Msg("typosquat pre-scan: allowed by policy override")
+			_ = adapter.WriteAuditLogCtx(auditCtx, a.db, model.AuditEntry{
+				EventType:    model.EventServed,
+				ArtifactID:   artifactID,
+				ClientIP:     r.RemoteAddr,
+				UserAgent:    r.UserAgent(),
+				Reason:       "typosquat pre-scan overridden",
+				MetadataJSON: fmt.Sprintf(`{"override_id":%d}`, overrideID),
+			})
+			return false
+		}
+	}
+
+	log.Warn().Str("artifact", artifactID).Str("verdict", string(result.Verdict)).
 		Float32("confidence", result.Confidence).Msg("typosquat pre-scan: blocked before upstream fetch")
+
+	// Persist a synthetic artifact + status + scan_results so the block is
+	// visible in the Artifacts pane and overridable from there.
+	if err := adapter.PersistTyposquatBlock(a.db, artifactID, scanner.EcosystemNPM, pkgName, result, time.Now().UTC()); err != nil {
+		log.Error().Err(err).Str("artifact", artifactID).Msg("typosquat pre-scan: failed to persist block record")
+	}
+
+	// Public 403 response: keep the reason generic so we don't leak which
+	// popular package the seed flagged us against (an attacker probing names
+	// could enumerate the seed otherwise). The full description still lands
+	// in scan_results.findings_json and audit_log.reason for admins.
 	adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
-		Error:  "blocked",
-		Reason: "typosquatting detected: " + result.Findings[0].Description,
+		Error:    "blocked",
+		Artifact: artifactID,
+		Reason:   "typosquatting detected",
 	})
-	_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
-		EventType: model.EventBlocked,
-		ClientIP:  r.RemoteAddr,
-		UserAgent: r.UserAgent(),
-		Reason:    "typosquat pre-scan: " + string(result.Verdict),
+	_ = adapter.WriteAuditLogCtx(auditCtx, a.db, model.AuditEntry{
+		EventType:  model.EventBlocked,
+		ArtifactID: artifactID,
+		ClientIP:   r.RemoteAddr,
+		UserAgent:  r.UserAgent(),
+		Reason:     typosquatBlockReason(result),
 	})
 	return true
+}
+
+// typosquatBlockReason returns the rich admin-only description used in audit
+// log entries — keeps the popular-package name in the audit trail while the
+// public 403 response stays generic.
+func typosquatBlockReason(result scanner.ScanResult) string {
+	if len(result.Findings) > 0 {
+		return "typosquat pre-scan: " + result.Findings[0].Description
+	}
+	return "typosquat pre-scan: " + string(result.Verdict)
 }

@@ -57,7 +57,7 @@ scanners:
   - For PyPI downloads, a typosquat package that doesn't exist upstream would cause a 502 if the proxy tried to fetch first.
   - For npm metadata requests (`GET /{package}`), the scan pipeline doesn't run at all — only tarball downloads trigger full scanning. The pre-scan catches typosquats at the metadata level.
   - Blocking before upstream fetch avoids leaking internal package queries to public registries.
-- **Adapter integration:** Both PyPI and npm adapters call `PreScanTyposquat()` before any upstream request. If the verdict is `SUSPICIOUS` or `MALICIOUS`, the adapter returns HTTP 403 immediately.
+- **Adapter integration:** All fetch-protocol adapters — PyPI, npm, NuGet, Maven, RubyGems, gomod, and Docker (pull only) — call `PreScanTyposquat()` before any upstream request. If the verdict is `SUSPICIOUS` or `MALICIOUS`, the adapter returns HTTP 403 immediately. **gomod** is the exception: it returns **HTTP 410 Gone** (the GOPROXY convention for "module not available — do not retry credentials"), and only the `.info` / `.mod` / `.zip` endpoints are gated; `/@v/list` and `/@latest` pass through to keep `go mod tidy` fast on the name-enumeration phase. **Docker push** to internal namespaces is also intentionally not gated — push is an authenticated developer act and naming is operator-controlled.
 - **Database:** `popular_packages` table (ecosystem, name, rank, download_count, last_updated). Seeded additively from embedded data on **every startup** — `INSERT … ON CONFLICT (ecosystem, name) DO NOTHING` ensures new entries shipped in a release propagate to existing DBs without manual intervention, while existing rows (including future UI-managed edits) are preserved. Strategy 1 (exact-match) short-circuits the edit-distance check for any name in `popular_packages`, so listing two real-but-similar packages (e.g., `vite` and `vitest`, `next` and `nest`) prevents false positives.
 - **Threat Feed synergy:** Typosquat detections can be auto-submitted to the threat feed contribution portal (when implemented).
 - **Performance:** Name-based checks add < 1ms latency. The popular package list is loaded into memory at startup.
@@ -76,8 +76,21 @@ scanners:
 
 ### Considerations
 
-- **False positives:** Legitimate packages may have similar names (e.g. `vitest` vs `vite`, `nest` vs `next`). Two layers of mitigation:
+- **False positives:** Legitimate packages may have similar names (e.g. `vitest` vs `vite`, `nest` vs `next`, `nx-js` vs `rxjs`). Three layers of mitigation:
   1. Both names are added to `popular_packages` so Strategy 1 short-circuits before edit-distance check.
-  2. Operators can extend `scanners.typosquat.allowlist` in `config.yaml` for any case the seed doesn't cover. Note that pre-scan blocks happen *before* an artifact is fetched, so blocked names never appear in the Artifacts UI — the allowlist is the only operator-facing escape hatch until UI-managed seed editing ships.
+  2. Operators can extend `scanners.typosquat.allowlist` in `config.yaml` for any case the seed doesn't cover.
+  3. Blocked names are persisted as `QUARANTINED` artifacts with `version="*"` (always — typosquat detection is name-based, so the override scope is always package-wide regardless of whether the original request carried a version). Admins review and release them from the Artifacts pane. Releasing creates a package-scoped policy override that the pre-scan consults via `engine.go:HasOverride()` on every subsequent request — see [policy.md](../policy.md#policy-overrides). To apply a tighter scope, revoke the package override and create a manual version-scoped override.
+
+### Producer-side dedup and audit growth
+
+`PersistTyposquatBlock` collapses repeated probes for the same artifact ID within `scanners.typosquat.persist_dedup_window_seconds` (default 300, i.e. 5 minutes) into a single set of DB writes. The 403 response is **not** affected — every probe is still blocked at HTTP. The dedup only suppresses the synthetic-row insert and the `scan_results` / `audit_log` writes that follow it. This is the in-process growth control for `audit_log`, which stays append-only per the security invariant in [CLAUDE.md](../../CLAUDE.md). `scan_results` rows are additionally pruned by a daily scheduler (90-day window, but rows currently referenced by `artifact_status.last_scan_id` are retained even when older).
+
+When an active policy override suppresses a typosquat block, the audit `EVENT_SERVED` entry includes `{"override_id": <id>}` in `metadata_json`. Operators can use this to trace which override let a given request through.
+
+The public 403 response body says only `"typosquatting detected"` and does **not** include the popular package name the seed matched against. The full description ("`X is within edit distance N of popular package Y`") is preserved in `scan_results.findings_json` and `audit_log.reason` for admin investigation. The canonical query for typosquat-block evidence is `audit_log.event_type='BLOCKED' AND reason LIKE 'typosquat%'`, not HTTP status (relevant because gomod returns 410 instead of 403).
+
+**Operator troubleshooting (gomod 410):** End developers running `go mod tidy` against a typosquat-named module see "module not found / not available". Operators should check the Artifacts pane for a `go:<modulePath>:*` entry — its presence indicates the gate blocked the fetch. The audit-log query above gives the same evidence in textual form. Releasing the entry creates a package-scoped override that the pre-scan honors on the next attempt.
+
+**Override revoke vs. cached blocks:** Revoking a typosquat override is async with respect to in-flight requests. Once revoked, subsequent requests re-evaluate the typosquat pre-scan; cached `QUARANTINED` synthetic rows are left as-is until the operator re-blocks via the Artifacts pane. The full-scan adapter path (post-download) re-evaluates overrides via `policy.Evaluate` on every request.
 - **Maintenance:** The popular package list needs periodic refresh. Consider shipping a default list with the release and allowing custom overrides.
 - **Privacy:** If fetching download stats from upstream registries, ensure no internal package names leak in the queries.

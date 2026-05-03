@@ -218,6 +218,50 @@ func (e *Engine) hasDBOverride(ctx context.Context, artifact scanner.Artifact) b
 	return count > 0
 }
 
+// HasOverride returns the matching override's ID and true if there is an
+// active, non-revoked, non-expired policy override that would allow the given
+// (ecosystem, name, version) tuple through. Returns (0, false) when no
+// override matches. The ID is recorded in audit-log MetadataJSON so operators
+// can trace which override let a request through.
+//
+// Pass version="" for name-only requests (only package-scoped overrides will
+// match); pass the real version for tarball-level requests (both package-scoped
+// and matching version-scoped overrides will match). When multiple overrides
+// match, the most recently created one wins.
+func (e *Engine) HasOverride(ctx context.Context, ecosystem scanner.Ecosystem, name, version string) (int64, bool) {
+	if e == nil || e.db == nil {
+		return 0, false
+	}
+
+	// Detach from request context — see hasDBOverride for rationale.
+	dbCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	now := time.Now().UTC()
+	var id int64
+	err := e.db.QueryRowContext(dbCtx,
+		`SELECT id FROM policy_overrides
+		 WHERE ecosystem = ? AND name = ? AND revoked = FALSE
+		   AND (expires_at IS NULL OR expires_at > ?)
+		   AND (scope = 'package' OR (scope = 'version' AND version = ?))
+		 ORDER BY created_at DESC, id DESC
+		 LIMIT 1`,
+		string(ecosystem), name, now, version,
+	).Scan(&id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, false
+		}
+		log.Error().Err(err).
+			Str("ecosystem", string(ecosystem)).
+			Str("name", name).
+			Str("version", version).
+			Msg("HasOverride: query error")
+		return 0, false
+	}
+	return id, true
+}
+
 // Evaluate applies the policy to the given artifact and scan results.
 // DB overrides are checked first, then static allowlist, then verdict rules.
 func (e *Engine) Evaluate(ctx context.Context, artifact scanner.Artifact, scanResults []scanner.ScanResult) PolicyResult {

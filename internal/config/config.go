@@ -285,6 +285,12 @@ type TyposquatConfig struct {
 	InternalNamespaces []string `mapstructure:"internal_namespaces"`
 	CombosquatSuffixes []string `mapstructure:"combosquat_suffixes"`
 	Allowlist          []string `mapstructure:"allowlist"`
+	// PersistDedupWindowSeconds controls how long PersistTyposquatBlock will
+	// suppress repeated DB writes for the same artifact ID. Bounds DB-write
+	// growth under typosquat-name flooding without retaining audit_log
+	// entries (which stay append-only per security invariant). Default 300
+	// (5 minutes); 0 disables dedup.
+	PersistDedupWindowSeconds int `mapstructure:"persist_dedup_window_seconds"`
 }
 
 // VersionDiffConfig holds configuration for the AI-driven version diff scanner.
@@ -847,6 +853,9 @@ func (c *Config) validateTyposquat() error {
 	}
 	if tc.TopPackagesCount > 10000 {
 		return fmt.Errorf("config: scanners.typosquat.top_packages_count must be <= 10000, got %d", tc.TopPackagesCount)
+	}
+	if tc.PersistDedupWindowSeconds < 0 {
+		return fmt.Errorf("config: scanners.typosquat.persist_dedup_window_seconds must be >= 0, got %d", tc.PersistDedupWindowSeconds)
 	}
 	return nil
 }
