@@ -231,12 +231,15 @@ When `push.enabled: true` is set in config, the Docker adapter supports `docker 
 |---|---|---|
 | `GET` | `/v2/` | Version check — responds locally with `Docker-Distribution-API-Version: registry/2.0` |
 | `GET` | `/v2/{name}/manifests/{reference}` | Pull manifest (by tag or digest) — triggers scan pipeline |
+| `HEAD` | `/v2/{name}/manifests/{reference}` | Manifest discovery — required by docker daemon before GET. Cached: returns derived headers (digest, content-type, length) with no body; uncached: proxies HEAD upstream. The follow-up GET runs the scan pipeline. Honors quarantine. |
 | `GET` | `/v2/{name}/blobs/{digest}` | Pull layer blob — proxied to resolved upstream |
 | `POST` | `/v2/{name}/blobs/uploads/` | Initiate blob upload (push) — returns 202 with Location header |
 | `PUT` | `/v2/{name}/blobs/uploads/{uuid}` | Complete monolithic blob upload with digest verification |
 | `PATCH` | `/v2/{name}/blobs/uploads/{uuid}` | Chunked blob upload data (OCI Distribution Spec) |
 | `PUT` | `/v2/{name}/manifests/{reference}` | Push manifest — scans before accepting |
 | `HEAD` | `/v2/{name}/blobs/{digest}` | Check blob existence (internal or upstream proxy) |
+
+**Manifest Content-Type fidelity.** Cached manifests do not preserve the upstream `Content-Type` header. The adapter reconstructs it by reading the `mediaType` JSON field from the manifest body, so an OCI image index served from cache reports `application/vnd.oci.image.index.v1+json` rather than the older docker v2 type. Without this, the docker daemon parses the body according to the wrong media type and multi-arch pulls fail.
 
 ### How It Works
 

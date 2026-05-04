@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -323,9 +324,36 @@ func (a *DockerAdapter) handleV2WildcardWrite(w http.ResponseWriter, r *http.Req
 	http.NotFound(w, r)
 }
 
-// handleV2WildcardHead routes HEAD /v2/* to blob existence checks.
+// handleV2WildcardHead routes HEAD /v2/* to manifest or blob handlers.
+//
+// Manifest HEAD must return the same status / headers as GET (per OCI
+// Distribution Spec) — the docker daemon issues HEAD before GET to discover
+// the manifest digest, and a 404 here aborts the pull entirely.
 func (a *DockerAdapter) handleV2WildcardHead(w http.ResponseWriter, r *http.Request) {
 	wildcardPath := chi.URLParam(r, "*")
+
+	// Match /manifests/{ref} for HEAD.
+	if manifestsIdx := strings.LastIndex(wildcardPath, "/manifests/"); manifestsIdx > 0 {
+		name := wildcardPath[:manifestsIdx]
+		ref := wildcardPath[manifestsIdx+len("/manifests/"):]
+		if err := validateDockerName(name); err != nil {
+			adapter.WriteJSONError(w, http.StatusBadRequest, adapter.ErrorResponse{
+				Error:  "invalid image name",
+				Reason: err.Error(),
+			})
+			return
+		}
+		registry, imagePath, upstreamURL, err := a.resolver.Resolve(name)
+		if err != nil {
+			adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+				Error:  "registry not allowed",
+				Reason: err.Error(),
+			})
+			return
+		}
+		a.handleManifestHead(w, r, registry, imagePath, upstreamURL, ref)
+		return
+	}
 
 	// Match /blobs/{digest} for HEAD
 	blobsIdx := strings.LastIndex(wildcardPath, "/blobs/")
@@ -543,7 +571,7 @@ func (a *DockerAdapter) serveInternalManifest(w http.ResponseWriter, r *http.Req
 
 	log.Info().Str("artifact", artifactID).Str("digest", tag.ManifestDigest).Msg("docker: serving internal manifest from blobstore")
 	adapter.UpdateLastAccessedAt(a.db, artifactID)
-	w.Header().Set("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
+	w.Header().Set("Content-Type", detectManifestContentType(manifestBytes))
 	w.Header().Set("Docker-Content-Digest", tag.ManifestDigest)
 	w.Header().Set("X-Shieldoo-Scanned", "true")
 	w.WriteHeader(http.StatusOK)
@@ -637,7 +665,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 			return
 		}
 		log.Info().Str("artifact", artifactID).Str("client", r.RemoteAddr).Msg("docker: serving from cache")
-		w.Header().Set("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
+		w.Header().Set("Content-Type", detectManifestContentType(manifestBytes))
 		w.Header().Set("X-Shieldoo-Scanned", "true")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(manifestBytes)
@@ -697,7 +725,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 			http.Error(w, "internal error reading cached manifest", http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
+		w.Header().Set("Content-Type", detectManifestContentType(manifestBytes))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(manifestBytes)
 		return
@@ -1257,4 +1285,139 @@ func isDockerNameChar(c rune) bool {
 		(c >= 'A' && c <= 'Z') ||
 		(c >= '0' && c <= '9') ||
 		c == '-' || c == '_' || c == '.' || c == '/' || c == ':' || c == '@'
+}
+
+// detectManifestContentType returns the Content-Type header value for a JSON
+// manifest body by reading its `mediaType` field. Falls back to the docker
+// distribution v2 manifest type when the field is absent or the body is not
+// parseable as JSON. Cached manifests do not preserve upstream's Content-Type
+// header, so the value is reconstructed from the body — getting it wrong
+// causes the docker daemon to misinterpret the manifest (e.g. parse an OCI
+// image index as a single-arch v2 manifest and fail).
+func detectManifestContentType(body []byte) string {
+	var probe struct {
+		MediaType string `json:"mediaType"`
+	}
+	if err := json.Unmarshal(body, &probe); err == nil && probe.MediaType != "" {
+		return probe.MediaType
+	}
+	return "application/vnd.docker.distribution.manifest.v2+json"
+}
+
+// handleManifestHead implements HEAD /v2/{name}/manifests/{reference} per the
+// OCI Distribution Spec. The docker daemon issues HEAD before GET to discover
+// the manifest digest and decide whether to fetch the full manifest; if HEAD
+// 404s, the daemon surfaces "not found" and never issues GET.
+//
+// Behavior:
+//   1. Quarantined artifacts return 403 (mirrors GET).
+//   2. Cached manifests return derived headers (digest, content-type, length)
+//      with no body.
+//   3. Cache miss: HEAD is proxied to upstream so the daemon gets upstream's
+//      digest. The follow-up GET runs the full scan pipeline — HEAD itself is
+//      a metadata probe and does not deliver any artifact content.
+func (a *DockerAdapter) handleManifestHead(w http.ResponseWriter, r *http.Request, registry, imagePath, upstreamURL, ref string) {
+	artifactID := fmt.Sprintf("docker:%s:%s", MakeSafeName(registry, imagePath), ref)
+
+	// Quarantine gate — fail closed if status lookup itself errors.
+	status, err := adapter.GetArtifactStatus(a.db, artifactID)
+	if err != nil {
+		log.Error().Err(err).Str("artifact", artifactID).Msg("docker HEAD: status lookup failed, refusing to serve")
+		http.Error(w, "internal error checking artifact status", http.StatusServiceUnavailable)
+		return
+	}
+	if status != nil && status.Status == model.StatusQuarantined {
+		adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+			Error:    "quarantined",
+			Artifact: artifactID,
+			Reason:   status.QuarantineReason,
+		})
+		return
+	}
+
+	// Cache hit: synthesize headers from the stored manifest body.
+	if cachedPath, cacheErr := a.cache.Get(r.Context(), artifactID); cacheErr == nil {
+		manifestBytes, readErr := os.ReadFile(cachedPath)
+		if readErr == nil {
+			sum := sha256.Sum256(manifestBytes)
+			digest := "sha256:" + hex.EncodeToString(sum[:])
+			w.Header().Set("Content-Type", detectManifestContentType(manifestBytes))
+			w.Header().Set("Docker-Content-Digest", digest)
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(manifestBytes)))
+			w.Header().Set("X-Shieldoo-Scanned", "true")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		log.Warn().Err(readErr).Str("artifact", artifactID).Msg("docker HEAD: cache hit but read failed; falling through to upstream")
+	}
+
+	// Cache miss: proxy HEAD upstream.
+	a.proxyManifestHead(w, r, upstreamURL, registry, imagePath, ref)
+}
+
+// proxyManifestHead forwards HEAD /v2/{name}/manifests/{ref} to the upstream
+// registry, including the Docker v2 Bearer-token exchange flow. No body is
+// written (HEAD); the upstream's status, Docker-Content-Digest, Content-Type,
+// and Content-Length are relayed to the client.
+//
+// SECURITY: Uses per-registry credentials from config, NOT client Authorization.
+func (a *DockerAdapter) proxyManifestHead(w http.ResponseWriter, r *http.Request, upstreamURL, registryHost, name, ref string) {
+	target := upstreamURL + "/v2/" + name + "/manifests/" + ref
+
+	build := func(authHeader string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodHead, target, nil)
+		if err != nil {
+			return nil, err
+		}
+		if v := r.Header.Get("Accept"); v != "" {
+			req.Header.Set("Accept", v)
+		}
+		if authHeader != "" {
+			req.Header.Set("Authorization", authHeader)
+		}
+		return req, nil
+	}
+
+	req, err := build(a.resolver.AuthForRegistry(registryHost))
+	if err != nil {
+		http.Error(w, "upstream request error", http.StatusInternalServerError)
+		return
+	}
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		log.Error().Err(err).Str("target", target).Msg("docker HEAD manifest: upstream unreachable")
+		http.Error(w, "upstream unreachable", http.StatusBadGateway)
+		return
+	}
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		wwwAuth := resp.Header.Get("Www-Authenticate")
+		resp.Body.Close()
+		realm, service, scope, ok := parseWwwAuthenticate(wwwAuth)
+		if !ok {
+			http.Error(w, "upstream auth challenge unparseable", http.StatusBadGateway)
+			return
+		}
+		token, tokenErr := a.tokenExch.exchangeToken(r.Context(), realm, service, scope)
+		if tokenErr != nil {
+			log.Error().Err(tokenErr).Str("target", target).Msg("docker HEAD manifest: token exchange failed")
+			http.Error(w, "upstream auth failed", http.StatusBadGateway)
+			return
+		}
+		req2, _ := build("Bearer " + token)
+		resp, err = a.httpClient.Do(req2)
+		if err != nil {
+			http.Error(w, "upstream unreachable", http.StatusBadGateway)
+			return
+		}
+	}
+	defer resp.Body.Close()
+
+	for key, vals := range resp.Header {
+		for _, v := range vals {
+			w.Header().Add(key, v)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	// HEAD: no body.
 }
