@@ -241,6 +241,8 @@ When `push.enabled: true` is set in config, the Docker adapter supports `docker 
 
 **Manifest Content-Type fidelity.** Cached manifests do not preserve the upstream `Content-Type` header. The adapter reconstructs it by reading the `mediaType` JSON field from the manifest body, so an OCI image index served from cache reports `application/vnd.oci.image.index.v1+json` rather than the older docker v2 type. Without this, the docker daemon parses the body according to the wrong media type and multi-arch pulls fail.
 
+**Upstream status forwarding.** GET and HEAD on a manifest are symmetric — the adapter forwards the upstream registry's status code (and OCI error envelope body) verbatim instead of collapsing every non-200 to 502. Notably, `404 MANIFEST_UNKNOWN` must remain `404`: Docker 29+ performs post-pull attestation discovery by probing `sha256-…` tag forms and expects 404 (skip, non-fatal) for entries that aren't separate refs. A 502 from the gate would abort the pull.
+
 ### How It Works
 
 The Docker adapter implements a **scan-on-pull pipeline** for manifest requests. When a client pulls an image:

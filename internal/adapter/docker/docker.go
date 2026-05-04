@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -734,6 +735,25 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 	// 4. Download manifest from upstream (capped at 10 MB).
 	manifestBytes, manifestContentType, err := a.fetchManifest(pctx, r, upstreamURL, registry, imagePath, ref)
 	if err != nil {
+		// Forward upstream's status verbatim — per OCI Distribution Spec,
+		// manifest GET and HEAD must agree on status for the same path
+		// (e.g. 404 must remain 404). Converting upstream client errors to
+		// 502 breaks docker daemon's attestation discovery (Docker 29+
+		// probes sha256-... tag forms expecting 404; treats 502 as fatal).
+		var upstreamErr *upstreamHTTPError
+		if errors.As(err, &upstreamErr) {
+			log.Info().Int("upstream_status", upstreamErr.StatusCode).Str("artifact", artifactID).Msg("docker: forwarding upstream non-200 status")
+			ct := upstreamErr.ContentType
+			if ct == "" {
+				ct = "application/json"
+			}
+			w.Header().Set("Content-Type", ct)
+			w.WriteHeader(upstreamErr.StatusCode)
+			if len(upstreamErr.Body) > 0 {
+				_, _ = w.Write(upstreamErr.Body)
+			}
+			return
+		}
 		log.Error().Err(err).Str("artifact", artifactID).Msg("docker: failed to fetch manifest from upstream")
 		http.Error(w, "failed to fetch manifest from upstream", http.StatusBadGateway)
 		return
@@ -1000,7 +1020,17 @@ func (a *DockerAdapter) fetchManifest(ctx context.Context, r *http.Request, upst
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("docker: fetch manifest: upstream returned %d", resp.StatusCode)
+		// Capture upstream's body (capped) so the caller can forward it
+		// verbatim — preserves OCI error envelopes like
+		// {"errors":[{"code":"MANIFEST_UNKNOWN",...}]} that the docker daemon
+		// uses for control flow (e.g. attestation discovery treats 404 with
+		// MANIFEST_UNKNOWN as "not present, skip").
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, "", &upstreamHTTPError{
+			StatusCode:  resp.StatusCode,
+			ContentType: resp.Header.Get("Content-Type"),
+			Body:        body,
+		}
 	}
 
 	// Cap manifest responses at 10 MB.
@@ -1420,4 +1450,19 @@ func (a *DockerAdapter) proxyManifestHead(w http.ResponseWriter, r *http.Request
 	}
 	w.WriteHeader(resp.StatusCode)
 	// HEAD: no body.
+}
+
+// upstreamHTTPError represents a non-2xx response from the upstream registry,
+// returned by fetchManifest so the GET handler can forward the status to the
+// client. Without this, every non-200 collapses into a 502 — breaking docker
+// daemon flows that depend on specific upstream statuses (e.g. attestation
+// discovery treats 404 as "not present, skip" but 502 as fatal).
+type upstreamHTTPError struct {
+	StatusCode  int
+	ContentType string
+	Body        []byte
+}
+
+func (e *upstreamHTTPError) Error() string {
+	return fmt.Sprintf("upstream returned %d", e.StatusCode)
 }

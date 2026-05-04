@@ -458,3 +458,45 @@ func TestDockerAdapter_HEAD_Manifest_Uncached_ProxiesUpstream(t *testing.T) {
 	assert.Equal(t, upstreamDigest, w.Header().Get("Docker-Content-Digest"))
 	assert.Empty(t, w.Body.String(), "HEAD response must have no body")
 }
+
+// TestDockerAdapter_Manifest_GET_UpstreamReturns404_Forwards404 pins that
+// the GET handler forwards upstream non-200 statuses verbatim instead of
+// blanket-converting them to 502. Docker 29+ performs attestation discovery
+// after pulling an image index — it probes sha256-... tag forms and expects
+// 404 with MANIFEST_UNKNOWN to mean "not present, skip". Converting that to
+// 502 made docker treat it as a fatal upstream error and abort the pull.
+func TestDockerAdapter_Manifest_GET_UpstreamReturns404_Forwards404(t *testing.T) {
+	body := []byte(`{"errors":[{"code":"MANIFEST_UNKNOWN","message":"manifest unknown","detail":"sha256-abc"}]}`)
+	a, _, _, _ := setupTestDocker(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write(body)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v2/library/nginx/manifests/sha256-abc", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNotFound, w.Code,
+		"GET on manifest must forward upstream 404 — converting to 502 breaks docker attestation discovery")
+	assert.Contains(t, w.Body.String(), "MANIFEST_UNKNOWN",
+		"upstream OCI error envelope must be forwarded so the daemon can act on the error code")
+	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+}
+
+// TestDockerAdapter_Manifest_GET_UpstreamReturns403_Forwards403 pins symmetric
+// behavior for other upstream client errors — 401/403 must not collapse to 502.
+func TestDockerAdapter_Manifest_GET_UpstreamReturns403_Forwards403(t *testing.T) {
+	a, _, _, _ := setupTestDocker(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"errors":[{"code":"DENIED"}]}`))
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v2/library/nginx/manifests/latest", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), "DENIED")
+}
