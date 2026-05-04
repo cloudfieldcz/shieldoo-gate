@@ -448,3 +448,33 @@ func TestPersistTyposquatBlock_NameOver128Chars_ReturnsError(t *testing.T) {
 	require.NoError(t, db.Get(&count, `SELECT COUNT(*) FROM artifacts WHERE id = ?`, artifactID))
 	assert.Equal(t, 0, count)
 }
+
+// TestNewProxyHTTPClient_EnablesHTTP2 pins the HTTP/2 invariant.
+//
+// Without ForceAttemptHTTP2, Go's http.Transport silently disables HTTP/2 when
+// a custom DialContext is provided — the regression that caused every Docker
+// Hub pull to fail with 403 (Cloudflare's WAF on auth.docker.io rejects Go's
+// HTTP/1.1 fingerprint). If this test starts failing, double-check the
+// transport setup before "fixing" the test.
+func TestNewProxyHTTPClient_EnablesHTTP2(t *testing.T) {
+	t.Parallel()
+
+	var proto string
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proto = r.Proto
+		w.WriteHeader(http.StatusOK)
+	}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	defer srv.Close()
+
+	c := adapter.NewProxyHTTPClient(5 * time.Second)
+	tr := c.Transport.(*http.Transport)
+	// Trust the httptest server's self-signed cert.
+	tr.TLSClientConfig = srv.Client().Transport.(*http.Transport).TLSClientConfig
+
+	resp, err := c.Get(srv.URL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, "HTTP/2.0", proto, "NewProxyHTTPClient must negotiate HTTP/2 — Cloudflare-fronted upstreams (auth.docker.io) reject Go's HTTP/1.1 client with 403")
+}

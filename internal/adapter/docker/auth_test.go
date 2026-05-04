@@ -142,6 +142,20 @@ func TestTokenExchanger_CachesToken(t *testing.T) {
 	assert.Equal(t, 1, callCount, "expected token to be served from cache, no second request")
 }
 
+func TestTokenExchanger_ExchangesToken_AuthServerError_IncludesBody(t *testing.T) {
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"errors":[{"code":"DENIED","message":"upstream said no"}]}`))
+	}))
+	defer authServer.Close()
+
+	te := newTokenExchanger(&http.Client{Timeout: 5 * time.Second})
+	_, err := te.exchangeToken(context.Background(), authServer.URL, "svc", "scope")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "auth server returned 403")
+	assert.Contains(t, err.Error(), "DENIED", "error must surface response body for debuggability")
+}
+
 func TestTokenExchanger_CacheExpiry_RefetchesToken(t *testing.T) {
 	callCount := 0
 	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

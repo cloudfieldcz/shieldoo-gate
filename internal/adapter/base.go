@@ -206,6 +206,12 @@ func TriggerAsyncSBOMWrite(ctx context.Context, artifactID string, scanResults [
 // NewProxyHTTPClient returns an *http.Client with connection pooling tuned for
 // high-concurrency upstream proxying. All adapters should use this instead of
 // creating bare http.Client instances.
+//
+// ForceAttemptHTTP2 is required because we set a custom DialContext: per Go's
+// http.Transport docs, supplying any of Dial/DialTLS/DialContext/TLSClientConfig
+// "conservatively disables HTTP/2" unless this flag is set. Without it, all
+// upstream traffic falls back to HTTP/1.1 — which Cloudflare's WAF on
+// auth.docker.io rejects with 403, breaking every Docker Hub pull.
 func NewProxyHTTPClient(timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout: timeout,
@@ -215,6 +221,7 @@ func NewProxyHTTPClient(timeout time.Duration) *http.Client {
 			MaxIdleConnsPerHost: 64,
 			MaxConnsPerHost:     64,
 			IdleConnTimeout:     90 * time.Second,
+			ForceAttemptHTTP2:   true,
 		},
 	}
 }

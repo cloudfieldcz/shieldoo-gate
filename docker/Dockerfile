@@ -28,7 +28,10 @@ ARG SGW_TOKEN=""
 # pulling Go modules through a self-hosted proxy.
 ARG SGW_USER=shieldoo-gate
 
-RUN apk add --no-cache gcc musl-dev sqlite-dev
+# git is required for `go mod download` to fall back to direct VCS clones
+# (GOPROXY=...,direct) when an upstream module proxy 404/410s — common during
+# self-hosted GOPROXY hiccups.
+RUN apk add --no-cache gcc musl-dev sqlite-dev git
 
 WORKDIR /src
 COPY go.mod go.sum ./

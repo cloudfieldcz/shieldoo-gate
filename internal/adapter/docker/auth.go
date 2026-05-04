@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -140,7 +141,11 @@ func (te *tokenExchanger) exchangeToken(ctx context.Context, realm, service, sco
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("docker: token exchange: auth server returned %d", resp.StatusCode)
+		// Surface the upstream response body so opaque WAF / rate-limit rejections
+		// (e.g. Cloudflare 403 with a TOOMANYREQUESTS body) are diagnosable from
+		// logs alone instead of requiring a code change to capture them.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("docker: token exchange: auth server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var tokenResp tokenResponse

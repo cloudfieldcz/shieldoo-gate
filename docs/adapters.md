@@ -205,6 +205,8 @@ The Docker adapter supports pulling from **multiple upstream registries**. The f
 
 **SECURITY:** Client `Authorization` headers are **never forwarded** to upstream registries. Gate authenticates to each upstream independently using per-registry credentials from config (`auth.token_env` environment variable reference).
 
+**HTTP/2 is required for Docker Hub.** All upstream traffic from the gate goes through `adapter.NewProxyHTTPClient`, which sets `Transport.ForceAttemptHTTP2 = true`. Without that flag, Go's `http.Transport` silently disables HTTP/2 whenever a custom `DialContext` is supplied (per Go's `http.Transport` documentation), and Cloudflare's WAF on `auth.docker.io` rejects Go's HTTP/1.1 client fingerprint with HTTP 403 — breaking every Docker Hub pull. The token-exchange error message also surfaces the upstream response body so the next time a WAF / rate-limit rule kicks in, the rejection reason is visible from logs alone.
+
 ### Push Support (Internal Images)
 
 When `push.enabled: true` is set in config, the Docker adapter supports `docker push` for **internal namespaces** (images whose first path segment does not contain a dot or colon). Push to upstream registry namespaces (e.g. `ghcr.io/...`) is always rejected.
