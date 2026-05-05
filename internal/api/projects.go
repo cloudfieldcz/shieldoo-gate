@@ -352,7 +352,6 @@ func (s *Server) loadProjectOverrides(r *http.Request, projectID int64, merged m
 			log.Warn().Err(err).Msg("api: scan override row failed")
 			continue
 		}
-		// Package-scope overrides target every version — match by version="".
 		key := rowKey{ecosystem, name, version}
 		row, exists := merged[key]
 		if !exists {
@@ -363,22 +362,107 @@ func (s *Server) loadProjectOverrides(r *http.Request, projectID int64, merged m
 			}
 			merged[key] = row
 		}
-		row.OverrideID = id
-		row.OverrideKind = kind
-		row.OverrideScope = scope
-		row.OverrideReason = reason
-		if expiresAt.Valid {
-			t := expiresAt.Time.UTC()
-			row.OverrideExpiresAt = &t
-		}
-		switch kind {
-		case "allow":
-			row.Decision = "WHITELISTED"
-		case "deny":
-			row.Decision = "BLACKLISTED"
+		applyOverrideToRow(row, id, kind, scope, reason, expiresAt)
+
+		// Package-scope overrides cover every version, so collapse any
+		// version-keyed siblings (pulled, blocked, or otherwise) for the same
+		// (ecosystem, name) into this row. Without this the same package
+		// shows up twice — once as the blocked concrete version, once as
+		// the package-scope WHITELISTED/BLACKLISTED row with version="".
+		if scope == "package" {
+			absorbVersionSiblings(merged, key, row)
 		}
 	}
 	return rows.Err()
+}
+
+// applyOverrideToRow stamps an override's fields onto a merged row and
+// promotes its decision. Extracted so the package-scope absorb path uses
+// the same logic.
+func applyOverrideToRow(row *projectArtifactRow, id int64, kind, scope, reason string, expiresAt sql.NullTime) {
+	row.OverrideID = id
+	row.OverrideKind = kind
+	row.OverrideScope = scope
+	row.OverrideReason = reason
+	if expiresAt.Valid {
+		t := expiresAt.Time.UTC()
+		row.OverrideExpiresAt = &t
+	}
+	switch kind {
+	case "allow":
+		row.Decision = "WHITELISTED"
+	case "deny":
+		row.Decision = "BLACKLISTED"
+	}
+}
+
+// absorbVersionSiblings folds every other (ecosystem, name, *) row into
+// target and removes the originals from the map. Aggregate counters add up;
+// the latest activity wins; the most recent block reason is preserved.
+func absorbVersionSiblings(merged map[rowKey]*projectArtifactRow, targetKey rowKey, target *projectArtifactRow) {
+	for k, sib := range merged {
+		if k == targetKey {
+			continue
+		}
+		if k.Ecosystem != targetKey.Ecosystem || k.Name != targetKey.Name {
+			continue
+		}
+		// Carry usage stats forward.
+		target.UseCount += sib.UseCount
+		if target.FirstUsedAt == nil ||
+			(sib.FirstUsedAt != nil && sib.FirstUsedAt.Before(*target.FirstUsedAt)) {
+			target.FirstUsedAt = sib.FirstUsedAt
+		}
+		if sib.LastUsedAt != nil &&
+			(target.LastUsedAt == nil || sib.LastUsedAt.After(*target.LastUsedAt)) {
+			target.LastUsedAt = sib.LastUsedAt
+		}
+		// Carry block stats forward — keep the most recent license + timestamp.
+		target.BlockCount += sib.BlockCount
+		if sib.LastBlockedAt != nil &&
+			(target.LastBlockedAt == nil || sib.LastBlockedAt.After(*target.LastBlockedAt)) {
+			target.LastBlockedAt = sib.LastBlockedAt
+			if sib.BlockedLicense != "" {
+				target.BlockedLicense = sib.BlockedLicense
+			}
+		} else if target.BlockedLicense == "" {
+			target.BlockedLicense = sib.BlockedLicense
+		}
+		// Inherit a real artifact id for navigation when target lacked one
+		// (the override row by itself has no id).
+		if target.ID == "" && sib.ID != "" {
+			target.ID = sib.ID
+		}
+		// Merge SBOM licenses (deduped).
+		target.Licenses = mergeStringSets(target.Licenses, sib.Licenses)
+
+		delete(merged, k)
+	}
+}
+
+// mergeStringSets returns the union of two string slices preserving the
+// first-seen order. Used to combine SBOM licenses across versions.
+func mergeStringSets(a, b []string) []string {
+	if len(b) == 0 {
+		return a
+	}
+	seen := make(map[string]struct{}, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, s := range a {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	for _, s := range b {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 // resolveArtifactTuple returns (ecosystem, name, version) for an audit-log

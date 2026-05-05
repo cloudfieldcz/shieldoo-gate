@@ -229,6 +229,56 @@ func TestListProjectArtifacts_MergesPulledBlockedAndOverrides(t *testing.T) {
 	assert.Equal(t, "WHITELISTED", byName["left-pad"]["decision"])
 }
 
+func TestListProjectArtifacts_PackageScopeOverride_AbsorbsVersionRows(t *testing.T) {
+	// Regression: a "any version" (package-scope) whitelist used to render
+	// twice — once as the blocked concrete-version row and once as the
+	// version="" override row. The package-scope override must absorb every
+	// (ecosystem, name, *) sibling so the user sees a single WHITELISTED row.
+	srv, db, svc := newTestServerWithProjects(t)
+	projectID := seedProject(t, svc, "acme")
+
+	now := time.Now().UTC()
+
+	// Two blocked attempts on different versions plus one pulled clean row.
+	insertTestArtifact(t, db, "npm:chalk:5.4.1", "npm", "chalk", "5.4.1")
+	insertTestArtifact(t, db, "npm:chalk:5.3.0", "npm", "chalk", "5.3.0")
+	insertTestArtifact(t, db, "npm:chalk:4.0.0", "npm", "chalk", "4.0.0")
+
+	for _, ver := range []string{"5.4.1", "5.3.0"} {
+		_, err := db.Exec(
+			`INSERT INTO audit_log (ts, event_type, artifact_id, reason, project_id)
+			 VALUES (?, ?, ?, 'license: MIT blocked by policy', ?)`,
+			now, string(model.EventLicenseBlocked), "npm:chalk:"+ver, projectID)
+		require.NoError(t, err)
+	}
+	_, err := db.Exec(
+		`INSERT INTO artifact_project_usage (project_id, artifact_id, first_used_at, last_used_at, use_count)
+		 VALUES (?, ?, ?, ?, 3)`, projectID, "npm:chalk:4.0.0", now, now)
+	require.NoError(t, err)
+
+	// Whitelist any version.
+	createResp := doJSON(t, srv, http.MethodPost,
+		fmt.Sprintf("/api/v1/projects/%d/overrides", projectID),
+		map[string]string{"ecosystem": "npm", "name": "chalk", "scope": "package", "kind": "allow", "reason": "approved"})
+	require.Equal(t, http.StatusCreated, createResp.Code, createResp.Body.String())
+
+	resp := doRequest(t, srv, http.MethodGet, fmt.Sprintf("/api/v1/projects/%d/artifacts", projectID), nil)
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	var listResp struct {
+		Artifacts []map[string]any `json:"artifacts"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &listResp))
+	require.Len(t, listResp.Artifacts, 1, "package-scope override must collapse all version siblings into one row")
+
+	row := listResp.Artifacts[0]
+	assert.Equal(t, "WHITELISTED", row["decision"])
+	assert.Equal(t, "package", row["override_scope"])
+	// Aggregated stats: 2 blocks + 3 uses preserved across the merged rows.
+	assert.EqualValues(t, 2, row["block_count"])
+	assert.EqualValues(t, 3, row["use_count"])
+}
+
 func TestListProjectArtifacts_OverrideUpgradesBlockedDecision(t *testing.T) {
 	// A package that's both license-blocked AND has an active allow override
 	// should display as WHITELISTED (override wins over block).
