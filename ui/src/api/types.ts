@@ -202,19 +202,66 @@ export interface ProjectsListResponse {
   projects: Project[]
 }
 
+export type ProjectArtifactDecision =
+  | 'CLEAN'
+  | 'BLOCKED_LICENSE'
+  | 'WHITELISTED'
+  | 'BLACKLISTED'
+
+export type ProjectOverrideKind = 'allow' | 'deny'
+export type ProjectOverrideScope = 'package' | 'version'
+
 export interface ProjectArtifact {
-  id: string
+  /** Real artifact id when present (pulled or has audit row); empty for
+   * standalone overrides on packages the project never pulled. */
+  id?: string
   ecosystem: string
   name: string
-  version: string
-  first_used_at: string
-  last_used_at: string
-  use_count: number
+  version?: string
+  decision: ProjectArtifactDecision
+  first_used_at?: string
+  last_used_at?: string
+  use_count?: number
   licenses?: string[]
+  /** SPDX expression that triggered the most recent license block. */
+  blocked_license?: string
+  last_blocked_at?: string
+  block_count?: number
+  override_id?: number
+  override_kind?: ProjectOverrideKind
+  override_scope?: ProjectOverrideScope
+  override_reason?: string
+  override_expires_at?: string
 }
 
 export interface ProjectArtifactsResponse {
   artifacts: ProjectArtifact[] | null
+}
+
+export interface ProjectOverrideRequest {
+  ecosystem: string
+  name: string
+  version?: string
+  scope: ProjectOverrideScope
+  kind: ProjectOverrideKind
+  reason: string
+  expires_at?: string
+}
+
+export interface ProjectOverride {
+  id: number
+  project_id: number
+  ecosystem: string
+  name: string
+  version?: string
+  scope: ProjectOverrideScope
+  kind: ProjectOverrideKind
+  reason: string
+  created_by: string
+  created_at: string
+  expires_at?: string
+  revoked: boolean
+  revoked_at?: string
 }
 
 export type LicensePolicyMode = 'inherit' | 'override' | 'disabled'

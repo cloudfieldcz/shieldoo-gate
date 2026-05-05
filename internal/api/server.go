@@ -182,6 +182,8 @@ func (s *Server) Routes() chi.Router {
 				r.Get("/projects/{id}/license-policy", s.handleGetProjectLicensePolicy)
 				r.Put("/projects/{id}/license-policy", s.handlePutProjectLicensePolicy)
 				r.Delete("/projects/{id}/license-policy", s.handleDeleteProjectLicensePolicy)
+				r.Post("/projects/{id}/overrides", s.handleCreateProjectOverride)
+				r.Post("/projects/{id}/overrides/{overrideId}/revoke", s.handleRevokeProjectOverride)
 			}
 
 			// Global license policy (runtime-mutable; overrides YAML).

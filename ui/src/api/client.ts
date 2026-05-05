@@ -21,6 +21,8 @@ import type {
   ProjectArtifactsResponse,
   ProjectLicensePolicyView,
   ProjectLicensePolicyUpdate,
+  ProjectOverride,
+  ProjectOverrideRequest,
   GlobalLicensePolicyView,
   GlobalLicensePolicyUpdate,
   ArtifactLicenses,
@@ -180,6 +182,19 @@ export const projectsApi = {
   deleteLicensePolicy: (id: number) =>
     api
       .delete<ProjectLicensePolicyView>(`/projects/${id}/license-policy`)
+      .then((r) => r.data),
+
+  /** Whitelist (kind=allow) or blacklist (kind=deny) a package for this project. */
+  createOverride: (id: number, body: ProjectOverrideRequest) =>
+    api.post<ProjectOverride>(`/projects/${id}/overrides`, body).then((r) => r.data),
+
+  /** Revoke an active per-project override (idempotent). */
+  revokeOverride: (id: number, overrideId: number, reason: string) =>
+    api
+      .post<{ id: number; revoked: boolean }>(
+        `/projects/${id}/overrides/${overrideId}/revoke`,
+        { reason }
+      )
       .then((r) => r.data),
 }
 

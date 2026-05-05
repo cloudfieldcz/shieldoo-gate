@@ -185,69 +185,90 @@ func (e *Engine) SetOnSBOMError(a license.Action) {
 	e.onSBOMError = a
 }
 
-// hasDBOverride checks if there is an active, non-revoked, non-expired override
-// in the database for the given artifact.
-func (e *Engine) hasDBOverride(ctx context.Context, artifact scanner.Artifact) bool {
-	if e.db == nil {
-		return false
+// Override kinds. An "allow" override lets a package through despite a block;
+// a "deny" override blocks a package despite an allowance. Per-project deny
+// always beats per-project allow which always beats global allow.
+const (
+	OverrideKindAllow = "allow"
+	OverrideKindDeny  = "deny"
+)
+
+// lookupOverride resolves the most specific active override for the given
+// (ecosystem, name, version) tuple in the request's project context. Returns
+// the matching row's ID, its kind ("allow" or "deny"), and true on a hit.
+//
+// Resolution precedence:
+//  1. Per-project DENY  (project_id = current, kind = 'deny')
+//  2. Per-project ALLOW (project_id = current, kind = 'allow')
+//  3. Global ALLOW       (project_id IS NULL, kind = 'allow')
+//
+// Within a tier the most recently created row wins. The project is read from
+// ctx via project.FromContext — when no project is on context only the global
+// tier is consulted (matches typosquat back-compat semantics).
+//
+// Pass version="" for name-only requests; only package-scoped overrides will
+// match in that case.
+func (e *Engine) lookupOverride(ctx context.Context, ecosystem scanner.Ecosystem, name, version string) (int64, string, bool) {
+	if e == nil || e.db == nil {
+		return 0, "", false
 	}
 
-	// Use a fresh context — the HTTP request context may already be canceled
-	// by the time policy evaluation runs (e.g. client disconnected during scan).
-	// Override checks must succeed regardless of client state.
+	var projectID int64
+	if proj := project.FromContext(ctx); proj != nil {
+		projectID = proj.ID
+	}
+
+	// Detach from request context — the HTTP request context may already be
+	// canceled by the time policy evaluation runs (e.g. client disconnected
+	// during scan). Override checks must succeed regardless of client state.
 	dbCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	now := time.Now().UTC()
-	var count int
-	err := e.db.QueryRowContext(dbCtx,
-		`SELECT COUNT(*) FROM policy_overrides
-		 WHERE ecosystem = ? AND name = ? AND revoked = FALSE
-		   AND (expires_at IS NULL OR expires_at > ?)
-		   AND (scope = 'package' OR (scope = 'version' AND version = ?))`,
-		string(artifact.Ecosystem), artifact.Name, now, artifact.Version,
-	).Scan(&count)
-	if err != nil {
-		log.Error().Err(err).
-			Str("ecosystem", string(artifact.Ecosystem)).
-			Str("name", artifact.Name).
-			Str("version", artifact.Version).
-			Msg("hasDBOverride: query error")
-		return false
+
+	if projectID > 0 {
+		if id, ok := e.queryOverride(dbCtx, ecosystem, name, version, OverrideKindDeny, &projectID, now); ok {
+			return id, OverrideKindDeny, true
+		}
+		if id, ok := e.queryOverride(dbCtx, ecosystem, name, version, OverrideKindAllow, &projectID, now); ok {
+			return id, OverrideKindAllow, true
+		}
 	}
-	return count > 0
+	if id, ok := e.queryOverride(dbCtx, ecosystem, name, version, OverrideKindAllow, nil, now); ok {
+		return id, OverrideKindAllow, true
+	}
+	return 0, "", false
 }
 
-// HasOverride returns the matching override's ID and true if there is an
-// active, non-revoked, non-expired policy override that would allow the given
-// (ecosystem, name, version) tuple through. Returns (0, false) when no
-// override matches. The ID is recorded in audit-log MetadataJSON so operators
-// can trace which override let a request through.
-//
-// Pass version="" for name-only requests (only package-scoped overrides will
-// match); pass the real version for tarball-level requests (both package-scoped
-// and matching version-scoped overrides will match). When multiple overrides
-// match, the most recently created one wins.
-func (e *Engine) HasOverride(ctx context.Context, ecosystem scanner.Ecosystem, name, version string) (int64, bool) {
-	if e == nil || e.db == nil {
-		return 0, false
+// queryOverride runs one tier of the precedence ladder. projectID == nil means
+// "global rows only" (project_id IS NULL); a non-nil pointer means rows scoped
+// to that project.
+func (e *Engine) queryOverride(ctx context.Context, ecosystem scanner.Ecosystem, name, version, kind string, projectID *int64, now time.Time) (int64, bool) {
+	var (
+		id  int64
+		err error
+	)
+	if projectID == nil {
+		err = e.db.QueryRowContext(ctx,
+			`SELECT id FROM policy_overrides
+			 WHERE ecosystem = ? AND name = ? AND revoked = FALSE
+			   AND kind = ? AND project_id IS NULL
+			   AND (expires_at IS NULL OR expires_at > ?)
+			   AND (scope = 'package' OR (scope = 'version' AND version = ?))
+			 ORDER BY created_at DESC, id DESC LIMIT 1`,
+			string(ecosystem), name, kind, now, version,
+		).Scan(&id)
+	} else {
+		err = e.db.QueryRowContext(ctx,
+			`SELECT id FROM policy_overrides
+			 WHERE ecosystem = ? AND name = ? AND revoked = FALSE
+			   AND kind = ? AND project_id = ?
+			   AND (expires_at IS NULL OR expires_at > ?)
+			   AND (scope = 'package' OR (scope = 'version' AND version = ?))
+			 ORDER BY created_at DESC, id DESC LIMIT 1`,
+			string(ecosystem), name, kind, *projectID, now, version,
+		).Scan(&id)
 	}
-
-	// Detach from request context — see hasDBOverride for rationale.
-	dbCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	now := time.Now().UTC()
-	var id int64
-	err := e.db.QueryRowContext(dbCtx,
-		`SELECT id FROM policy_overrides
-		 WHERE ecosystem = ? AND name = ? AND revoked = FALSE
-		   AND (expires_at IS NULL OR expires_at > ?)
-		   AND (scope = 'package' OR (scope = 'version' AND version = ?))
-		 ORDER BY created_at DESC, id DESC
-		 LIMIT 1`,
-		string(ecosystem), name, now, version,
-	).Scan(&id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, false
@@ -256,7 +277,59 @@ func (e *Engine) HasOverride(ctx context.Context, ecosystem scanner.Ecosystem, n
 			Str("ecosystem", string(ecosystem)).
 			Str("name", name).
 			Str("version", version).
-			Msg("HasOverride: query error")
+			Str("kind", kind).
+			Msg("queryOverride: query error")
+		return 0, false
+	}
+	return id, true
+}
+
+// lookupOverrideByArtifactID resolves an override using the artifact's
+// (ecosystem, name, version) read from the artifacts table. Used by the
+// cache-hit license path which only has the opaque artifact ID. Same
+// precedence as lookupOverride.
+func (e *Engine) lookupOverrideByArtifactID(ctx context.Context, artifactID string) (int64, string, bool) {
+	if e == nil || e.db == nil || artifactID == "" {
+		return 0, "", false
+	}
+
+	dbCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var (
+		ecosystem string
+		name      string
+		version   string
+	)
+	err := e.db.QueryRowContext(dbCtx,
+		`SELECT ecosystem, name, version FROM artifacts WHERE id = ?`,
+		artifactID,
+	).Scan(&ecosystem, &name, &version)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			log.Error().Err(err).Str("artifact_id", artifactID).Msg("lookupOverrideByArtifactID: artifact lookup error")
+		}
+		return 0, "", false
+	}
+	return e.lookupOverride(ctx, scanner.Ecosystem(ecosystem), name, version)
+}
+
+// HasOverride returns the matching override's ID and true if there is an
+// active, non-revoked, non-expired ALLOW override that would let the given
+// (ecosystem, name, version) tuple through. Both per-project and global ALLOW
+// overrides match; the project is resolved from ctx. DENY overrides are not
+// returned here — they are surfaced through Evaluate / EvaluateLicensesOnly.
+//
+// This signature is preserved for the typosquat pre-scan path, where the only
+// meaningful question is "should this be let through despite the typosquat
+// suspicion." The override ID is recorded in audit-log MetadataJSON so
+// operators can trace which override let a request through.
+//
+// Pass version="" for name-only requests (only package-scoped overrides will
+// match); pass the real version for tarball-level requests.
+func (e *Engine) HasOverride(ctx context.Context, ecosystem scanner.Ecosystem, name, version string) (int64, bool) {
+	id, kind, ok := e.lookupOverride(ctx, ecosystem, name, version)
+	if !ok || kind != OverrideKindAllow {
 		return 0, false
 	}
 	return id, true
@@ -266,10 +339,18 @@ func (e *Engine) HasOverride(ctx context.Context, ecosystem scanner.Ecosystem, n
 // DB overrides are checked first, then static allowlist, then verdict rules.
 func (e *Engine) Evaluate(ctx context.Context, artifact scanner.Artifact, scanResults []scanner.ScanResult) PolicyResult {
 	// DB override check — highest priority.
-	if e.hasDBOverride(ctx, artifact) {
-		return PolicyResult{
-			Action: ActionAllow,
-			Reason: fmt.Sprintf("policy override: %s:%s:%s", artifact.Ecosystem, artifact.Name, artifact.Version),
+	if id, kind, ok := e.lookupOverride(ctx, artifact.Ecosystem, artifact.Name, artifact.Version); ok {
+		switch kind {
+		case OverrideKindDeny:
+			return PolicyResult{
+				Action: ActionBlock,
+				Reason: fmt.Sprintf("project policy override (deny): %s:%s:%s [override_id=%d]", artifact.Ecosystem, artifact.Name, artifact.Version, id),
+			}
+		case OverrideKindAllow:
+			return PolicyResult{
+				Action: ActionAllow,
+				Reason: fmt.Sprintf("policy override: %s:%s:%s", artifact.Ecosystem, artifact.Name, artifact.Version),
+			}
 		}
 	}
 
@@ -328,6 +409,25 @@ func (e *Engine) Evaluate(ctx context.Context, artifact scanner.Artifact, scanRe
 // metadata lookup cannot silently bypass license enforcement. This is stricter
 // than evaluateLicenses() (used on fresh-scan path) which fails open.
 func (e *Engine) EvaluateLicensesOnly(ctx context.Context, artifactID string) PolicyResult {
+	// Override check runs ahead of the licenseEnabled gate so per-project
+	// deny / allow decisions still apply when license enforcement is off.
+	// Lookup degrades gracefully (returns false) when the artifacts row is
+	// missing or the DB is nil.
+	if id, kind, ok := e.lookupOverrideByArtifactID(ctx, artifactID); ok {
+		switch kind {
+		case OverrideKindDeny:
+			return PolicyResult{
+				Action: ActionBlock,
+				Reason: fmt.Sprintf("project policy override (deny) for %s [override_id=%d]", artifactID, id),
+			}
+		case OverrideKindAllow:
+			return PolicyResult{
+				Action: ActionAllow,
+				Reason: fmt.Sprintf("policy override: %s", artifactID),
+			}
+		}
+	}
+
 	if !e.licenseEnabled {
 		return PolicyResult{Action: ActionAllow}
 	}
