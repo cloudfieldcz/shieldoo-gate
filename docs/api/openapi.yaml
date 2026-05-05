@@ -907,9 +907,22 @@ paths:
         required: true
         schema: { type: integer, format: int64 }
     get:
-      summary: Artifacts used by this project
+      summary: Project artifacts pane data — pulled, blocked, and overridden packages merged into one list
       operationId: listProjectArtifacts
       tags: [projects]
+      description: |
+        Returns the per-project view of every package that has crossed the
+        project's policy boundary. Rows are deduped by `(ecosystem, name,
+        version)` and sourced from three tables:
+
+        - `artifact_project_usage` (pulled artifacts, `decision: CLEAN`)
+        - `audit_log` rows where `event_type = 'LICENSE_BLOCKED'` and the
+          project matches (`decision: BLOCKED_LICENSE`, with `blocked_license`
+          and `last_blocked_at` populated)
+        - `policy_overrides` rows scoped to this project (`decision:
+          WHITELISTED` for `kind=allow`, `BLACKLISTED` for `kind=deny`)
+
+        Override decision wins over CLEAN/BLOCKED_LICENSE when both apply.
       responses:
         "200":
           description: Project artifacts
@@ -920,16 +933,7 @@ paths:
                 properties:
                   artifacts:
                     type: array
-                    items:
-                      type: object
-                      properties:
-                        id:             { type: string }
-                        ecosystem:      { type: string }
-                        name:           { type: string }
-                        version:        { type: string }
-                        first_used_at:  { type: string }
-                        last_used_at:   { type: string }
-                        use_count:      { type: integer }
+                    items: { $ref: "#/components/schemas/ProjectArtifactRow" }
 
   /api/v1/projects/{id}/license-policy:
     parameters:
@@ -982,6 +986,71 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LicensePolicyView" }
+
+  /api/v1/projects/{id}/overrides:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: integer, format: int64 } }
+    post:
+      summary: Create a per-project policy override (whitelist or blacklist)
+      operationId: createProjectOverride
+      tags: [projects, overrides]
+      description: |
+        Writes a `policy_overrides` row scoped to this project.
+
+        - `kind=allow` lets the package through despite a license/scan block (whitelist).
+        - `kind=deny` blocks the package even when policy would allow it (blacklist).
+        - `scope=package` covers every version; `scope=version` requires `version` and matches it exactly.
+
+        Per-project DENY beats per-project ALLOW which beats global ALLOW.
+        Returns 409 when an active override of the same `(ecosystem, name, version, scope, kind)` already exists for this project.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProjectOverrideRequest" }
+      responses:
+        "201":
+          description: Override created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProjectOverride" }
+        "400": { description: Invalid request body }
+        "404": { description: Project not found }
+        "409": { description: Duplicate active override }
+
+  /api/v1/projects/{id}/overrides/{overrideId}/revoke:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: integer, format: int64 } }
+      - { in: path, name: overrideId, required: true, schema: { type: integer, format: int64 } }
+    post:
+      summary: Revoke a per-project policy override
+      operationId: revokeProjectOverride
+      tags: [projects, overrides]
+      description: |
+        Soft-deletes the override (`revoked = TRUE`, `revoked_at = now()`).
+        Idempotent — revoking an already-revoked row returns 200 with
+        `already_revoked: true`. Returns 404 if the override does not
+        belong to this project.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, description: Free-form revoke reason for the audit log }
+      responses:
+        "200":
+          description: Override revoked (or already revoked)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer, format: int64 }
+                  revoked: { type: boolean }
+                  already_revoked: { type: boolean }
+        "404": { description: Override not found in this project }
 
   /api/v1/policy/licenses:
     get:
@@ -1525,6 +1594,67 @@ components:
           nullable: true
           description: Timestamp when override was revoked
           example: null
+
+    ProjectArtifactRow:
+      type: object
+      required: [ecosystem, name, decision]
+      description: |
+        One row of `GET /api/v1/projects/{id}/artifacts`. May represent a
+        pulled artifact, a license-block event, an active override, or any
+        combination — see the operation description.
+      properties:
+        id:             { type: string, description: "Real artifact id, omitted for standalone overrides on never-pulled packages" }
+        ecosystem:      { type: string, example: npm }
+        name:           { type: string, example: lodash }
+        version:        { type: string, description: "Empty when the row only carries a package-scope override or a name-only block" }
+        decision:
+          type: string
+          enum: [CLEAN, BLOCKED_LICENSE, WHITELISTED, BLACKLISTED]
+          description: |
+            Override > license-block > pulled. WHITELISTED and BLACKLISTED
+            indicate an active per-project override is in effect.
+        first_used_at:  { type: string, format: date-time }
+        last_used_at:   { type: string, format: date-time }
+        use_count:      { type: integer }
+        licenses:       { type: array, items: { type: string }, description: "SPDX expressions extracted from SBOM" }
+        blocked_license: { type: string, description: "SPDX expression that triggered the most recent license block" }
+        last_blocked_at: { type: string, format: date-time }
+        block_count:     { type: integer }
+        override_id:     { type: integer, format: int64 }
+        override_kind:   { type: string, enum: [allow, deny] }
+        override_scope:  { type: string, enum: [package, version] }
+        override_reason: { type: string }
+        override_expires_at: { type: string, format: date-time }
+
+    ProjectOverrideRequest:
+      type: object
+      required: [ecosystem, name, scope, kind, reason]
+      properties:
+        ecosystem: { type: string, example: npm }
+        name:      { type: string, example: lodash }
+        version:   { type: string, description: "Required when scope=version, ignored when scope=package", example: "4.17.21" }
+        scope:     { type: string, enum: [package, version] }
+        kind:      { type: string, enum: [allow, deny], description: "allow = whitelist, deny = blacklist" }
+        reason:    { type: string, description: "Mandatory — written to the audit log for traceability" }
+        expires_at: { type: string, format: date-time, description: "Optional. After this point the override stops applying (the row stays for audit)" }
+
+    ProjectOverride:
+      type: object
+      required: [id, project_id, ecosystem, name, scope, kind, reason, created_by, created_at, revoked]
+      properties:
+        id:         { type: integer, format: int64 }
+        project_id: { type: integer, format: int64 }
+        ecosystem:  { type: string }
+        name:       { type: string }
+        version:    { type: string }
+        scope:      { type: string, enum: [package, version] }
+        kind:       { type: string, enum: [allow, deny] }
+        reason:     { type: string }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time, nullable: true }
+        revoked:    { type: boolean }
+        revoked_at: { type: string, format: date-time, nullable: true }
 
     PolicyOverridePage:
       type: object

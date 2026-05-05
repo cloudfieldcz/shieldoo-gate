@@ -99,6 +99,7 @@ Shieldoo Gate Protocol Adapter
 | — | [Project registry](features/projects.md) (Basic-auth username → project) | Done (v1.2) |
 | — | [SBOM generation](features/sbom-generation.md) (CycloneDX via Trivy single-run) | Done (v1.2) |
 | — | [License policy enforcement](features/license-policy.md) (SPDX, per-project overrides) | Done (v1.2) |
+| — | Per-project, per-package overrides — whitelist or blacklist a single package within one project, with revoke (see [ADR-006](adr/ADR-006-per-project-package-overrides.md) and the [Policy Engine](policy.md#policy-overrides) doc) | Done |
 
 ## Client Authentication — How Basic Auth Maps to Projects (v1.2+)
 

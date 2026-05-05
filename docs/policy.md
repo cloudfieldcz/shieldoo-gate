@@ -17,6 +17,9 @@ Policy evaluation follows a strict priority order — **first match wins**:
 
 ```
 1. Database overrides (highest priority)
+   ├── 1a. Per-project DENY  → BLOCK
+   ├── 1b. Per-project ALLOW → ALLOW
+   └── 1c. Global ALLOW       → ALLOW
    ↓ no match
 2. Static allowlist entries
    ↓ no match
@@ -27,18 +30,29 @@ Policy evaluation follows a strict priority order — **first match wins**:
 
 ### Step 1: Database Overrides
 
-The engine queries the `policy_overrides` table for active (non-revoked, non-expired) overrides matching the artifact's ecosystem, name, and version:
+The engine resolves the most specific active override against `policy_overrides`. Rows can be **global** (`project_id IS NULL`, kind `allow` only — used for typosquat releases) or **per-project** (`project_id` set, kind `allow` or `deny`). The project is read from the request context (`project.FromContext`); when no project is on context, only the global tier is consulted.
+
+Resolution precedence within Step 1:
+
+1. **Per-project DENY** — kind=`deny` AND `project_id` = current project. A blacklist beats every other override, including `mode=disabled` license enforcement (the project still gets blocked).
+2. **Per-project ALLOW** — kind=`allow` AND `project_id` = current project. A per-project whitelist beats the global allow.
+3. **Global ALLOW** — kind=`allow` AND `project_id IS NULL`. Existing typosquat-release rows live here.
+
+Within a tier the most recently created row wins.
 
 ```sql
-SELECT COUNT(*) FROM policy_overrides
-WHERE ecosystem = ? AND name = ? AND revoked = 0
+-- Per-project DENY (highest precedence inside Step 1)
+SELECT id FROM policy_overrides
+WHERE ecosystem = ? AND name = ? AND revoked = FALSE
+  AND kind = 'deny' AND project_id = ?
   AND (expires_at IS NULL OR expires_at > ?)
   AND (scope = 'package' OR (scope = 'version' AND version = ?))
+ORDER BY created_at DESC, id DESC LIMIT 1
 ```
 
-If a matching override exists, the artifact is **allowed** immediately regardless of scan results. This is how false positives are handled.
+If the resolved override is `deny` the artifact is **blocked**. If it is `allow` the artifact is **allowed** regardless of scan results or license verdict — that is how false positives and license waivers are handled.
 
-**Fail-open:** Database query errors do not block artifacts — the engine silently proceeds to the next priority level.
+**Fail-open on errors:** Database query errors do not block artifacts — the engine silently proceeds to the next priority level. (DENY overrides cannot block "by accident": missing the row degrades to allow, not deny.)
 
 ### Step 2: Static Allowlist
 
@@ -106,7 +120,16 @@ Both BLOCK and QUARANTINE result in the artifact being marked as `QUARANTINED` i
 
 ## Policy Overrides
 
-Policy overrides allow administrators to create exceptions for artifacts that were incorrectly flagged by scanners.
+Policy overrides allow administrators to create exceptions for artifacts that were incorrectly flagged by scanners or whose license decision needs to be inverted for a specific project.
+
+### Override Kinds
+
+| Kind | Effect | Typical use |
+|---|---|---|
+| `allow` (whitelist) | Lets the package through despite a scan or license block | Typosquat false positive (global), GPL-3.0 waiver in one project |
+| `deny` (blacklist) | Blocks the package even when scan + license policy would allow it | Project-level ban on a package replaced by an internal fork |
+
+`deny` overrides only exist at the **per-project** level. The global tier remains allow-only and is reserved for typosquat releases.
 
 ### Override Scopes
 
@@ -114,6 +137,14 @@ Policy overrides allow administrators to create exceptions for artifacts that we
 |---|---|---|
 | `version` | Applies to a specific version only | Allow `pypi:requests:2.32.3` |
 | `package` | Applies to all versions of a package | Allow all versions of `pypi:requests` |
+
+### Override Tiers
+
+| Tier | `project_id` | `kind` | Precedence | Created via |
+|---|---|---|---|---|
+| Global allow (typosquat release) | `NULL` | `allow` | 3rd | `POST /api/v1/artifacts/{id}/release`, `POST /api/v1/overrides` |
+| Per-project allow (whitelist) | set | `allow` | 2nd | Project artifacts pane → **Whitelist** |
+| Per-project deny (blacklist) | set | `deny` | 1st (wins) | Project artifacts pane → **Blacklist** |
 
 ### Override Lifecycle
 
@@ -133,10 +164,13 @@ Created ──▶ Active ──▶ Revoked (soft-delete)
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/v1/overrides` | List overrides (paginated, filterable by active status) |
-| `POST` | `/api/v1/overrides` | Create override (specify ecosystem, name, version, scope, reason) |
-| `DELETE` | `/api/v1/overrides/{id}` | Revoke override (soft-delete) |
+| `POST` | `/api/v1/overrides` | Create global override (typosquat releases) |
+| `DELETE` | `/api/v1/overrides/{id}` | Revoke global override (soft-delete) |
 | `POST` | `/api/v1/artifacts/{id}/override` | Create override from artifact (convenience shortcut) |
 | `POST` | `/api/v1/artifacts/{id}/release` | Release artifact from quarantine — also creates a version-scoped override (or package-scoped if the artifact's `version` is `*`) |
+| `POST` | `/api/v1/projects/{id}/overrides` | Create per-project override (`kind` = `allow` or `deny`, `scope` = `package` or `version`, `reason` mandatory) |
+| `POST` | `/api/v1/projects/{id}/overrides/{overrideId}/revoke` | Revoke a per-project override (idempotent) |
+| `GET` | `/api/v1/projects/{id}/artifacts` | Project artifacts pane data — merged list of pulled artifacts, license-block events, and active overrides with a `decision` field per row |
 
 The release endpoint is the primary UI action for quarantined artifacts. It sets the artifact status to `CLEAN` and creates a policy override so the artifact is not re-quarantined on the next scan.
 
@@ -149,9 +183,24 @@ A partial unique index on `policy_overrides(ecosystem, name, version, scope) WHE
 ### Audit Trail
 
 Override operations are logged in the audit log:
-- `OVERRIDE_CREATED` — when a new override is created via the override endpoints
-- `RELEASED` — when an artifact is released (which also creates an override)
-- `OVERRIDE_REVOKED` — when an override is revoked
+
+- `OVERRIDE_CREATED` — when a new override is created via the override endpoints (global or per-project). For per-project rows the audit row carries `project_id`.
+- `RELEASED` — when an artifact is released (which also creates a global override)
+- `OVERRIDE_REVOKED` — when an override is revoked (global or per-project)
+
+### Per-project artifacts pane
+
+The project Artifacts tab in the admin UI is the primary place to manage per-project overrides. `GET /api/v1/projects/{id}/artifacts` returns a merged list keyed on `(ecosystem, name, version)` from three sources:
+
+- `artifact_project_usage` — packages the project has actually pulled (`decision: CLEAN`)
+- `audit_log` `LICENSE_BLOCKED` events for this `project_id`, grouped by package (`decision: BLOCKED_LICENSE`, with `blocked_license` and `last_blocked_at`)
+- `policy_overrides` rows where `project_id = current` and not revoked/expired (`decision: WHITELISTED` for `kind=allow`, `BLACKLISTED` for `kind=deny`)
+
+Override decision wins over CLEAN/BLOCKED_LICENSE when both contribute. The UI renders one row per package with a contextual action button:
+
+- `BLOCKED_LICENSE` → **Whitelist** (creates an allow override)
+- `CLEAN` → **Blacklist** (creates a deny override)
+- `WHITELISTED` / `BLACKLISTED` → **Revert** (revokes the override)
 
 ## Example Scenarios
 

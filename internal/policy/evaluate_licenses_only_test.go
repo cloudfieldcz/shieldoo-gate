@@ -3,6 +3,7 @@ package policy_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -11,6 +12,7 @@ import (
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/license"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/policy"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/project"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/sbom"
 )
 
@@ -151,4 +153,81 @@ func TestEvaluateLicensesOnly_DeadlineExceeded_ReturnsAllow(t *testing.T) {
 	result := engine.EvaluateLicensesOnly(ctx, "npm:chalk:5.4.1")
 	assert.Equal(t, policy.ActionAllow, result.Action,
 		"deadline-exceeded context must not trigger fail-closed block")
+}
+
+// seedNamedArtifact inserts an artifact row with the given ecosystem/name/version
+// (the shared seedArtifactWithLicenses helper hardcodes those columns, which
+// breaks per-project override tests that key on real package identity).
+func seedNamedArtifact(t *testing.T, db *config.GateDB, store sbom.Storage, id, ecosystem, name, version string, licenses []string) {
+	t.Helper()
+	_, err := db.Exec(`INSERT INTO artifacts (id, ecosystem, name, version, upstream_url, sha256, size_bytes, cached_at, last_accessed_at, storage_path)
+		VALUES (?, ?, ?, ?, 'u', 's', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, '/tmp')`, id, ecosystem, name, version)
+	require.NoError(t, err)
+	if len(licenses) > 0 {
+		require.NoError(t, store.WriteLicensesOnly(context.Background(), id, licenses, "test"))
+	}
+}
+
+func seedProject(t *testing.T, db *config.GateDB, label string) int64 {
+	t.Helper()
+	res, err := db.Exec(
+		`INSERT INTO projects (label, display_name, description, created_at, created_via, enabled)
+		 VALUES (?, '', '', ?, 'test', 1)`, label, time.Now().UTC())
+	require.NoError(t, err)
+	id, err := res.LastInsertId()
+	require.NoError(t, err)
+	return id
+}
+
+func TestEvaluateLicensesOnly_ProjectAllowOverride_BypassesLicenseBlock(t *testing.T) {
+	engine, db, store := newLicenseEngine(t, []string{"GPL-3.0-only"}, nil, "")
+	seedNamedArtifact(t, db, store, "npm:chalk:5.4.1", "npm", "chalk", "5.4.1", []string{"GPL-3.0-only"})
+
+	projectID := seedProject(t, db, "acme")
+	_, err := db.Exec(
+		`INSERT INTO policy_overrides (ecosystem, name, version, scope, kind, project_id, reason, created_by, created_at, revoked)
+		 VALUES ('npm', 'chalk', '', 'package', 'allow', ?, 'legal approved', 'test', ?, 0)`,
+		projectID, time.Now().UTC())
+	require.NoError(t, err)
+
+	ctx := project.WithContext(context.Background(), &project.Project{ID: projectID, Label: "acme"})
+	result := engine.EvaluateLicensesOnly(ctx, "npm:chalk:5.4.1")
+	assert.Equal(t, policy.ActionAllow, result.Action,
+		"per-project allow override must bypass license block")
+}
+
+func TestEvaluateLicensesOnly_ProjectDenyOverride_BlocksAllowedLicense(t *testing.T) {
+	engine, db, store := newLicenseEngine(t, []string{"GPL-3.0-only"}, nil, "")
+	seedNamedArtifact(t, db, store, "npm:chalk:5.4.1", "npm", "chalk", "5.4.1", []string{"MIT"})
+
+	projectID := seedProject(t, db, "acme")
+	_, err := db.Exec(
+		`INSERT INTO policy_overrides (ecosystem, name, version, scope, kind, project_id, reason, created_by, created_at, revoked)
+		 VALUES ('npm', 'chalk', '', 'package', 'deny', ?, 'banned in acme', 'test', ?, 0)`,
+		projectID, time.Now().UTC())
+	require.NoError(t, err)
+
+	ctx := project.WithContext(context.Background(), &project.Project{ID: projectID, Label: "acme"})
+	result := engine.EvaluateLicensesOnly(ctx, "npm:chalk:5.4.1")
+	assert.Equal(t, policy.ActionBlock, result.Action)
+	assert.Contains(t, result.Reason, "deny")
+}
+
+func TestEvaluateLicensesOnly_NoProjectContext_DoesNotApplyProjectOverride(t *testing.T) {
+	// Background re-evaluator has no project on context — per-project deny
+	// overrides must NOT block here, only global allow / license policy run.
+	engine, db, store := newLicenseEngine(t, []string{"GPL-3.0-only"}, nil, "")
+	seedNamedArtifact(t, db, store, "npm:chalk:5.4.1", "npm", "chalk", "5.4.1", []string{"MIT"})
+
+	projectID := seedProject(t, db, "acme")
+	_, err := db.Exec(
+		`INSERT INTO policy_overrides (ecosystem, name, version, scope, kind, project_id, reason, created_by, created_at, revoked)
+		 VALUES ('npm', 'chalk', '', 'package', 'deny', ?, 'banned in acme', 'test', ?, 0)`,
+		projectID, time.Now().UTC())
+	require.NoError(t, err)
+
+	// No project on context.
+	result := engine.EvaluateLicensesOnly(context.Background(), "npm:chalk:5.4.1")
+	assert.Equal(t, policy.ActionAllow, result.Action,
+		"per-project deny must not apply when no project is on context (re-evaluator path)")
 }
