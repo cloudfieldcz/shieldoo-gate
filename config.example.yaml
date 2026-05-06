@@ -166,8 +166,8 @@ scanners:
     daily_cost_limit_usd: 5.0           # ADVISORY in v2.0 — current implementation records spend in
                                         # version_diff_results.ai_tokens_used but does not auto-disable
                                         # the scanner on overrun. Use Prometheus alerting on the daily
-                                        # token-sum query (docs/scanners/version-diff.md). Hard cap
-                                        # tracked in docs/plans/follow-ups.md (v2.1).
+                                        # token-sum query (docs/scanners/version-diff.md). Auto-disable
+                                        # hard cap is deferred to v2.1.
     circuit_breaker_threshold: 5        # consecutive bridge errors trigger 60s degraded mode
   # Maintainer reputation & package risk scoring. Queries upstream registry APIs
   # for metadata (maintainer history, publication patterns, download counts) and

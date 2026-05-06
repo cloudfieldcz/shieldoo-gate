@@ -43,6 +43,7 @@ source "${SCRIPT_DIR}/test_rubygems.sh"
 source "${SCRIPT_DIR}/test_gomod.sh"
 source "${SCRIPT_DIR}/test_api.sh"
 source "${SCRIPT_DIR}/test_ai_scanner.sh"
+source "${SCRIPT_DIR}/test_version_diff.sh"
 
 check_prereqs() {
     local missing=()
@@ -117,6 +118,7 @@ main() {
     test_gomod
     test_api
     test_ai_scanner
+    test_version_diff
 
     # 6. Summary
     print_summary

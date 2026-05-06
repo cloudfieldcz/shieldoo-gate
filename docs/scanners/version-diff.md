@@ -69,7 +69,7 @@ scanners:
 > **`daily_cost_limit_usd` is advisory in v2.0.** The scanner records token usage in
 > `version_diff_results.ai_tokens_used` but does **not** auto-disable on overrun.
 > Use Prometheus alerting on the daily token-sum query (see "Cost monitoring" below).
-> A hard cap is tracked in [docs/plans/follow-ups.md](../plans/follow-ups.md) for v2.1.
+> A hard cap (auto-disable on daily overrun) is deferred to v2.1.
 
 ## Verdict mapping
 
@@ -156,8 +156,42 @@ SELECT DATE(diff_at) AS day,
 `daily_cost_limit_usd` in the config is **advisory** — the field gates
 nothing in v2.0. Operators are expected to wire a Prometheus alert that
 runs the query above and pages on overrun. A hard cap (auto-disable on
-overrun) is tracked in [docs/plans/follow-ups.md](../plans/follow-ups.md)
-for v2.1.
+overrun) is deferred to v2.1.
+
+## Real-world performance — production shadow window
+
+Empirical baseline from the shadow rollout on `shieldoo-gate.cloudfield.cz`
+(2026-05-01 → 2026-05-06, ≈ 5 d 19 h, 386 v2.0 scans, AI bridge
+`gpt-5.4-mini`):
+
+| Metric | Observed |
+|--------|----------|
+| AI verdict distribution | 363 CLEAN (94.0 %), 23 SUSPICIOUS (6.0 %), 0 MALICIOUS |
+| Mean confidence (CLEAN) | 0.901 |
+| Mean confidence (SUSPICIOUS) | 0.722 |
+| Daily cost mean (6 days) | **$0.24** (peak day $0.70 during a CI burst) |
+| Fail-open events | **0 / 386** |
+| Bridge timeouts (`context deadline exceeded`) | **0 / 386** |
+| Bridge OOMKills | 0 (with `mem_limit: 2g`) |
+| FN coverage on synthetic-malicious set | 10 / 10 → MALICIOUS (Phase 7.5 known-malicious replay) |
+
+The 23 SUSPICIOUS verdicts clustered into three benign-but-noteworthy
+patterns rather than malware:
+
+- **17 version downgrades** (older release than the cached newer version) —
+  e.g. `xunit.* 2.9.3 → 2.9.0`, `clone 2.1.2 → 1.0.4`, `debug 4.4.3 → 3.2.7`.
+  The AI correctly flags the rollback pattern; whether to block is a policy
+  decision.
+- **4 cross-architecture wheel rebuilds** (same version, different platform
+  tag) — `pyyaml 6.0.3`, `pydantic-core 2.46.3` ×2, `cryptography 47.0.0`.
+- **2 legitimate-but-signal-rich updates** — `coverage 7.12.0 → 7.13.1`
+  (legit `.pth` install hook), `dotenv 16.0.3 → 16.4.7` (new vault
+  crypto path).
+
+Operator load: ~4 reviews/day during a busy week, 0–1/day during quiet
+weeks. With `policy.minimum_confidence: 0.7`, only ~half of SUSPICIOUS
+verdicts reach the BLOCK candidate path; the remainder are filtered by
+the policy stack before reaching operators.
 
 ## Retention
 

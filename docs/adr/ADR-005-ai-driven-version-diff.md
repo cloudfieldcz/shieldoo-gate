@@ -3,7 +3,7 @@
 **Date:** 2026-04-30
 **Status:** Accepted
 **Supersedes:** None
-**Related:** [Plan: 2026-04-30-version-diff-ai-rebuild](../plans/2026-04-30-version-diff-ai-rebuild.md)
+**Reference:** [`docs/scanners/version-diff.md`](../scanners/version-diff.md) — live spec, config knobs, verdict mapping, real-world performance numbers from the production shadow window.
 
 ## Context
 

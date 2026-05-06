@@ -157,4 +157,48 @@ test_version_diff() {
     npm_vdiff_count=$(api_jq "/api/v1/artifacts?per_page=200" \
         '[.data[] | select(.ecosystem == "npm")] | length' 2>/dev/null || echo "0")
     assert_gte "VersionDiff: at least 1 npm artifact registered from earlier tests" 1 "$npm_vdiff_count"
+
+    # ------------------------------------------------------------------
+    # 7. Idempotency: re-fetching the same (new, prev) pair must not
+    #    re-invoke the LLM. The unique index on
+    #    (artifact_id, previous_artifact, ai_model_used, ai_prompt_version)
+    #    makes a second insert a no-op, and the cache-hit path skips the
+    #    bridge entirely.
+    # ------------------------------------------------------------------
+    if [ "${AI_SCANNER_ENABLED:-false}" = "true" ] && [ -n "$second_artifact_id" ] && [ "$second_artifact_id" != "null" ]; then
+        # Snapshot pre-state from gate log lines (each LLM call → one
+        # "ai scan completed" line). Refresh logs each time.
+        local before_count
+        before_count=$(docker_logs shieldoo-gate 2>/dev/null \
+            | grep -c "version-diff: ai scan completed" || true)
+
+        # Re-fetch six==1.17.0 — already cached, no new artifact, no LLM.
+        workdir=$(mktemp -d)
+        echo "six==1.17.0" > "$workdir/requirements.txt"
+        pushd "$workdir" > /dev/null
+        uv venv .venv --quiet 2>/dev/null
+        uv pip install \
+                --python .venv/bin/python \
+                --no-cache \
+                --index-url "$(auth_url "${E2E_PYPI_URL}")/simple/" \
+                -r requirements.txt \
+                > install.log 2>&1 || true
+        popd > /dev/null
+        rm -rf "$workdir"
+
+        # Settle window for any background scan dispatch.
+        sleep 5
+
+        local after_count
+        after_count=$(docker_logs shieldoo-gate 2>/dev/null \
+            | grep -c "version-diff: ai scan completed" || true)
+
+        if [[ "$(docker_logs shieldoo-gate 2>/dev/null)" == *"docker_logs not available"* ]]; then
+            log_skip "VersionDiff: idempotency check unavailable (no gate logs in this mode)"
+        elif [ "$after_count" -le "$before_count" ]; then
+            log_pass "VersionDiff: idempotency cache hit — LLM not re-invoked (count=${after_count})"
+        else
+            log_fail "VersionDiff: idempotency violated — LLM re-called on cached pair (before=${before_count} after=${after_count})"
+        fi
+    fi
 }
