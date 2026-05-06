@@ -261,6 +261,21 @@ The `X-Shieldoo-Scanned: true` response header is set on all scanned manifest re
 
 Artifact IDs use safe names: `docker:{safe_name}:{ref}` where `safe_name` replaces dots and slashes with underscores. For example, `ghcr.io/org/image:latest` becomes `docker:ghcr_io_org_image:latest`.
 
+### Image Size Surfacing
+
+`artifacts.size_bytes` for Docker rows is the size of the **manifest JSON document** (typically 800 B – 10 KB), not the size of the image. To surface real "image size" in the admin UI without polluting the generic artifacts table with ecosystem-specific columns, the Docker adapter writes a sidecar row to [`docker_manifest_meta`](data-model.md#docker_manifest_meta) on every successful persist.
+
+The parser ([`internal/adapter/docker/manifest_meta.go:ParseManifestMeta`](../internal/adapter/docker/manifest_meta.go)) extracts:
+
+- **`total_size_bytes`**: `config.size + sum(layers[].size)`. NULL for index manifests, attestation manifests are stored as-is (the UI is responsible for not labelling them "Image size"), parse failures or `int64` overflow saturate to NULL rather than wrap.
+- **`is_index`** for manifest list / OCI image index manifests (no `layers[]`). The UI shows a "multi-arch" badge instead of a numeric size — per-arch sizes live in the referenced manifests, which clients pull as separate digests.
+- **`is_attestation`** for BuildKit attestation manifests, detected via `config.mediaType == application/vnd.in-toto+json` or the `vnd.docker.reference.type=attestation-manifest` annotation.
+- **`media_type`**, **`layer_count`**, optional **`architecture`** + **`os`** when present.
+
+Existing rows are filled by the `028_docker_manifest_meta_backfill` data migration, which runs once at startup after the cache backend is initialized (different from `runDataMigrations`, which runs db-only inside `InitDB`). The migration is idempotent and tracked in `data_migrations`. On large deployments (>50k pending rows) it short-circuits to "lazy-on-read" so a slow cache backend can't stall startup.
+
+The API exposes the parsed fields as `image_size_bytes`, `is_index`, `is_attestation`, `media_type`, and `layer_count` on the artifact JSON. They are `omitempty`-encoded, so non-Docker rows don't carry empty docker keys.
+
 ### Scheduled Sync (Background Re-scan)
 
 When `sync.enabled: true` is set in the Docker upstream config, a `SyncService` runs as a background goroutine that periodically re-pulls manifests from upstream registries and re-scans cached images. This catches newly discovered vulnerabilities in previously clean images.

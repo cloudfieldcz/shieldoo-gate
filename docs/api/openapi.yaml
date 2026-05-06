@@ -1282,6 +1282,38 @@ components:
           format: date-time
         storage_path:
           type: string
+        image_size_bytes:
+          type: integer
+          format: int64
+          nullable: true
+          description: |
+            Docker only: parsed from the manifest as `config.size + sum(layers[].size)`.
+            NULL for index manifests (multi-arch lists), for manifests we couldn't parse,
+            and for any input where the sum would overflow `int64`. Other ecosystems omit
+            this field. Distinct from `size_bytes`, which for Docker is the manifest JSON
+            byte count.
+        is_index:
+          type: boolean
+          nullable: true
+          description: |
+            Docker only: TRUE for manifest list / OCI image index manifests (no `layers[]`).
+            Per-arch sizes live in the referenced manifests, which clients pull as separate
+            digests.
+        is_attestation:
+          type: boolean
+          nullable: true
+          description: |
+            Docker only: TRUE for BuildKit attestation manifests (in-toto config or
+            `vnd.docker.reference.type=attestation-manifest` annotation). UI renders these
+            with a distinct badge so they aren't confused with real images.
+        media_type:
+          type: string
+          description: |
+            Docker only: manifest media type (e.g. `application/vnd.oci.image.manifest.v1+json`).
+        layer_count:
+          type: integer
+          nullable: true
+          description: Docker only; `len(layers)`. NULL for index manifests.
 
     ArtifactStatusObject:
       type: object

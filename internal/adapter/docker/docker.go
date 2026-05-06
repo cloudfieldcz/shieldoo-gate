@@ -469,7 +469,7 @@ func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request
 	switch policyResult.Action {
 	case policy.ActionBlock:
 		now := time.Now().UTC()
-		_ = a.persistArtifact(artifactID, scanArtifact, hex.EncodeToString(h[:]), int64(len(body)), model.StatusQuarantined, policyResult.Reason, &now, scanResults)
+		_ = a.persistArtifact(artifactID, scanArtifact, hex.EncodeToString(h[:]), body, model.StatusQuarantined, policyResult.Reason, &now, scanResults)
 		adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
 			Error:    "blocked",
 			Artifact: artifactID,
@@ -485,7 +485,7 @@ func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request
 		return
 	case policy.ActionQuarantine:
 		now := time.Now().UTC()
-		_ = a.persistArtifact(artifactID, scanArtifact, hex.EncodeToString(h[:]), int64(len(body)), model.StatusQuarantined, policyResult.Reason, &now, scanResults)
+		_ = a.persistArtifact(artifactID, scanArtifact, hex.EncodeToString(h[:]), body, model.StatusQuarantined, policyResult.Reason, &now, scanResults)
 		adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
 			Error:    "quarantined",
 			Artifact: artifactID,
@@ -501,7 +501,7 @@ func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request
 		return
 
 	case policy.ActionAllowWithWarning:
-		_ = a.persistArtifact(artifactID, scanArtifact, hex.EncodeToString(h[:]), int64(len(body)), model.StatusClean, "", nil, scanResults)
+		_ = a.persistArtifact(artifactID, scanArtifact, hex.EncodeToString(h[:]), body, model.StatusClean, "", nil, scanResults)
 		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventAllowedWithWarning,
 			ArtifactID: artifactID,
@@ -519,7 +519,7 @@ func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request
 	}
 
 	// Allow — persist artifact as clean and create/update tag.
-	_ = a.persistArtifact(artifactID, scanArtifact, hex.EncodeToString(h[:]), int64(len(body)), model.StatusClean, "", nil, scanResults)
+	_ = a.persistArtifact(artifactID, scanArtifact, hex.EncodeToString(h[:]), body, model.StatusClean, "", nil, scanResults)
 	_ = UpsertTag(a.db, repo.ID, ref, manifestDigest, artifactID)
 
 	w.Header().Set("Docker-Content-Digest", manifestDigest)
@@ -848,7 +848,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 	switch policyResult.Action {
 	case policy.ActionBlock:
 		now := time.Now().UTC()
-		_ = a.persistArtifact(artifactID, scanArtifact, manifestSHA, int64(len(manifestBytes)), model.StatusQuarantined, policyResult.Reason, &now, scanResults)
+		_ = a.persistArtifact(artifactID, scanArtifact, manifestSHA, manifestBytes, model.StatusQuarantined, policyResult.Reason, &now, scanResults)
 		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventBlocked,
 			ArtifactID: artifactID,
@@ -865,7 +865,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 
 	case policy.ActionQuarantine:
 		now := time.Now().UTC()
-		_ = a.persistArtifact(artifactID, scanArtifact, manifestSHA, int64(len(manifestBytes)), model.StatusQuarantined, policyResult.Reason, &now, scanResults)
+		_ = a.persistArtifact(artifactID, scanArtifact, manifestSHA, manifestBytes, model.StatusQuarantined, policyResult.Reason, &now, scanResults)
 		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventQuarantined,
 			ArtifactID: artifactID,
@@ -881,7 +881,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 		return
 
 	case policy.ActionAllowWithWarning:
-		_ = a.persistArtifact(artifactID, scanArtifact, manifestSHA, int64(len(manifestBytes)), model.StatusClean, "", nil, scanResults)
+		_ = a.persistArtifact(artifactID, scanArtifact, manifestSHA, manifestBytes, model.StatusClean, "", nil, scanResults)
 		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
 			EventType:  model.EventAllowedWithWarning,
 			ArtifactID: artifactID,
@@ -942,7 +942,7 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 			UpstreamURL: scanArtifact.UpstreamURL,
 		}
 		_ = a.cache.Put(pctx, cacheArtifact, manifestTmp)
-		_ = a.persistArtifact(artifactID, scanArtifact, manifestSHA, int64(len(manifestBytes)), model.StatusClean, "", nil, scanResults)
+		_ = a.persistArtifact(artifactID, scanArtifact, manifestSHA, manifestBytes, model.StatusClean, "", nil, scanResults)
 	}
 
 	_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
@@ -1105,11 +1105,19 @@ func writeManifestToTemp(manifestBytes []byte) (string, error) {
 }
 
 // persistArtifact writes the artifact, status, and scan results to the DB.
+//
+// manifestBody is the raw manifest JSON (the same bytes we already had in scope
+// at every call site, regardless of push/pull). It is used for two things:
+//   - artifacts.size_bytes = len(manifestBody) — preserves the existing semantics
+//     (manifest JSON byte count, consistent with how every other ecosystem populates it)
+//   - parse + upsert into docker_manifest_meta so the UI can show real image size
+//
+// Parse failures are logged and swallowed — they never fail the artifact write.
 func (a *DockerAdapter) persistArtifact(
 	artifactID string,
 	sa scanner.Artifact,
 	manifestSHA string,
-	manifestSize int64,
+	manifestBody []byte,
 	status model.Status,
 	quarantineReason string,
 	quarantinedAt *time.Time,
@@ -1122,7 +1130,7 @@ func (a *DockerAdapter) persistArtifact(
 		Version:        sa.Version,
 		UpstreamURL:    sa.UpstreamURL,
 		SHA256:         manifestSHA,
-		SizeBytes:      manifestSize,
+		SizeBytes:      int64(len(manifestBody)),
 		CachedAt:       now,
 		LastAccessedAt: now,
 		StoragePath:    sa.LocalPath,
@@ -1136,7 +1144,20 @@ func (a *DockerAdapter) persistArtifact(
 	if err := adapter.InsertArtifact(a.db, artifactID, art, artStatus); err != nil {
 		return err
 	}
-	return adapter.InsertScanResults(a.db, artifactID, scanResults)
+	if err := adapter.InsertScanResults(a.db, artifactID, scanResults); err != nil {
+		return err
+	}
+
+	// Best-effort: parse and upsert manifest metadata. Failures are logged but
+	// never propagated — the artifact and status writes above are the load-bearing
+	// path. The UI gracefully renders rows with no docker_manifest_meta sidecar.
+	if meta, err := ParseManifestMeta(manifestBody); err != nil {
+		log.Info().Err(err).Str("artifact", artifactID).Msg("docker: manifest metadata parse failed, sidecar row skipped")
+	} else if upErr := UpsertManifestMeta(context.Background(), a.db, artifactID, meta); upErr != nil {
+		log.Warn().Err(upErr).Str("artifact", artifactID).Msg("docker: manifest metadata upsert failed")
+	}
+
+	return nil
 }
 
 // proxyUpstream forwards the request to the upstream registry and relays the response.

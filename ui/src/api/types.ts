@@ -10,6 +10,17 @@ interface Artifact {
   last_accessed_at: string
   storage_path: string
   has_override?: boolean
+  /** Docker only: config.size + sum(layers[].size). NULL for index manifests,
+   * for manifests we couldn't parse, and for any input where the sum would overflow. */
+  image_size_bytes?: number
+  /** Docker only: TRUE for manifest list / OCI image index (no layers[]). */
+  is_index?: boolean
+  /** Docker only: TRUE for BuildKit attestation manifests (in-toto config). */
+  is_attestation?: boolean
+  /** Docker only: manifest media type (e.g. application/vnd.oci.image.manifest.v1+json). */
+  media_type?: string
+  /** Docker only: len(layers). NULL for index manifests. */
+  layer_count?: number
 }
 
 interface ArtifactStatus {

@@ -259,7 +259,7 @@ func (s *SyncService) syncTag(ctx context.Context, repo DockerRepository, tag Do
 	switch policyResult.Action {
 	case policy.ActionQuarantine:
 		now := time.Now().UTC()
-		_ = s.persistArtifact(artifactID, scanArtifact, manifestSHA, int64(len(manifestBytes)),
+		_ = s.persistArtifact(artifactID, scanArtifact, manifestSHA, manifestBytes,
 			model.StatusQuarantined, policyResult.Reason, &now, scanResults)
 		_ = adapter.WriteAuditLog(s.db, model.AuditEntry{
 			EventType:  model.EventQuarantined,
@@ -267,7 +267,7 @@ func (s *SyncService) syncTag(ctx context.Context, repo DockerRepository, tag Do
 			Reason:     policyResult.Reason,
 		})
 	case policy.ActionAllowWithWarning:
-		_ = s.persistArtifact(artifactID, scanArtifact, manifestSHA, int64(len(manifestBytes)),
+		_ = s.persistArtifact(artifactID, scanArtifact, manifestSHA, manifestBytes,
 			model.StatusClean, "", nil, scanResults)
 		_ = adapter.WriteAuditLog(s.db, model.AuditEntry{
 			EventType:  model.EventAllowedWithWarning,
@@ -276,7 +276,7 @@ func (s *SyncService) syncTag(ctx context.Context, repo DockerRepository, tag Do
 		})
 	default:
 		// ActionAllow or ActionBlock (block from sync just logs, doesn't quarantine)
-		_ = s.persistArtifact(artifactID, scanArtifact, manifestSHA, int64(len(manifestBytes)),
+		_ = s.persistArtifact(artifactID, scanArtifact, manifestSHA, manifestBytes,
 			model.StatusClean, "", nil, scanResults)
 	}
 
@@ -400,11 +400,15 @@ func (s *SyncService) handleSyncError(repo DockerRepository, tag DockerTag, stat
 }
 
 // persistArtifact writes the artifact, status, and scan results to the DB.
+//
+// manifestBody is the raw manifest JSON. Used for artifacts.size_bytes (manifest
+// byte count) and parsed into docker_manifest_meta so the UI can show real image
+// size. Parse failures are logged and swallowed; they never fail the artifact write.
 func (s *SyncService) persistArtifact(
 	artifactID string,
 	sa scanner.Artifact,
 	manifestSHA string,
-	manifestSize int64,
+	manifestBody []byte,
 	status model.Status,
 	quarantineReason string,
 	quarantinedAt *time.Time,
@@ -417,7 +421,7 @@ func (s *SyncService) persistArtifact(
 		Version:        sa.Version,
 		UpstreamURL:    sa.UpstreamURL,
 		SHA256:         manifestSHA,
-		SizeBytes:      manifestSize,
+		SizeBytes:      int64(len(manifestBody)),
 		CachedAt:       now,
 		LastAccessedAt: now,
 		StoragePath:    sa.LocalPath,
@@ -431,7 +435,17 @@ func (s *SyncService) persistArtifact(
 	if err := adapter.InsertArtifact(s.db, artifactID, art, artStatus); err != nil {
 		return err
 	}
-	return adapter.InsertScanResults(s.db, artifactID, scanResults)
+	if err := adapter.InsertScanResults(s.db, artifactID, scanResults); err != nil {
+		return err
+	}
+
+	if meta, err := ParseManifestMeta(manifestBody); err != nil {
+		log.Info().Err(err).Str("artifact", artifactID).Msg("docker sync: manifest metadata parse failed, sidecar row skipped")
+	} else if upErr := UpsertManifestMeta(context.Background(), s.db, artifactID, meta); upErr != nil {
+		log.Warn().Err(upErr).Str("artifact", artifactID).Msg("docker sync: manifest metadata upsert failed")
+	}
+
+	return nil
 }
 
 // ListSyncableRepos returns repos that are sync-enabled and not internal.

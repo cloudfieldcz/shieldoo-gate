@@ -133,6 +133,39 @@ func TestLocalCacheStore_PathTraversal_Rejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid")
 }
 
+// Get applies the same validateName guard as Put. Defense in depth — keeps
+// future callers that feed stored artifact IDs back into the cache (e.g. the
+// docker_manifest_meta backfill) from being smuggled into arbitrary file reads
+// if a future writer ever forgets to validate.
+func TestLocalCacheStore_Get_RejectsPathTraversal_DotDotInName(t *testing.T) {
+	store, _ := newTestStore(t)
+	_, err := store.Get(context.Background(), "pypi:../evil:1.0.0")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid")
+}
+
+func TestLocalCacheStore_Get_RejectsPathTraversal_AbsolutePath(t *testing.T) {
+	store, _ := newTestStore(t)
+	// "/etc" contains a forward slash — validateName rejects all `/` and `\`.
+	_, err := store.Get(context.Background(), "pypi:/etc/passwd:1.0.0")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid")
+}
+
+func TestLocalCacheStore_Get_RejectsPathTraversal_BackslashInVersion(t *testing.T) {
+	store, _ := newTestStore(t)
+	_, err := store.Get(context.Background(), "pypi:evil:1.0.0\\..\\..")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid")
+}
+
+func TestLocalCacheStore_Get_RejectsPathTraversal_NullByte(t *testing.T) {
+	store, _ := newTestStore(t)
+	_, err := store.Get(context.Background(), "pypi:evil:1.0.0\x00")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid")
+}
+
 func TestLocalCacheStore_Stats(t *testing.T) {
 	store, _ := newTestStore(t)
 	ctx := context.Background()

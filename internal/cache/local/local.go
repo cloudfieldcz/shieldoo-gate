@@ -104,10 +104,24 @@ func copyFile(src, dst string) error {
 
 // Get returns the local filesystem path of a cached artifact.
 // It returns cache.ErrNotFound if no file exists for the given artifactID.
+//
+// SECURITY: validates every name component against validateName before joining
+// into a filesystem path. Put already does this; doing it here too prevents a
+// caller that read an artifact ID from the database (e.g. backfill loops) from
+// smuggling traversal sequences if a future writer ever forgets to validate.
 func (s *LocalCacheStore) Get(_ context.Context, artifactID string) (string, error) {
 	eco, name, version, filename, err := parseArtifactID(artifactID)
 	if err != nil {
 		return "", err
+	}
+	components := []string{eco, name, version}
+	if filename != "" {
+		components = append(components, filename)
+	}
+	for _, component := range components {
+		if err := validateName(component); err != nil {
+			return "", err
+		}
 	}
 
 	dir := s.artifactDir(eco, name, version, filename)

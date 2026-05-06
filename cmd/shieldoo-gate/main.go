@@ -140,6 +140,13 @@ func main() {
 		log.Fatal().Str("backend", cfg.Cache.Backend).Msg("unknown cache backend")
 	}
 
+	// One-time backfill for docker_manifest_meta. Runs after cache init because
+	// it reads cached manifest bodies. Idempotent + tracked in data_migrations,
+	// so this is a no-op on every boot after the first successful run.
+	if err := docker.RunManifestMetaBackfill(context.Background(), db, cacheStore); err != nil {
+		log.Error().Err(err).Msg("docker_manifest_meta backfill failed; continuing — UI will show fallback sizes")
+	}
+
 	// Init scanners: 6 built-in scanners + optional typosquat
 	scanners := []scanner.Scanner{
 		builtin.NewHashVerifier(),

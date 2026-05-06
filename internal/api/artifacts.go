@@ -20,13 +20,22 @@ import (
 )
 
 // artifactDBRow is used for scanning DB rows that join artifacts + artifact_status.
+//
+// dmm_* fields come from a LEFT JOIN on docker_manifest_meta and are populated
+// only for ecosystem='docker' rows that have a sidecar; everything else maps
+// to nil pointers / empty strings and is omitted from the JSON response.
 type artifactDBRow struct {
 	DBID             string     `db:"id"`
 	model.Artifact
-	Status           string     `db:"status"`
-	QuarantineReason string     `db:"quarantine_reason"`
-	QuarantinedAt    *time.Time `db:"quarantined_at"`
-	ReleasedAt       *time.Time `db:"released_at"`
+	Status            string     `db:"status"`
+	QuarantineReason  string     `db:"quarantine_reason"`
+	QuarantinedAt     *time.Time `db:"quarantined_at"`
+	ReleasedAt        *time.Time `db:"released_at"`
+	DMMTotalSizeBytes *int64     `db:"dmm_total_size_bytes"`
+	DMMIsIndex        *bool      `db:"dmm_is_index"`
+	DMMIsAttestation  *bool      `db:"dmm_is_attestation"`
+	DMMMediaType      *string    `db:"dmm_media_type"`
+	DMMLayerCount     *int       `db:"dmm_layer_count"`
 }
 
 // artifactStatusResponse is the nested status object the UI expects.
@@ -48,6 +57,10 @@ type overrideInfoResponse struct {
 }
 
 // artifactResponse is the JSON shape returned by list/get endpoints.
+//
+// image_size_bytes / is_index / is_attestation / media_type / layer_count are
+// populated only for ecosystem='docker' rows that have a docker_manifest_meta
+// sidecar. They are omitempty so non-docker rows don't carry empty docker keys.
 type artifactResponse struct {
 	ID             string                 `json:"id"`
 	Ecosystem      string                 `json:"ecosystem"`
@@ -62,6 +75,11 @@ type artifactResponse struct {
 	Status         artifactStatusResponse `json:"status"`
 	HasOverride    bool                   `json:"has_override"`
 	Licenses       []string               `json:"licenses,omitempty"`
+	ImageSizeBytes *int64                 `json:"image_size_bytes,omitempty"`
+	IsIndex        *bool                  `json:"is_index,omitempty"`
+	IsAttestation  *bool                  `json:"is_attestation,omitempty"`
+	MediaType      string                 `json:"media_type,omitempty"`
+	LayerCount     *int                   `json:"layer_count,omitempty"`
 }
 
 // artifactID extracts and URL-decodes the {id} route parameter.
@@ -77,7 +95,7 @@ func artifactID(r *http.Request) string {
 }
 
 func toArtifactResponse(row artifactDBRow) artifactResponse {
-	return artifactResponse{
+	resp := artifactResponse{
 		ID:             row.DBID,
 		Ecosystem:      row.Ecosystem,
 		Name:           row.Name,
@@ -94,7 +112,15 @@ func toArtifactResponse(row artifactDBRow) artifactResponse {
 			QuarantinedAt:    row.QuarantinedAt,
 			ReleasedAt:       row.ReleasedAt,
 		},
+		ImageSizeBytes: row.DMMTotalSizeBytes,
+		IsIndex:        row.DMMIsIndex,
+		IsAttestation:  row.DMMIsAttestation,
+		LayerCount:     row.DMMLayerCount,
 	}
+	if row.DMMMediaType != nil {
+		resp.MediaType = *row.DMMMediaType
+	}
+	return resp
 }
 
 type paginatedResponse struct {
@@ -188,13 +214,24 @@ func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Query matching rows.
+	//
+	// LEFT JOIN docker_manifest_meta is a 1:1 PK→PK relationship (Postgres
+	// produces a hash join with the same row count as the base query). Do NOT
+	// follow the load-all-then-filter pattern used by sbom_metadata below for
+	// licenses — that's an N+1 antipattern and is being tracked separately.
 	selectQuery := `SELECT a.id, a.ecosystem, a.name, a.version, a.upstream_url, a.sha256,
 		        a.size_bytes, a.cached_at, a.last_accessed_at, a.storage_path,
 		        COALESCE(s.status, 'PENDING_SCAN') AS status,
 		        COALESCE(s.quarantine_reason, '') AS quarantine_reason,
-		        s.quarantined_at, s.released_at
+		        s.quarantined_at, s.released_at,
+		        dmm.total_size_bytes AS dmm_total_size_bytes,
+		        dmm.is_index         AS dmm_is_index,
+		        dmm.is_attestation   AS dmm_is_attestation,
+		        dmm.media_type       AS dmm_media_type,
+		        dmm.layer_count      AS dmm_layer_count
 		 FROM artifacts a
 		 LEFT JOIN artifact_status s ON a.id = s.artifact_id
+		 LEFT JOIN docker_manifest_meta dmm ON a.id = dmm.artifact_id
 		 ` + where + `
 		 ORDER BY a.name ASC, a.version ASC
 		 LIMIT ? OFFSET ?`
@@ -291,9 +328,15 @@ func (s *Server) handleGetArtifact(w http.ResponseWriter, r *http.Request) {
 		        a.size_bytes, a.cached_at, a.last_accessed_at, a.storage_path,
 		        COALESCE(s.status, 'PENDING_SCAN') AS status,
 		        COALESCE(s.quarantine_reason, '') AS quarantine_reason,
-		        s.quarantined_at, s.released_at
+		        s.quarantined_at, s.released_at,
+		        dmm.total_size_bytes AS dmm_total_size_bytes,
+		        dmm.is_index         AS dmm_is_index,
+		        dmm.is_attestation   AS dmm_is_attestation,
+		        dmm.media_type       AS dmm_media_type,
+		        dmm.layer_count      AS dmm_layer_count
 		 FROM artifacts a
 		 LEFT JOIN artifact_status s ON a.id = s.artifact_id
+		 LEFT JOIN docker_manifest_meta dmm ON a.id = dmm.artifact_id
 		 WHERE a.id = ?`, id).StructScan(&row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

@@ -35,10 +35,13 @@ Shieldoo Gate uses **SQLite** (default, WAL mode, foreign keys enabled) or **Pos
 - `024_version_diff_ai_columns.sql` — Extends `version_diff_results` with AI scanner columns, relaxes NOT NULL on legacy heuristic columns, deduplicates existing rows, adds the idempotency `UNIQUE INDEX uq_version_diff_pair`
 - `025_version_diff_scanner_version.sql` — Adds `scanner_version` to `version_diff_results` plus `(scanner_version)` and `(verdict, diff_at)` indexes
 - `026_project_policy_overrides.sql` — Adds `project_id` and `kind` (allow|deny) columns to `policy_overrides`; replaces the active-override unique index to include `COALESCE(project_id, 0)` and `kind`; adds `idx_policy_overrides_project_lookup`
+- `027_docker_manifest_meta.sql` — Sidecar table storing parsed Docker/OCI manifest metadata (image size, layer count, is_index, is_attestation, media_type)
 
 **PostgreSQL** (`internal/config/migrations/postgres/`) — same migrations with PostgreSQL syntax.
 
-In addition to SQL migrations, a separate **`data_migrations`** table tracks Go-level data backfills (see [`data_migrations`](#data_migrations) below). These run after schema migrations and use independent numbering — currently only `024_pypi_canonical_names`.
+In addition to SQL migrations, a separate **`data_migrations`** table tracks Go-level data backfills (see [`data_migrations`](#data_migrations) below). These run after schema migrations and use independent numbering. Current entries:
+- `024_pypi_canonical_names` — rewrites every PyPI artifact to use PEP 503 canonical names. Runs inside `runDataMigrations` (db-only).
+- `028_docker_manifest_meta_backfill` — parses cached manifest bodies and populates `docker_manifest_meta` for every existing docker artifact. Runs once after cache initialization in `cmd/shieldoo-gate/main.go` (needs both DB and cache wired up). Idempotent + tracked in `data_migrations`. Pivots to lazy-on-read when the pending count exceeds 50k to avoid stalling startup.
 
 SQLite PRAGMAs applied at startup:
 ```sql
@@ -180,7 +183,7 @@ Stores metadata about every artifact that has been downloaded and cached.
 | `version` | TEXT NOT NULL | Package version |
 | `upstream_url` | TEXT NOT NULL | URL from which the artifact was downloaded |
 | `sha256` | TEXT NOT NULL | SHA-256 hash of the artifact file |
-| `size_bytes` | BIGINT NOT NULL | Artifact file size in bytes |
+| `size_bytes` | BIGINT NOT NULL | Artifact file size in bytes. **Docker note:** for `ecosystem='docker'` rows this is the size of the **manifest JSON document** (typically 800 B – 10 KB), not the size of the image. The real "image size" lives in `docker_manifest_meta.total_size_bytes` and is surfaced in the API as `image_size_bytes`. |
 | `cached_at` | DATETIME NOT NULL | When the artifact was first cached |
 | `last_accessed_at` | DATETIME NOT NULL | Last time a client requested this artifact |
 | `storage_path` | TEXT NOT NULL | Relative path within the cache directory |
@@ -587,6 +590,27 @@ Per-artifact SBOM blob pointer plus extracted licenses. The actual SBOM document
 **Indexes:** `idx_sbom_generated_at ON (generated_at)` — for retention/cleanup queries
 
 The licenses surfaced in the admin UI's Artifacts list (`ArtifactWithStatus.licenses`) come from this table — the API joins `artifacts ⨝ artifact_status ⨝ sbom_metadata` and decodes `licenses_json`.
+
+### `docker_manifest_meta`
+
+Sidecar table that holds parsed Docker/OCI manifest metadata 1:1 with `artifacts.id` for `ecosystem='docker'` rows. Surfaces real "image size" (`config.size + sum(layers[].size)`) in the admin UI without polluting the generic `artifacts` table with ecosystem-specific columns. Populated on every Docker manifest persist (`internal/adapter/docker/manifest_meta.go:ParseManifestMeta`); existing rows are filled by the `028_docker_manifest_meta_backfill` data migration that runs at startup once the cache backend is wired up.
+
+| Column | Type | Description |
+|---|---|---|
+| `artifact_id` | TEXT PK FK | References `artifacts.id` (ON DELETE CASCADE). 1:1 with the docker artifact row. |
+| `media_type` | TEXT NOT NULL | Manifest media type (e.g. `application/vnd.oci.image.manifest.v1+json`). |
+| `is_index` | BOOLEAN NOT NULL DEFAULT FALSE | TRUE for manifest list / OCI image index manifests (no `layers[]`). |
+| `is_attestation` | BOOLEAN NOT NULL DEFAULT FALSE | TRUE for BuildKit attestation manifests (in-toto config or `vnd.docker.reference.type=attestation-manifest` annotation). UI renders these distinctly so operators don't read their tiny total as a real image. |
+| `total_size_bytes` | BIGINT NULL | `config.size + sum(layers[].size)`. NULL for index rows, for manifests we couldn't parse, and for any input where summing would overflow / a layer reports a negative size. |
+| `layer_count` | INTEGER NULL | `len(layers)`. NULL for index rows. |
+| `architecture` | TEXT NULL | Optional, populated when the manifest body itself carries `platform.architecture` (rare on per-arch manifests, common inside an index). |
+| `os` | TEXT NULL | As above for `platform.os`. |
+| `schema_version` | INTEGER NOT NULL DEFAULT 1 | Parser-version pin. Bumping `ManifestMetaSchemaVersion` does NOT trigger a re-parse of existing rows — to re-process, add a new numbered data migration that upserts rows where `schema_version < ManifestMetaSchemaVersion`. |
+| `parsed_at` | TIMESTAMPTZ NOT NULL | When this row was computed. |
+
+**No secondary indexes.** The PK on `artifact_id` is enough — the table is read exclusively via `LEFT JOIN docker_manifest_meta ON artifact_id = artifacts.id` (PK→PK). The only column we'd plausibly filter by (`is_index`) has ~50/50 cardinality where a Postgres seq scan beats any b-tree access.
+
+**Mixed-ecosystem caveat for API consumers.** The main artifacts list shows rows from PyPI, npm, Docker, etc. side-by-side. Docker rows carry `image_size_bytes` (compressed image size); non-docker rows carry only `size_bytes` (file-on-disk size). These are different physical quantities — a docker "30 MB" and a PyPI "1.2 MB" displayed side-by-side mean different things.
 
 ### `project_license_policy`
 

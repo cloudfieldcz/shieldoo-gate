@@ -4,7 +4,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { RefreshCw, Trash2, ArrowLeft, Plus } from 'lucide-react'
 import { artifactsApi, dockerApi } from '../api/client'
 import StatusBadge from '../components/StatusBadge'
-import { formatBytes, formatDate } from '../utils/format'
+import { renderSizeCell } from '../components/SizeCell'
+import { formatDate } from '../utils/format'
 
 // Mirror of internal/adapter/docker.MakeSafeName — keeps the UI-derived name in
 // sync with the artifact-id slug used as `artifacts.name` in the database. We
@@ -151,7 +152,12 @@ export default function DockerRepositoryDetail() {
               <tr className="border-b border-gray-100 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                 <th className="px-4 py-3">Reference</th>
                 <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Size</th>
+                <th
+                  className="px-4 py-3"
+                  title="Compressed download size for this image manifest. Multi-arch index entries show a badge — each platform-specific manifest pulled separately has its own size."
+                >
+                  Image size
+                </th>
                 <th className="px-4 py-3">Cached</th>
                 <th className="px-4 py-3">Last Accessed</th>
               </tr>
@@ -197,7 +203,7 @@ export default function DockerRepositoryDetail() {
                         <StatusBadge status={a.status.status} />
                       </td>
                       <td className="px-4 py-3 text-gray-600 text-xs">
-                        {formatBytes(a.size_bytes)}
+                        {renderSizeCell(a)}
                       </td>
                       <td className="px-4 py-3 text-gray-600 text-xs">
                         {formatDate(a.cached_at)}

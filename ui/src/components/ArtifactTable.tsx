@@ -1,7 +1,8 @@
 import type { ArtifactWithStatus } from '../api/types'
 import StatusBadge from './StatusBadge'
 import { ShieldAlert } from 'lucide-react'
-import { formatDate, formatBytes } from '../utils/format'
+import { formatDate } from '../utils/format'
+import { renderSizeCell } from './SizeCell'
 
 interface ArtifactTableProps {
   artifacts: ArtifactWithStatus[]
@@ -112,7 +113,7 @@ export default function ArtifactTable({ artifacts, onRowClick, selectedId }: Art
                   )}
                 </div>
               </td>
-              <td className="px-4 py-3 text-sm text-gray-500">{formatBytes(a.size_bytes)}</td>
+              <td className="px-4 py-3 text-sm text-gray-500">{renderSizeCell(a)}</td>
               <td className="px-4 py-3 text-sm text-gray-500">{formatDate(a.cached_at)}</td>
             </tr>
           ))}
