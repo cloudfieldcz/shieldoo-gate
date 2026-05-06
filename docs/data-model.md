@@ -26,9 +26,19 @@ Shieldoo Gate uses **SQLite** (default, WAL mode, foreign keys enabled) or **Pos
 - `015_popular_packages.sql` — Popular packages table for typosquat scanner
 - `016_version_diff_results.sql` — Version diff results table + composite artifact index
 - `017_package_reputation.sql` — Package reputation scores table
-- `024_version_diff_ai_columns.sql` — Extend `version_diff_results` with AI scanner columns, relax NOT NULL on legacy heuristic columns, deduplicate existing rows, and add the idempotency `UNIQUE INDEX uq_version_diff_pair`
+- `018_projects.sql` — Projects table (lazy-created), seeds `default` project
+- `019_audit_project_id.sql` — Adds `project_id` FK + `(project_id, ts)` index to `audit_log`
+- `020_artifact_project_usage.sql` — Cross-table linking artifacts ↔ projects with usage counters
+- `021_sbom_metadata.sql` — SBOM blob pointer + extracted licenses per artifact
+- `022_project_license_policy.sql` — Per-project license policy (inherit/override/disabled)
+- `023_global_license_policy.sql` — Singleton row holding the global license policy
+- `024_version_diff_ai_columns.sql` — Extends `version_diff_results` with AI scanner columns, relaxes NOT NULL on legacy heuristic columns, deduplicates existing rows, adds the idempotency `UNIQUE INDEX uq_version_diff_pair`
+- `025_version_diff_scanner_version.sql` — Adds `scanner_version` to `version_diff_results` plus `(scanner_version)` and `(verdict, diff_at)` indexes
+- `026_project_policy_overrides.sql` — Adds `project_id` and `kind` (allow|deny) columns to `policy_overrides`; replaces the active-override unique index to include `COALESCE(project_id, 0)` and `kind`; adds `idx_policy_overrides_project_lookup`
 
-**PostgreSQL** (`internal/config/migrations/postgres/`) — same migrations with PostgreSQL syntax (including `024_version_diff_ai_columns.sql`).
+**PostgreSQL** (`internal/config/migrations/postgres/`) — same migrations with PostgreSQL syntax.
+
+In addition to SQL migrations, a separate **`data_migrations`** table tracks Go-level data backfills (see [`data_migrations`](#data_migrations) below). These run after schema migrations and use independent numbering — currently only `024_pypi_canonical_names`.
 
 SQLite PRAGMAs applied at startup:
 ```sql
@@ -66,64 +76,94 @@ PRAGMA busy_timeout=5000;
                       │   │ FK last_scan_id  │──▶ scan_results.id
                       │   └──────────────────┘
                       │
-                      │   ┌──────────────────┐
-                      └──│   audit_log       │
-                          │──────────────────│
-                          │ PK id (INTEGER)  │
-                          │ ts               │
-                          │ event_type       │
-                          │ artifact_id      │  (logical FK, not enforced)
-                          │ client_ip        │
-                          │ user_agent       │
-                          │ reason           │
-                          │ metadata_json    │
-                          │ user_email       │
-                          └──────────────────┘
+                      │   ┌──────────────────┐         ┌────────────────────────┐
+                      ├──│   audit_log       │         │   sbom_metadata        │
+                      │   │──────────────────│         │────────────────────────│
+                      │   │ PK id (INTEGER)  │         │ PK artifact_id         │──▶ artifacts.id
+                      │   │ ts               │         │ format                 │
+                      │   │ event_type       │         │ blob_path              │
+                      │   │ artifact_id      │ logical │ size_bytes             │
+                      │   │ FK project_id    │──▶ projects.id  component_count  │
+                      │   │ client_ip        │         │ licenses_json          │
+                      │   │ user_agent       │         │ generated_at           │
+                      │   │ reason           │         │ generator              │
+                      │   │ metadata_json    │         └────────────────────────┘
+                      │   │ user_email       │
+                      │   └──────────────────┘
+                      │
+                      │   ┌──────────────────────────┐
+                      └──│  artifact_project_usage   │
+                          │──────────────────────────│
+                          │ PK (artifact_id, project_id) │
+                          │ FK artifact_id           │──▶ artifacts.id
+                          │ FK project_id            │──▶ projects.id
+                          │ first_used_at            │
+                          │ last_used_at             │
+                          │ use_count                │
+                          └──────────────────────────┘
 
-┌──────────────────┐     ┌──────────────────┐     ┌──────────────────────┐
-│   threat_feed    │     │ policy_overrides  │     │  tag_digest_history  │
-│──────────────────│     │──────────────────│     │──────────────────────│
-│ PK sha256 (TEXT) │     │ PK id (INTEGER)  │     │ PK id (INTEGER)      │
-│ ecosystem        │     │ ecosystem        │     │ ecosystem            │
-│ package_name     │     │ name             │     │ name                 │
-│ version          │     │ version          │     │ tag_or_version       │
-│ reported_at      │     │ scope            │     │ digest               │
-│ source_url       │     │ reason           │     │ first_seen_at        │
-│ iocs_json        │     │ created_by       │     └──────────────────────┘
-└──────────────────┘     │ created_at       │
-                         │ expires_at       │     ┌──────────────────┐
-                         │ revoked          │     │    api_keys      │
-                         │ revoked_at       │     │──────────────────│
-                         └──────────────────┘     │ PK id (INTEGER)  │
-                                                  │ key_hash (UNIQUE)│
-                                                  │ name             │
-                                                  │ owner_email      │
-                                                  │ enabled          │
-                                                  │ created_at       │
-                                                  │ last_used_at     │
-                                                  │ expires_at       │
-                                                  └──────────────────┘
+┌──────────────────┐     ┌──────────────────────┐    ┌──────────────────────┐
+│    projects      │     │   policy_overrides    │    │  tag_digest_history  │
+│──────────────────│     │──────────────────────│    │──────────────────────│
+│ PK id (SERIAL)   │◀───│ FK project_id (NULL OK)│   │ PK id (INTEGER)      │
+│ label (UNIQUE)   │     │ ecosystem            │    │ ecosystem            │
+│ display_name     │     │ name                 │    │ name                 │
+│ description      │     │ version              │    │ tag_or_version       │
+│ created_at       │     │ scope                │    │ digest               │
+│ created_via      │     │ kind (allow|deny)    │    │ first_seen_at        │
+│ enabled          │     │ reason               │    └──────────────────────┘
+└──────────────────┘     │ created_by           │
+        ▲                │ created_at           │    ┌──────────────────┐
+        │                │ expires_at           │    │   threat_feed    │
+        │                │ revoked, revoked_at  │    │──────────────────│
+        │                └──────────────────────┘    │ PK sha256 (TEXT) │
+        │                                            │ ecosystem        │
+        │  ┌──────────────────────────┐              │ package_name     │
+        ├─│  project_license_policy   │              │ version          │
+        │  │──────────────────────────│              │ reported_at      │
+        │  │ PK id (SERIAL)           │              │ source_url       │
+        │  │ FK project_id (UNIQUE)   │              │ iocs_json        │
+        │  │ mode (inherit|override|  │              └──────────────────┘
+        │  │       disabled)          │
+        │  │ blocked_json/warned_json │              ┌──────────────────┐
+        │  │ allowed_json             │              │    api_keys      │
+        │  │ unknown_action           │              │──────────────────│
+        │  │ updated_at, updated_by   │              │ PK id (BIGINT)   │
+        │  └──────────────────────────┘              │ key_hash (UNIQUE)│
+        │                                            │ name             │
+        │  ┌──────────────────────────┐              │ owner_email      │
+        │  │  global_license_policy   │              │ enabled          │
+        │  │  (singleton, id = 1)     │              │ created_at       │
+        │  │──────────────────────────│              │ last_used_at     │
+        │  │ enabled                  │              │ expires_at       │
+        │  │ blocked/warned/allowed   │              └──────────────────┘
+        │  │ unknown_action           │
+        │  │ on_sbom_error            │
+        │  │ or_semantics             │
+        │  │ updated_at, updated_by   │
+        │  └──────────────────────────┘
+        │
 
-┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
-│    triage_cache      │  │  popular_packages    │  │ version_diff_results │
-│──────────────────────│  │──────────────────────│  │──────────────────────│
-│ PK cache_key (TEXT)  │  │ PK (ecosystem, name) │  │ PK id (INTEGER)      │
-│ ecosystem            │  │ rank                 │  │ artifact_id          │
-│ name                 │  │ download_count       │  │ FK previous_artifact │──▶ artifacts.id
-│ version              │  │ last_updated         │  │ diff_at              │
-│ decision             │  └──────────────────────┘  │ files_added/removed  │
-│ confidence           │                            │ size_ratio           │
-│ explanation          │  ┌──────────────────────┐  │ verdict              │
-│ model_used           │  │ package_reputation   │  │ findings_json        │
-│ created_at           │  │──────────────────────│  └──────────────────────┘
-│ expires_at           │  │ PK id (INTEGER)      │
-└──────────────────────┘  │ ecosystem            │
-                          │ name                 │
-                          │ maintainers_json     │
-                          │ risk_score           │
-                          │ signals_json         │
-                          │ last_checked         │
-                          └──────────────────────┘
+┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────────┐
+│    triage_cache      │  │  popular_packages    │  │  version_diff_results    │
+│──────────────────────│  │──────────────────────│  │──────────────────────────│
+│ PK cache_key (TEXT)  │  │ PK (ecosystem, name) │  │ PK id (INTEGER)          │
+│ ecosystem            │  │ rank                 │  │ artifact_id              │
+│ name                 │  │ download_count       │  │ FK previous_artifact     │──▶ artifacts.id
+│ version              │  │ last_updated         │  │ diff_at                  │
+│ decision             │  └──────────────────────┘  │ files_added/removed/...  │
+│ confidence           │                            │ size_ratio               │
+│ explanation          │  ┌──────────────────────┐  │ verdict                  │
+│ model_used           │  │ package_reputation   │  │ findings_json            │
+│ created_at           │  │──────────────────────│  │ ai_verdict/confidence    │
+│ expires_at           │  │ PK id (INTEGER)      │  │ ai_explanation           │
+└──────────────────────┘  │ ecosystem            │  │ ai_model_used            │
+                          │ name                 │  │ ai_prompt_version        │
+┌──────────────────────┐  │ maintainers_json     │  │ ai_tokens_used           │
+│  schema_migrations   │  │ risk_score           │  │ scanner_version          │
+│  data_migrations     │  │ signals_json         │  │ previous_version         │
+│  (run-once tables)   │  │ last_checked         │  └──────────────────────────┘
+└──────────────────────┘  └──────────────────────┘
 ```
 
 ## Tables
@@ -140,7 +180,7 @@ Stores metadata about every artifact that has been downloaded and cached.
 | `version` | TEXT NOT NULL | Package version |
 | `upstream_url` | TEXT NOT NULL | URL from which the artifact was downloaded |
 | `sha256` | TEXT NOT NULL | SHA-256 hash of the artifact file |
-| `size_bytes` | INTEGER NOT NULL | Artifact file size in bytes |
+| `size_bytes` | BIGINT NOT NULL | Artifact file size in bytes |
 | `cached_at` | DATETIME NOT NULL | When the artifact was first cached |
 | `last_accessed_at` | DATETIME NOT NULL | Last time a client requested this artifact |
 | `storage_path` | TEXT NOT NULL | Relative path within the cache directory |
@@ -149,7 +189,12 @@ Stores metadata about every artifact that has been downloaded and cached.
 
 The `ID()` method computes the composite key: `fmt.Sprintf("%s:%s:%s", a.Ecosystem, a.Name, a.Version)`. When `Filename` is non-empty (e.g., PyPI wheels with distinct filenames per platform), the ID includes a fourth part: `fmt.Sprintf("%s:%s:%s:%s", a.Ecosystem, a.Name, a.Version, a.Filename)`.
 
-**Indexes:** `idx_artifacts_ecosystem_name ON (ecosystem, name)`
+**Indexes:**
+- `idx_artifacts_ecosystem_name ON (ecosystem, name)`
+- `idx_artifacts_name_version ON (name, version)`
+- `idx_artifacts_cached_at ON (cached_at DESC)` — used for activity-style sorting
+- `idx_artifacts_eco_name_cached ON (ecosystem, name, cached_at DESC)` — composite index for efficient previous-version lookup (used by version-diff scanner)
+- `idx_artifacts_last_accessed ON (last_accessed_at)` — used by the rescan scheduler and LRU eviction
 
 ### `scan_results`
 
@@ -221,6 +266,10 @@ PENDING_SCAN ──▶ CLEAN ──▶ QUARANTINED ───┘
 - `SUSPICIOUS` → scan found concerning patterns below block threshold
 - `QUARANTINED` → scan returned MALICIOUS or manual quarantine by admin
 
+**Indexes:**
+- `idx_artifact_status_status ON (status)` — for "list all quarantined" / "list all pending scan" admin queries
+- `idx_artifact_status_rescan ON (status, rescan_due_at)` — used by the rescan scheduler to find PENDING_SCAN artifacts ready for re-evaluation
+
 ### `audit_log`
 
 **Append-only** log of all significant events. No UPDATE or DELETE operations are ever performed on this table.
@@ -236,6 +285,7 @@ PENDING_SCAN ──▶ CLEAN ──▶ QUARANTINED ───┘
 | `reason` | TEXT | Human-readable reason or description |
 | `metadata_json` | TEXT | Additional JSON metadata |
 | `user_email` | TEXT DEFAULT '' | Email of the user who performed the action (v1.1, set when OIDC auth is active) |
+| `project_id` | INTEGER FK | References `projects.id` — set when the event was driven by a per-project request (added by migration 019, may be NULL for system events) |
 
 **Event types:**
 
@@ -256,6 +306,8 @@ PENDING_SCAN ──▶ CLEAN ──▶ QUARANTINED ───┘
 **Indexes:**
 - `idx_audit_log_ts ON (ts)`
 - `idx_audit_log_event_type ON (event_type, ts)` — used by alert system per-channel filtering
+- `idx_audit_log_artifact_event ON (artifact_id, event_type)` — for per-artifact audit lookups (added by migration 014)
+- `idx_audit_project ON (project_id, ts)` — for per-project audit lookups (added by migration 019)
 
 ### `threat_feed`
 
@@ -294,6 +346,8 @@ User-created exceptions that allow artifacts through the policy engine despite s
 | `expires_at` | DATETIME | Optional expiration (null = never expires) |
 | `revoked` | BOOLEAN NOT NULL DEFAULT 0 | Soft-delete flag |
 | `revoked_at` | DATETIME | When the override was revoked |
+| `project_id` | INTEGER FK ON DELETE CASCADE | References `projects.id` — NULL means a global (cross-project) override; non-NULL is project-scoped (added by migration 026) |
+| `kind` | TEXT NOT NULL DEFAULT 'allow' | `allow` (whitelist) or `deny` (blacklist) — enforced by `CHECK (kind IN ('allow', 'deny'))` (added by migration 026) |
 
 **Go struct:** `model.PolicyOverride` (`internal/model/override.go`)
 
@@ -301,7 +355,8 @@ Key method: `Matches(ecosystem, name, version string) bool` — checks if the ov
 
 **Indexes:**
 - `idx_policy_overrides_lookup ON (ecosystem, name, version, revoked)` — fast override lookup
-- `idx_policy_overrides_unique_active ON (ecosystem, name, version, scope) WHERE revoked = FALSE` — partial unique index preventing duplicate active overrides for the same artifact+scope. All override creation endpoints use `INSERT ... ON CONFLICT DO NOTHING` + `SELECT` to ensure idempotent behavior.
+- `idx_policy_overrides_unique_active ON (ecosystem, name, version, scope, COALESCE(project_id, 0), kind) WHERE revoked = FALSE` — partial unique index preventing duplicate active overrides for the same (artifact, scope, project, kind) tuple. The `COALESCE(project_id, 0)` lets `NULL` (global override) coexist with project-scoped overrides on the same package. Replaces the pre-026 unique index, which did not include `project_id` or `kind`.
+- `idx_policy_overrides_project_lookup ON (project_id, ecosystem, name, version, revoked)` — fast per-project override lookup (added by migration 026)
 
 ### `docker_repositories`
 
@@ -312,10 +367,10 @@ Tracks known Docker image repositories, both upstream (proxied) and internal (pu
 | `id` | INTEGER PK AUTOINCREMENT | Repository ID |
 | `registry` | TEXT NOT NULL DEFAULT '' | Registry hostname (empty for internal) |
 | `name` | TEXT NOT NULL | Image name (e.g. `library/nginx`, `myteam/myapp`) |
-| `is_internal` | INTEGER NOT NULL DEFAULT 0 | 1 for pushed (internal) images |
+| `is_internal` | BOOLEAN (SQLite: INTEGER) NOT NULL DEFAULT FALSE | TRUE / 1 for pushed (internal) images |
 | `created_at` | DATETIME NOT NULL | Creation timestamp |
 | `last_synced_at` | DATETIME | Last sync timestamp |
-| `sync_enabled` | INTEGER NOT NULL DEFAULT 1 | Whether scheduled sync is enabled |
+| `sync_enabled` | BOOLEAN (SQLite: INTEGER) NOT NULL DEFAULT TRUE | Whether scheduled sync is enabled |
 
 **Go struct:** `docker.DockerRepository` (`internal/adapter/docker/repos.go`)
 
@@ -339,7 +394,9 @@ Maps tag names to manifest digests for Docker repositories. Used primarily for p
 
 **Unique constraint:** `(repo_id, tag)` — each tag name is unique per repository. Pushing the same tag again updates the digest (like `docker push myapp:latest`).
 
-**Indexes:** `idx_docker_tags_digest ON (manifest_digest)`
+**Indexes:**
+- `idx_docker_tags_repo_tag ON (repo_id, tag)` (UNIQUE) — enforces the per-repo unique-tag constraint
+- `idx_docker_tags_digest ON (manifest_digest)` — reverse lookup digest → tag(s)
 
 ### `tag_digest_history`
 
@@ -438,10 +495,13 @@ Stores the results of cross-version comparison analysis performed by the version
 | `ai_model_used` | TEXT | AI model identifier (e.g. `gpt-5.4-mini`) (nullable) |
 | `ai_prompt_version` | TEXT | SHA[:12] of the AI bridge system prompt at scan time (nullable) |
 | `ai_tokens_used` | INTEGER | Total tokens consumed by the AI call (nullable) |
+| `scanner_version` | TEXT | Version of the version-diff scanner that produced the row (nullable; legacy heuristic rows are NULL, v2.0+ rows write `'2.0.0'`) — added by migration 025 |
 
 **Indexes:**
 - `idx_version_diff_artifact ON (artifact_id)` — legacy artifact lookup index
 - `uq_version_diff_pair UNIQUE ON (artifact_id, previous_artifact, ai_model_used, ai_prompt_version)` — idempotency cache key; rolling out a new model or prompt version invalidates all previous cache entries automatically
+- `idx_version_diff_scanner_version ON (scanner_version)` — for filtering rows by scanner generation (added by migration 025)
+- `idx_version_diff_verdict_diff_at ON (verdict, diff_at)` — used by `VersionDiffRetentionScheduler.runOnce` (`DELETE WHERE verdict='CLEAN' AND diff_at < ?`) (added by migration 025)
 
 **NULL-distinct semantics of `uq_version_diff_pair`:** SQL `UNIQUE` treats `NULL` as distinct from every other value (including another `NULL`). This means legacy heuristic rows (with `ai_model_used = NULL` and `ai_prompt_version = NULL`) coexist in the same table alongside new AI-scanner rows that carry non-NULL values for both columns. A fresh AI scan with the same artifact pair but a different model or prompt version inserts a new row rather than colliding with an existing one.
 
@@ -473,6 +533,96 @@ Caches upstream registry metadata and risk scores for the reputation scanner.
 
 Entries older than `retention_days` (default 30) are cleaned up by a background goroutine at scanner startup.
 
+### `projects`
+
+Logical project / namespace used to scope artifact usage, license policy, and policy overrides. Projects are created lazily on first use (a request carrying a `?project=<label>` parameter) — the seed `default` project is inserted by migration 018 and is used when no `project=` is provided.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | SERIAL PK | Project ID |
+| `label` | TEXT NOT NULL UNIQUE | URL-safe slug (e.g. `default`, `team-platform`) — what clients pass in the `?project=` query parameter |
+| `display_name` | TEXT | Human-readable name |
+| `description` | TEXT | Optional description |
+| `created_at` | TIMESTAMPTZ NOT NULL | Creation timestamp |
+| `created_via` | TEXT NOT NULL DEFAULT 'lazy' | One of `lazy` (auto-created on request), `api` (explicit admin call), `seed` (the bootstrap row) |
+| `enabled` | BOOLEAN NOT NULL DEFAULT TRUE | Disabled projects reject requests |
+
+**Go struct:** `model.Project` (`internal/model/project.go`)
+
+**Indexes:** `idx_projects_label ON (label)` (UNIQUE)
+
+Referenced by `artifact_project_usage`, `audit_log`, `policy_overrides`, and `project_license_policy`.
+
+### `artifact_project_usage`
+
+Cross-table linking artifacts to the projects that have requested them. Updated on every successful artifact serve so the admin UI can show per-project package usage and last-used timestamps.
+
+| Column | Type | Description |
+|---|---|---|
+| `artifact_id` | TEXT NOT NULL FK | References `artifacts.id` (ON DELETE CASCADE) |
+| `project_id` | INTEGER NOT NULL FK | References `projects.id` (ON DELETE CASCADE) |
+| `first_used_at` | TIMESTAMPTZ NOT NULL | First time this project requested this artifact |
+| `last_used_at` | TIMESTAMPTZ NOT NULL | Most recent request timestamp |
+| `use_count` | INTEGER NOT NULL DEFAULT 1 | Total request count |
+
+**Primary Key:** `(artifact_id, project_id)`
+
+**Indexes:** `idx_apu_project_last_used ON (project_id, last_used_at DESC)` — for "recent activity in project X" queries
+
+### `sbom_metadata`
+
+Per-artifact SBOM blob pointer plus extracted licenses. The actual SBOM document (CycloneDX/SPDX JSON) lives on disk at `blob_path`; this row stores the index. Used by the license policy engine to evaluate the global/per-project license policies without re-parsing the SBOM on every request.
+
+| Column | Type | Description |
+|---|---|---|
+| `artifact_id` | TEXT PK FK | References `artifacts.id` (ON DELETE CASCADE) |
+| `format` | TEXT NOT NULL | SBOM format (e.g. `cyclonedx-1.5`, `spdx-2.3`) |
+| `blob_path` | TEXT NOT NULL | Relative path to the SBOM blob in the cache directory |
+| `size_bytes` | BIGINT NOT NULL | Size of the SBOM document |
+| `component_count` | INTEGER NOT NULL DEFAULT 0 | Number of components extracted from the SBOM |
+| `licenses_json` | TEXT NOT NULL DEFAULT '[]' | JSON array of unique SPDX license IDs found across components |
+| `generated_at` | TIMESTAMPTZ NOT NULL | When the SBOM was generated |
+| `generator` | TEXT NOT NULL | SBOM generator name (e.g. `trivy`, `syft`) |
+
+**Indexes:** `idx_sbom_generated_at ON (generated_at)` — for retention/cleanup queries
+
+The licenses surfaced in the admin UI's Artifacts list (`ArtifactWithStatus.licenses`) come from this table — the API joins `artifacts ⨝ artifact_status ⨝ sbom_metadata` and decodes `licenses_json`.
+
+### `project_license_policy`
+
+Per-project override of the global license policy. One row per project (UNIQUE on `project_id`).
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | SERIAL PK | Row ID |
+| `project_id` | INTEGER NOT NULL UNIQUE FK | References `projects.id` (ON DELETE CASCADE) |
+| `mode` | TEXT NOT NULL DEFAULT 'inherit' | One of `inherit` (use global), `override` (use this row), `disabled` (allow everything for this project) |
+| `blocked_json` | TEXT | JSON array of SPDX IDs to block (only used when `mode = 'override'`) |
+| `warned_json` | TEXT | JSON array of SPDX IDs to warn on |
+| `allowed_json` | TEXT | JSON array of SPDX IDs to explicitly allow |
+| `unknown_action` | TEXT | What to do with unknown SPDX IDs: `allow`, `warn`, `block`, or empty (inherit from global) |
+| `updated_at` | TIMESTAMPTZ NOT NULL | Last update timestamp |
+| `updated_by` | TEXT | User who last updated the policy |
+
+### `global_license_policy`
+
+Singleton row (CHECK constraint `id = 1`) holding the global license policy used by all projects with `mode = 'inherit'`. The application uses an UPSERT on `id = 1` to create or update this single row.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER PK | Always 1 (enforced by `CHECK (id = 1)`) |
+| `enabled` | BOOLEAN NOT NULL DEFAULT TRUE | Master switch — `FALSE` disables license enforcement globally |
+| `blocked_json` | TEXT | JSON array of SPDX IDs to block |
+| `warned_json` | TEXT | JSON array of SPDX IDs to warn on |
+| `allowed_json` | TEXT | JSON array of SPDX IDs to explicitly allow |
+| `unknown_action` | TEXT | Action for SPDX IDs not in any list: `allow`, `warn`, or `block` |
+| `on_sbom_error` | TEXT | Action when SBOM generation fails: `allow`, `warn`, or `block` |
+| `or_semantics` | TEXT | How to evaluate `OR` license expressions: `any_allowed` (permissive — pass if any operand allowed) or `all_allowed` (strict — pass only if all operands allowed) |
+| `updated_at` | TIMESTAMPTZ NOT NULL | Last update timestamp |
+| `updated_by` | TEXT | User who last updated the policy |
+
+If the row is missing (fresh install before first admin save), the API falls back to the policy embedded in `config.yaml` (`source: 'config'`).
+
 ### `schema_migrations`
 
 Tracks which SQL migrations have been applied. Prevents re-running migrations.
@@ -482,12 +632,14 @@ Tracks which SQL migrations have been applied. Prevents re-running migrations.
 | `version` | INTEGER PK | Migration number (e.g., 1, 2, 3...) |
 | `applied_at` | DATETIME NOT NULL | When the migration was applied |
 
-### Additional Indexes (rescan scheduler)
+### `data_migrations`
 
-The rescan scheduler requires two indexes for efficient queries:
+Tracks Go-level data backfills run after SQL migrations (see `internal/config/data_migrations.go`). Used when the rewrite logic is more natural in Go than in cross-dialect SQL — for example reusing existing canonicalization helpers. Numbering is independent of `schema_migrations`.
 
-- `idx_artifact_status_rescan ON artifact_status(status, rescan_due_at)` — finds PENDING_SCAN artifacts for manual rescan
-- `idx_artifacts_last_accessed ON artifacts(last_accessed_at)` — orders by most recently accessed
+| Column | Type | Description |
+|---|---|---|
+| `name` | TEXT PK | Migration name (e.g. `024_pypi_canonical_names`) |
+| `applied_at` | TIMESTAMP NOT NULL | When the migration was applied |
 
 ## Artifact ID Convention
 
@@ -496,9 +648,17 @@ Throughout the system, artifacts are identified by the composite string `"{ecosy
 - `pypi:requests:2.32.3`
 - `npm:chalk:5.3.0`
 - `nuget:Newtonsoft.Json:13.0.3`
-- `docker:library/python:3.12-slim`
+- `docker:docker_io_library_postgres:18.2-alpine` — see Docker note below
 - `maven:org.apache.commons:commons-lang3:3.14.0` (4-part: `ecosystem:groupId:artifactId:version`)
 - `rubygems:rake:13.2.1`
 - `go:golang.org/x/text:v0.14.0`
+
+**Docker:** the `name` segment is **not** the original `registry/path` — `internal/adapter/docker.MakeSafeName(registry, imagePath)` slug-encodes registry + path into a filesystem-safe identifier (slashes/dots become underscores). Examples:
+
+- `docker:docker_io_library_postgres:18.2-alpine` (a tag pull)
+- `docker:docker_io_library_postgres:sha256:1b13c640...` (a manifest-digest pull — version is the full `sha256:...` digest)
+- `docker:docker_io_pgvector_pgvector:sha256:b48c110f...`
+
+The same image can therefore appear as multiple rows: one per tag pull and one per manifest digest accessed by clients. The Docker UI groups these by repository name (see `docker_repositories`), and the resolved tag→digest mapping lives in `docker_tags`.
 
 This ID is used as the primary key in the `artifacts` table and as the `artifact_id` foreign key in related tables. It is computed by `model.Artifact.ID()` and URL-encoded/decoded when used in API paths.

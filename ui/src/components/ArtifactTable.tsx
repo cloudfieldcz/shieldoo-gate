@@ -9,6 +9,22 @@ interface ArtifactTableProps {
   selectedId?: string
 }
 
+// Some ecosystems (notably docker images) carry hundreds of bundled-component
+// licenses. Showing them all inline blows up row height and hides every other
+// row off-screen. Cap at MAX_VISIBLE_LICENSES with a "+N" tooltip overflow.
+const MAX_VISIBLE_LICENSES = 4
+
+// Docker manifest digests in the version column are 71 chars (sha256:...) —
+// they overflow the cell and waste space. Show a short prefix; full value
+// stays available via hover tooltip.
+function formatVersion(version: string): string {
+  if (version === '*') return ''
+  if (version.startsWith('sha256:') && version.length > 19) {
+    return `${version.slice(0, 19)}…`
+  }
+  return version
+}
+
 export default function ArtifactTable({ artifacts, onRowClick, selectedId }: ArtifactTableProps) {
   if (artifacts.length === 0) {
     return (
@@ -55,13 +71,17 @@ export default function ArtifactTable({ artifacts, onRowClick, selectedId }: Art
                   </div>
                 )}
               </td>
-              <td className="px-4 py-3 text-sm text-gray-600 font-mono">
-                {a.version === '*' ? <span className="italic text-gray-500">(any version)</span> : a.version}
+              <td className="px-4 py-3 text-sm text-gray-600 font-mono whitespace-nowrap">
+                {a.version === '*' ? (
+                  <span className="italic text-gray-500">(any version)</span>
+                ) : (
+                  <span title={a.version}>{formatVersion(a.version)}</span>
+                )}
               </td>
               <td className="px-4 py-3 text-sm">
                 {a.licenses?.length ? (
-                  <div className="flex flex-wrap gap-1">
-                    {a.licenses.map((l) => (
+                  <div className="flex flex-wrap gap-1 items-center">
+                    {a.licenses.slice(0, MAX_VISIBLE_LICENSES).map((l) => (
                       <span
                         key={l}
                         className="inline-block px-1.5 py-0.5 rounded text-xs font-mono bg-blue-50 text-blue-700 border border-blue-200"
@@ -69,6 +89,14 @@ export default function ArtifactTable({ artifacts, onRowClick, selectedId }: Art
                         {l}
                       </span>
                     ))}
+                    {a.licenses.length > MAX_VISIBLE_LICENSES && (
+                      <span
+                        className="inline-block px-1.5 py-0.5 rounded text-xs font-mono bg-gray-100 text-gray-600 border border-gray-200 cursor-help"
+                        title={a.licenses.slice(MAX_VISIBLE_LICENSES).join(', ')}
+                      >
+                        +{a.licenses.length - MAX_VISIBLE_LICENSES}
+                      </span>
+                    )}
                   </div>
                 ) : (
                   <span className="text-xs text-gray-300">—</span>
