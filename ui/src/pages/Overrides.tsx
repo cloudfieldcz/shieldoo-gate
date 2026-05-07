@@ -4,7 +4,7 @@ import { overridesApi } from '../api/client'
 import type { PolicyOverride } from '../api/types'
 import ArtifactDetailPanel from '../components/ArtifactDetailPanel'
 import { Trash2, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
-import { formatDate } from '../utils/format'
+import { formatDate, truncateSha256 } from '../utils/format'
 import { ECOSYSTEMS } from '../constants/ecosystems'
 
 const PER_PAGE = 20
@@ -131,25 +131,28 @@ export default function Overrides() {
                   return (
                     <tr key={o.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3 text-sm">
-                        {canLink ? (
-                          <button
-                            onClick={() => setSelectedOverride(
-                              isSelected ? null : { ecosystem: o.ecosystem, name: o.name, version: o.version }
-                            )}
-                            className={`font-mono text-left hover:underline ${
-                              isSelected
-                                ? 'text-blue-800 font-semibold'
-                                : 'text-blue-600 hover:text-blue-800'
-                            }`}
-                          >
-                            {o.ecosystem}/{o.name}
-                            {o.version && <span className="text-blue-500 ml-1">@{o.version}</span>}
-                          </button>
-                        ) : (
-                          <span className="font-mono text-gray-700">
-                            {o.ecosystem}/{o.name}
-                          </span>
-                        )}
+                        <div className="max-w-[28rem] truncate">
+                          {canLink ? (
+                            <button
+                              onClick={() => setSelectedOverride(
+                                isSelected ? null : { ecosystem: o.ecosystem, name: o.name, version: o.version }
+                              )}
+                              title={`${o.ecosystem}/${o.name}${o.version ? '@' + o.version : ''}`}
+                              className={`font-mono text-left hover:underline truncate block max-w-full ${
+                                isSelected
+                                  ? 'text-blue-800 font-semibold'
+                                  : 'text-blue-600 hover:text-blue-800'
+                              }`}
+                            >
+                              {o.ecosystem}/{o.name}
+                              {o.version && <span className="text-blue-500 ml-1">@{truncateSha256(o.version)}</span>}
+                            </button>
+                          ) : (
+                            <span className="font-mono text-gray-700 truncate block" title={`${o.ecosystem}/${o.name}`}>
+                              {o.ecosystem}/{o.name}
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-600">{scopeLabel(o.scope)}</td>
                       <td className="px-4 py-3 text-sm text-gray-600 max-w-xs truncate">{o.reason || '—'}</td>

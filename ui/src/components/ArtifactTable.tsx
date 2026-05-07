@@ -1,7 +1,7 @@
 import type { ArtifactWithStatus } from '../api/types'
 import StatusBadge from './StatusBadge'
 import { ShieldAlert } from 'lucide-react'
-import { formatDate } from '../utils/format'
+import { formatDate, truncateSha256 } from '../utils/format'
 import { renderSizeCell } from './SizeCell'
 
 interface ArtifactTableProps {
@@ -15,15 +15,9 @@ interface ArtifactTableProps {
 // row off-screen. Cap at MAX_VISIBLE_LICENSES with a "+N" tooltip overflow.
 const MAX_VISIBLE_LICENSES = 4
 
-// Docker manifest digests in the version column are 71 chars (sha256:...) —
-// they overflow the cell and waste space. Show a short prefix; full value
-// stays available via hover tooltip.
 function formatVersion(version: string): string {
   if (version === '*') return ''
-  if (version.startsWith('sha256:') && version.length > 19) {
-    return `${version.slice(0, 19)}…`
-  }
-  return version
+  return truncateSha256(version)
 }
 
 export default function ArtifactTable({ artifacts, onRowClick, selectedId }: ArtifactTableProps) {

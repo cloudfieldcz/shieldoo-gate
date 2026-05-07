@@ -14,7 +14,7 @@ import LicensePolicyEditor, {
   type LicensePolicyValue,
 } from '../components/LicensePolicyEditor'
 import OverrideModal from '../components/OverrideModal'
-import { formatDate } from '../utils/format'
+import { formatDate, truncateSha256 } from '../utils/format'
 
 type Tab = 'artifacts' | 'policy'
 
@@ -218,22 +218,32 @@ function ArtifactRow({
   disabled: boolean
 }) {
   const lastActivity = artifact.last_blocked_at ?? artifact.last_used_at
+  const fullId = artifact.id
+    ?? `${artifact.ecosystem}:${artifact.name}${artifact.version ? `:${artifact.version}` : ''}`
+  const displayId = artifact.id
+    ? `${artifact.ecosystem}:${artifact.name}${artifact.version ? `:${truncateSha256(artifact.version)}` : ''}`
+    : `${artifact.ecosystem}:${artifact.name}${artifact.version ? `:${truncateSha256(artifact.version)}` : ' (any version)'}`
   return (
     <tr className="hover:bg-gray-50">
       <td className="px-4 py-2">
-        {artifact.id ? (
-          <Link
-            to={`/artifacts?name=${encodeURIComponent(artifact.name)}&version=${encodeURIComponent(artifact.version ?? '')}`}
-            className="font-mono text-xs text-blue-700 hover:underline"
-          >
-            {artifact.id}
-          </Link>
-        ) : (
-          <span className="font-mono text-xs text-gray-700">
-            {artifact.ecosystem}:{artifact.name}
-            {artifact.version ? `:${artifact.version}` : ' (any version)'}
-          </span>
-        )}
+        <div className="max-w-[24rem] truncate">
+          {artifact.id ? (
+            <Link
+              to={`/artifacts?name=${encodeURIComponent(artifact.name)}&version=${encodeURIComponent(artifact.version ?? '')}`}
+              title={fullId}
+              className="font-mono text-xs text-blue-700 hover:underline truncate block max-w-full"
+            >
+              {displayId}
+            </Link>
+          ) : (
+            <span
+              className="font-mono text-xs text-gray-700 truncate block"
+              title={fullId}
+            >
+              {displayId}
+            </span>
+          )}
+        </div>
       </td>
       <td className="px-4 py-2">
         <DecisionPill decision={artifact.decision} reason={artifact.blocked_license} />
