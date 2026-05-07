@@ -96,9 +96,9 @@ Shieldoo Gate Protocol Adapter
 | — | Version diff analysis | Done |
 | — | Maintainer reputation risk scoring | Done |
 | — | SHA256 integrity verification gate | Done |
-| — | [Project registry](features/projects.md) (Basic-auth username → project) | Done (v1.2) |
-| — | [SBOM generation](features/sbom-generation.md) (CycloneDX via Trivy single-run) | Done (v1.2) |
-| — | [License policy enforcement](features/license-policy.md) (SPDX, per-project overrides) | Done (v1.2) |
+| — | Project registry (Basic-auth username → project) — see [Client Authentication](#client-authentication--how-basic-auth-maps-to-projects-v12) | Done (v1.2) |
+| — | SBOM generation (CycloneDX via Trivy single-run) — see [Scanners](scanners.md) | Done (v1.2) |
+| — | License policy enforcement (SPDX, per-project overrides) — see [Policy Engine](policy.md) | Done (v1.2) |
 | — | Per-project, per-package overrides — whitelist or blacklist a single package within one project, with revoke (see [ADR-006](adr/ADR-006-per-project-package-overrides.md) and the [Policy Engine](policy.md#policy-overrides) doc) | Done |
 
 ## Client Authentication — How Basic Auth Maps to Projects (v1.2+)
@@ -107,7 +107,7 @@ Every proxy request authenticates with **HTTP Basic Auth**: `PROJECT:TOKEN`. The
 
 - **Don't care about projects?** Use `default` as the username. Migration 018 seeds this project on first boot.
 - **Want segmentation?** Pick any label matching `[a-z0-9][a-z0-9_-]{0,63}` (e.g. `backend-team`, `data-pipeline`, `ci-jenkins`). In **lazy** mode (default) the project auto-creates on first use.
-- **Need strong separation?** Run in **strict** mode and have an admin pre-create projects at `POST /api/v1/projects`. [Per-project license policy overrides](features/license-policy.md#per-project-overrides) work in both modes.
+- **Need strong separation?** Run in **strict** mode and have an admin pre-create projects at `POST /api/v1/projects`. Per-project license policy overrides — see [Policy Engine](policy.md) — work in both modes.
 
 ```bash
 # pip / uv
@@ -122,7 +122,7 @@ echo $SGW_TOKEN | docker login proxy:5002 -u myteam --password-stdin
 
 **Why the username instead of a custom header?** All seven proxy protocols we support (pip, npm, docker, NuGet, Maven, Go mod, RubyGems) natively carry HTTP Basic Auth, but none support arbitrary custom headers. Reusing the username field requires **zero client-side changes** — see [ADR-001](adr/ADR-001-project-identification-via-basic-auth.md) for the rationale and the S-01 anti-spoofing mitigation.
 
-Full details in [docs/features/projects.md](features/projects.md).
+Configuration reference: see the `projects:` block in [config.example.yaml](../config.example.yaml).
 
 ## Getting Started
 

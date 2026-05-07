@@ -33,7 +33,7 @@
 > ### 4. Branch & commit strategy
 > - **Create a feature sub-branch** for each feature you work on.
 > - Branch naming: `feature/<feature-short-name>` from the **current branch** (branches chain from each other).
->   - Examples: `feature/typosquatting-detection`, `feature/version-diff-analysis`, `feature/sbom-generation`
+>   - Examples: `feature/cli-cicd-integration`, `feature/package-provenance`, `feature/dependency-graph`
 > - **Commit early and often** with descriptive commit messages (see CLAUDE.md for format).
 > - **Do NOT push.** Do NOT create PRs. Work stays local.
 > - When a feature is done, create the **next feature branch from the current one** — branches build on top of each other sequentially.
@@ -47,7 +47,9 @@
 
 ---
 
-> Feature proposals for future Shieldoo Gate releases, ordered by impact-to-effort ratio. We prioritize features that improve real security for teams of any size over features that only matter at enterprise scale.
+> Feature proposals for upcoming Shieldoo Gate releases, ordered by impact-to-effort ratio. We prioritize features that improve real security for teams of any size over features that only matter at enterprise scale.
+>
+> Already-implemented features (typosquatting, version diff, maintainer risk scoring, projects, SBOM, license policy, etc.) are documented in the main [docs index](../index.md) under *Implementation Status*.
 
 ## Prioritization Criteria
 
@@ -60,110 +62,61 @@ Features that are pure Go, need no new infrastructure, and catch attacks the cur
 
 ## Feature Overview
 
-### Tier 1 — Maximum bang for the buck (v1.2)
+### Tier 1 — Developer experience
 
-Pure detection improvements. No new infrastructure. Each one catches an attack class that content scanners fundamentally cannot. All can be built independently and in parallel.
+| # | Feature | What it catches | Effort | Deps |
+|---|---|---|---|---|
+| 1 | [CLI & CI/CD Integration](cli-cicd-integration.md) | Nothing directly, but makes everything else *usable*. `shieldoo check`, `shieldoo audit`, GitHub Actions, pre-commit hooks. Developers finally see why their build failed. SARIF output. | Medium — separate Go binary, needs batch API endpoint | Admin API (done) |
 
-| # | Feature | What it catches | Effort | Deps | Status |
-|---|---|---|---|---|---|
-| 1 | [Typosquatting Detection](typosquatting-detection.md) | Fake packages impersonating popular libraries (`reqeusts`, `lodsah`). Edit distance, homoglyph, namespace confusion analysis. | Low — built-in scanner, pure Go, <1ms per check | None | **Implemented** |
-| 2 | [Version Diff Analysis](version-diff-analysis.md) | Compromised updates — compare new version against cached previous version. Anomalous code additions, new install hooks, entropy spikes. | Medium — needs archive extraction + diff logic, async | Cache (done) | **Implemented** |
-| 3 | [Maintainer Risk Scoring](maintainer-risk-scoring.md) | Account takeovers, abandoned package hijacking, ownership transfers. Scores packages by maintainer history + publication patterns. | Medium — upstream API queries, caching | None | **Implemented** |
-| 4 | [CLI & CI/CD Integration](cli-cicd-integration.md) | Nothing directly, but makes everything else *usable*. `shieldoo check`, `shieldoo audit`, GitHub Actions, pre-commit hooks. Developers finally see why their build failed. SARIF output. | Medium — separate Go binary, needs batch API endpoint | Admin API (done) | Planned |
+### Tier 2 — Strong security, more effort
 
-**Why this order:** Typosquatting is the cheapest scanner to build and catches the most common attack vector. Version diff is the most powerful signal against account-takeover attacks. Maintainer scoring adds context that amplifies every other scanner. CLI makes the whole system usable for developers instead of just admins.
-
-### Tier 2 — Strong security, more effort (v1.3)
-
-Cryptographic verification, license compliance, and software inventory. These require more integration work but are increasingly demanded by regulations (EU CRA, EO 14028).
+Cryptographic verification and software inventory. These require more integration work but are increasingly demanded by regulations (EU CRA, EO 14028).
 
 | # | Feature | What it does | Effort | Deps |
 |---|---|---|---|---|
-| 5 | [Package Provenance](package-provenance.md) | Verify Sigstore/cosign signatures, npm provenance, PyPI PEP 740 attestations, NuGet/Maven signing. Catches compromised CI/CD and registry breaches. | High — per-ecosystem crypto verification, Sigstore SDK | None |
-| 6 | [SBOM Generation](sbom-generation.md) | Auto-generate CycloneDX for every artifact via Trivy single-run. **Implemented (v1.2)**. | Low-Medium — Trivy does the heavy lifting | Trivy (done) |
-| 7 | [License Policy](license-policy.md) | Block GPL/AGPL in commercial projects, warn on unknown licenses. **Implemented (v1.2)**. | Low — parse SPDX identifiers from SBOM, config-driven rules | SBOM (done) + [Projects](projects.md) |
-| 7a | [Project Registry](projects.md) | Per-team/service segmentation via Basic-auth username. Drives audit segmentation + per-project license overrides. **Implemented (v1.2)**. | Low — new table + service + middleware hook | None |
-| 8 | [Dependency Graph](dependency-graph.md) | When a package is quarantined, show blast radius. "litellm is quarantined — these 14 projects depend on it." | Medium — parse dependency metadata, graph storage + UI | SBOM (done) |
+| 2 | [Package Provenance](package-provenance.md) | Verify Sigstore/cosign signatures, npm provenance, PyPI PEP 740 attestations, NuGet/Maven signing. Catches compromised CI/CD and registry breaches. | High — per-ecosystem crypto verification, Sigstore SDK | None |
+| 3 | [Dependency Graph](dependency-graph.md) | When a package is quarantined, show blast radius. "litellm is quarantined — these 14 projects depend on it." | Medium — parse dependency metadata, graph storage + UI | SBOM (done) |
 
-**Why this order:** Provenance is the strongest defense against the LiteLLM-class attack (compromised maintainer account), but implementation is non-trivial. SBOM is almost free thanks to Trivy and unlocks the next two features. License policy is simple once you have SBOM. Dependency graph is the most complex here but extremely useful for incident response.
+**Why this order:** Provenance is the strongest defense against the LiteLLM-class attack (compromised maintainer account), but implementation is non-trivial. Dependency graph builds on the existing SBOM data and is extremely useful for incident response.
 
-### Tier 3 — Enterprise & compliance (v1.4)
+### Tier 3 — Enterprise & compliance
 
 These matter when you have 20+ developers, auditors asking questions, or a SOC team. Smaller teams can skip or defer these.
 
 | # | Feature | Who needs it | Effort | Deps |
 |---|---|---|---|---|
-| 9 | [RBAC](rbac.md) | Teams with >5 people who shouldn't all be admins. Four roles: viewer, operator, policy-approver, admin. | Medium — middleware, DB table, role mapping from OIDC claims | OIDC (done) |
-| 10 | [Compliance Reporting](compliance-reporting.md) | Anyone facing SOC 2, ISO 27001, NIST SSDF, or EU CRA audits. Auto-generated evidence mapped to framework controls. | Medium — report generation, PDF/HTML export, scheduling | Audit log (done) |
-| 11 | [SIEM Integration](siem-integration.md) | Teams with Splunk, Elastic, or Sentinel. Native event formatting (CIM, ECS, CEF). | Low-Medium — new alert dispatcher, per-platform formatters | Alerting (done) |
-| 12 | [SCIM Provisioning](scim-provisioning.md) | Organizations with 50+ users using Entra ID, Okta, Google. Auto-sync users/groups. | High — full SCIM 2.0 server implementation | RBAC |
+| 4 | [RBAC](rbac.md) | Teams with >5 people who shouldn't all be admins. Four roles: viewer, operator, policy-approver, admin. | Medium — middleware, DB table, role mapping from OIDC claims | OIDC (done) |
+| 5 | [Compliance Reporting](compliance-reporting.md) | Anyone facing SOC 2, ISO 27001, NIST SSDF, or EU CRA audits. Auto-generated evidence mapped to framework controls. | Medium — report generation, PDF/HTML export, scheduling | Audit log (done) |
+| 6 | [SIEM Integration](siem-integration.md) | Teams with Splunk, Elastic, or Sentinel. Native event formatting (CIM, ECS, CEF). | Low-Medium — new alert dispatcher, per-platform formatters | Alerting (done) |
+| 7 | [SCIM Provisioning](scim-provisioning.md) | Organizations with 50+ users using Entra ID, Okta, Google. Auto-sync users/groups. | High — full SCIM 2.0 server implementation | RBAC |
 
 **Why this order:** RBAC is the minimum viable access control. Compliance reporting is increasingly non-optional even for smaller companies (EU CRA). SIEM is straightforward once alerting exists. SCIM is pure enterprise — skip until you have an IdP with hundreds of users.
 
 > For advanced scenarios (v2.0+) — Policy-as-Code, Air-Gapped Mode, Federation, Threat Feed Contributions — see [Future Features](index-future.md).
 
-## Priority Matrix
-
-```
-                        High security impact
-                              │
-       Typosquatting ●        │         ● Version Diff
-                              │
-    Maintainer Risk ●         │       ● Package Provenance
-                              │
-              CLI ●           │     ● SBOM
-                              │
-         License ●            │  ● Dep Graph
-                              │
-Low effort ───────────────────┼──────────────────── High effort
-                              │
-          SIEM ●              │    ● RBAC
-                              │
-  Compliance Reporting ●      │         ● OPA Policy
-                              │
-                              │     ● SCIM
-                              │
-                              │           ● Air-Gap
-                              │
-                              │            ● Federation
-                              │
-                        Low security impact
-                       (but high operational value)
-```
-
 ## Dependency Graph
 
 ```
 No dependencies — start any time:
-  ● Typosquatting Detection
-  ● Maintainer Risk Scoring
   ● Package Provenance
-
-Cache (done)
-  ├──▶ Version Diff Analysis
-  └──▶ Air-Gapped Mode (future)
 
 Admin API + PAT (done)
   └──▶ CLI & CI/CD Integration
 
-Trivy (done)
-  └──▶ SBOM Generation
-        ├──▶ License Policy
-        └──▶ Dependency Graph
+SBOM (done)
+  └──▶ Dependency Graph
 
 OIDC Auth (done)
   └──▶ RBAC
         ├──▶ SCIM Provisioning
         └──▶ SIEM Integration (recommended, not required)
 
-Audit Log (done) + SBOM (recommended)
+Audit Log (done) + SBOM (done)
   └──▶ Compliance Reporting
 ```
 
 ## Implementation Notes
 
-- **Parallelism:** Tier 1 features have no mutual dependencies. All four can be developed simultaneously by different contributors.
-- **Quick wins:** Typosquatting detection and SBOM generation are the lowest-effort features with immediate value. Good candidates for a first community contribution.
 - **Incremental delivery:** Every feature is self-contained. Ship each one independently — no need to wait for a full tier to complete.
 - **Patterns:** All features should follow existing conventions: structured JSON logging (`zerolog`), audit trail entries, Prometheus metrics, fail-open semantics where applicable, compile-time interface checks.
-- **Testing:** Each feature needs unit + integration tests. Scanner features need test fixtures with known-good and known-bad samples.
+- **Testing:** Each feature needs unit + integration tests plus E2E coverage. Scanner features need test fixtures with known-good and known-bad samples.

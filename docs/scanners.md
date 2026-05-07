@@ -92,7 +92,7 @@ The typosquat scanner (`builtin-typosquat`) detects supply chain attacks based o
 3. **Combosquatting** — Detects popular names concatenated with common suffixes (`-utils`, `-helper`, `-lib`, `-dev`, `-tool`, `-sdk`).
 4. **Namespace confusion** — Flags packages matching configured internal namespace prefixes fetched from public registries.
 
-The scanner seeds the `popular_packages` table from embedded data on first run. All checks run in <1ms with no file I/O. Configuration is under `scanners.typosquat` in `config.yaml` — see the [feature documentation](features/typosquatting-detection.md) for details.
+The scanner seeds the `popular_packages` table from embedded data on first run. All checks run in <1ms with no file I/O. Configuration is under `scanners.typosquat` in `config.yaml` — see [config.example.yaml](../config.example.yaml) for the full reference.
 
 **Override workflow.** Typosquat blocks happen at metadata-fetch time, before the artifact is downloaded. To keep parity with other scanners, blocked packages are persisted as quarantined artifacts so admins can review and release them from the Artifacts pane. Synthetic typosquat rows **always** carry `version="*"` (regardless of whether the request was name-only or version-scoped) because typosquat detection is name-based and the override scope is therefore always package-wide. Clicking **Release** on a typosquat row creates a **package-scoped** policy override, which the pre-scan path consults on every subsequent request — a future version of the same name will not re-block. To apply a tighter scope, revoke the package override and create a manual version-scoped override. See [policy.md](policy.md#policy-overrides) for the override lifecycle.
 
@@ -388,7 +388,7 @@ scanners:
       # ... (14 signals total, see config.example.yaml for full list)
 ```
 
-See [feature documentation](features/maintainer-risk-scoring.md) for design rationale and ecosystem metadata availability matrix.
+See [config.example.yaml](../config.example.yaml) for the full signal reference and ecosystem metadata availability.
 
 ## Scan Result Aggregation
 

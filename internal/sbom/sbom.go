@@ -10,7 +10,8 @@
 //   - Recording DB metadata (artifact_id → blob_path, size, licenses,
 //     component count, generator).
 //
-// See docs/features/sbom-generation.md for the user-facing description.
+// See docs/scanners.md and the `sbom` block in config.example.yaml for the
+// user-facing description.
 package sbom
 
 import (

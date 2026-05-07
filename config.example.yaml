@@ -250,7 +250,7 @@ policy:
     exclude_tags: ["latest", "nightly", "dev"]
     check_on_cache_hit: false        # adds latency to cache hits; use rescan scheduler instead
   # License policy — blocks/warns artifacts based on SPDX IDs extracted
-  # from the SBOM. Requires sbom.enabled=true. See docs/features/license-policy.md.
+  # from the SBOM. Requires sbom.enabled=true. See docs/policy.md.
   licenses:
     enabled: false
     blocked: []                      # e.g. ["GPL-3.0-only", "AGPL-3.0-only"]
@@ -308,7 +308,7 @@ proxy_auth:
 
 # Project registry — per-team / per-service segmentation of proxy usage.
 # The Basic auth USERNAME is interpreted as the project label (lowercased +
-# regex-validated). See docs/features/projects.md.
+# regex-validated). See docs/index.md#client-authentication--how-basic-auth-maps-to-projects-v12.
 projects:
   mode: "lazy"                 # "lazy" (auto-create) | "strict" (reject unknown)
   default_label: "default"     # Fallback for empty Basic auth username
@@ -329,7 +329,7 @@ projects:
     - ci-bot                 # generic CI/E2E identity
 
 # SBOM generation — when enabled, Trivy emits CycloneDX output including
-# licenses. See docs/features/sbom-generation.md.
+# licenses. See docs/scanners.md.
 sbom:
   enabled: false               # Set true to generate + persist CycloneDX SBOMs
   format: "cyclonedx-json"

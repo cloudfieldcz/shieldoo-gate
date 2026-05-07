@@ -92,7 +92,7 @@ out of the box — even in strict mode.
 
 ## Docker Registry Proxy
 
-Shieldoo Gate also proxies Docker images on port `5002`. Docker registry configuration is more involved (requires daemon config changes + `docker login localhost:5002 -u <project> --password-stdin`), so there is no standalone example here. See the [Docker adapter documentation](../docs/adapters.md#docker-adapter) and [projects feature doc](../docs/features/projects.md) for details.
+Shieldoo Gate also proxies Docker images on port `5002`. Docker registry configuration is more involved (requires daemon config changes + `docker login localhost:5002 -u <project> --password-stdin`), so there is no standalone example here. See the [Docker adapter documentation](../docs/adapters.md#docker-adapter) and the [project authentication overview](../docs/index.md#client-authentication--how-basic-auth-maps-to-projects-v12) for details.
 
 ## macOS Note
 

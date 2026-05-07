@@ -152,8 +152,9 @@ echo $SGW_TOKEN | docker login localhost:5002 -u $PROJECT --password-stdin
 ```
 
 In **lazy** mode (default) a new label auto-creates a project. In **strict** mode the
-project must be pre-created via `POST /api/v1/projects`. Full details:
-[docs/features/projects.md](docs/features/projects.md).
+project must be pre-created via `POST /api/v1/projects`. See the
+[main docs](docs/index.md#client-authentication--how-basic-auth-maps-to-projects-v12)
+for full details.
 
 Port reference:
 

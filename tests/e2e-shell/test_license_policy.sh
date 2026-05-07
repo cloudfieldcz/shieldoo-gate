@@ -430,7 +430,7 @@ test_license_rubygems() {
         log_pass "RubyGems: Apache-2.0 'aws-sdk-core 3.214.0' BLOCKED (403)"
         _lic_audit_block_present "RubyGems" "$pid"
     elif [ "$blocked_status" = "200" ]; then
-        log_skip "RubyGems: Apache-2.0 'aws-sdk-core 3.214.0' was served (license extraction from .gem is best-effort — see docs/features/sbom-generation.md)"
+        log_skip "RubyGems: Apache-2.0 'aws-sdk-core 3.214.0' was served (license extraction from .gem is best-effort — see docs/scanners.md)"
     else
         log_fail "RubyGems: 'aws-sdk-core 3.214.0' returned unexpected ${blocked_status}"
     fi
