@@ -44,6 +44,8 @@ source "${SCRIPT_DIR}/test_gomod.sh"
 source "${SCRIPT_DIR}/test_api.sh"
 source "${SCRIPT_DIR}/test_ai_scanner.sh"
 source "${SCRIPT_DIR}/test_version_diff.sh"
+source "${SCRIPT_DIR}/test_vuln_scan_negative.sh"
+source "${SCRIPT_DIR}/test_vuln_scan_lifecycle.sh"
 
 check_prereqs() {
     local missing=()
@@ -119,6 +121,8 @@ main() {
     test_api
     test_ai_scanner
     test_version_diff
+    test_vuln_scan_negative
+    test_vuln_scan_lifecycle
 
     # 6. Summary
     print_summary

@@ -158,6 +158,48 @@ func TestRevokeProjectOverride_MarksRowAndAudits(t *testing.T) {
 	assert.Equal(t, 1, revokeAudit)
 }
 
+func TestListProjectOverrides_ReturnsOnlyOwnProjectRows(t *testing.T) {
+	srv, _, svc := newTestServerWithProjects(t)
+	a := seedProject(t, svc, "acme")
+	b := seedProject(t, svc, "beta")
+
+	// Two overrides on project A and one on project B.
+	for _, name := range []string{"left-pad", "lodash"} {
+		resp := doJSON(t, srv, http.MethodPost, fmt.Sprintf("/api/v1/projects/%d/overrides", a),
+			map[string]string{"ecosystem": "npm", "name": name, "scope": "package", "kind": "allow", "reason": "test"})
+		require.Equal(t, http.StatusCreated, resp.Code)
+	}
+	resp := doJSON(t, srv, http.MethodPost, fmt.Sprintf("/api/v1/projects/%d/overrides", b),
+		map[string]string{"ecosystem": "pypi", "name": "requests", "scope": "package", "kind": "deny", "reason": "test"})
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	// GET project A.
+	resp = doRequest(t, srv, http.MethodGet, fmt.Sprintf("/api/v1/projects/%d/overrides", a), nil)
+	require.Equal(t, http.StatusOK, resp.Code, resp.Body.String())
+	var got struct {
+		Items []map[string]any `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &got))
+	require.Len(t, got.Items, 2)
+	for _, row := range got.Items {
+		assert.EqualValues(t, a, row["project_id"], "row leaked across projects: %+v", row)
+	}
+
+	// GET project B returns only the one row.
+	resp = doRequest(t, srv, http.MethodGet, fmt.Sprintf("/api/v1/projects/%d/overrides", b), nil)
+	require.Equal(t, http.StatusOK, resp.Code)
+	require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &got))
+	require.Len(t, got.Items, 1)
+	assert.Equal(t, "requests", got.Items[0]["name"])
+	assert.Equal(t, "deny", got.Items[0]["kind"])
+}
+
+func TestListProjectOverrides_UnknownProject_Returns404(t *testing.T) {
+	srv, _, _ := newTestServerWithProjects(t)
+	resp := doRequest(t, srv, http.MethodGet, "/api/v1/projects/9999/overrides", nil)
+	assert.Equal(t, http.StatusNotFound, resp.Code)
+}
+
 func TestRevokeProjectOverride_OtherProject_Returns404(t *testing.T) {
 	srv, _, svc := newTestServerWithProjects(t)
 	a := seedProject(t, svc, "acme")

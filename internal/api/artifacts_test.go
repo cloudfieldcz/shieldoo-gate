@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -575,4 +576,74 @@ func TestHandleListArtifacts_OrderByName_ReturnsAlphabetical(t *testing.T) {
 	assert.Equal(t, "aiohttp", items[0].(map[string]any)["name"])
 	assert.Equal(t, "flask", items[1].(map[string]any)["name"])
 	assert.Equal(t, "zlib", items[2].(map[string]any)["name"])
+}
+
+// TestHandleReleaseArtifact_LicenseBlocked_Returns409WithHint locks in the
+// license-block guard: a global Release on an artifact whose quarantine_reason
+// is license-flavored must 409 with a project-scope hint, and must NOT write
+// any policy_overrides row. License decisions are project-scoped; releasing
+// globally would have the wrong blast radius.
+func TestHandleReleaseArtifact_LicenseBlocked_Returns409WithHint(t *testing.T) {
+	srv, db := newTestServer(t)
+	insertTestArtifact(t, db, "npm:gpltool:1.0", "npm", "gpltool", "1.0")
+
+	now := time.Now().UTC()
+	_, err := db.Exec(
+		`INSERT INTO artifact_status (artifact_id, status, quarantine_reason, quarantined_at)
+		 VALUES (?, 'QUARANTINED', 'license policy: GPL-3.0-only blocked', ?)`,
+		"npm:gpltool:1.0", now,
+	)
+	require.NoError(t, err)
+
+	router := srv.Routes()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts/npm:gpltool:1.0/release", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	assert.Equal(t, "license_block_requires_project_scope", body["error"])
+	require.NotNil(t, body["next_action"], "missing next_action hint")
+	hint, _ := body["next_action"].(map[string]any)
+	require.NotNil(t, hint, "next_action must be an object")
+	assert.Equal(t, "release_per_project", hint["type"], "next_action.type must be release_per_project")
+	assert.Contains(t, hint["hint"], "project")
+
+	// No global override row was written for the license-blocked artifact.
+	var n int
+	require.NoError(t, db.QueryRow(
+		`SELECT COUNT(*) FROM policy_overrides WHERE name = 'gpltool' AND project_id IS NULL AND revoked = FALSE`,
+	).Scan(&n))
+	assert.Equal(t, 0, n, "license-block release wrote %d global override(s); want 0", n)
+}
+
+// TestHandleReleaseArtifact_NonLicenseBlock_StillReleasesGlobally verifies
+// that the license-block branch is narrow: a typosquat or scanner-verdict
+// quarantine still releases globally as before.
+func TestHandleReleaseArtifact_NonLicenseBlock_StillReleasesGlobally(t *testing.T) {
+	srv, db := newTestServer(t)
+	insertTestArtifact(t, db, "npm:lodsah:any", "npm", "lodsah", "*")
+
+	now := time.Now().UTC()
+	_, err := db.Exec(
+		`INSERT INTO artifact_status (artifact_id, status, quarantine_reason, quarantined_at)
+		 VALUES (?, 'QUARANTINED', 'typosquat: lodsah ~ lodash', ?)`,
+		"npm:lodsah:any", now,
+	)
+	require.NoError(t, err)
+
+	router := srv.Routes()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/artifacts/npm:lodsah:any/release", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	var n int
+	require.NoError(t, db.QueryRow(
+		`SELECT COUNT(*) FROM policy_overrides WHERE name = 'lodsah' AND project_id IS NULL AND revoked = FALSE`,
+	).Scan(&n))
+	assert.Equal(t, 1, n, "expected 1 global override row for non-license release")
 }

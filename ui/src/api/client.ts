@@ -137,8 +137,10 @@ export const userApi = {
 
 export const apiKeysApi = {
   list: () => api.get<APIKey[]>('/api-keys').then((r) => r.data),
-  create: (name: string) =>
-    api.post<APIKeyCreateResponse>('/api-keys', { name }).then((r) => r.data),
+  create: (name: string, scopes?: string[]) =>
+    api
+      .post<APIKeyCreateResponse>('/api-keys', { name, scopes })
+      .then((r) => r.data),
   revoke: (id: number) => api.delete(`/api-keys/${id}`),
 }
 
@@ -187,6 +189,37 @@ export const projectsApi = {
   /** Whitelist (kind=allow) or blacklist (kind=deny) a package for this project. */
   createOverride: (id: number, body: ProjectOverrideRequest) =>
     api.post<ProjectOverride>(`/projects/${id}/overrides`, body).then((r) => r.data),
+
+  /** List per-project overrides (active + revoked). */
+  listOverrides: (id: number) =>
+    api
+      .get<{ items: ProjectOverride[] }>(`/projects/${id}/overrides`)
+      .then((r) => r.data.items ?? []),
+
+  /**
+   * Convenience helper for releasing a license-blocked artifact for one
+   * project: writes a kind=allow override scoped to the exact version when
+   * provided, package-scope otherwise. Mirrors the global Release semantics
+   * for license-flavoured quarantines (the global endpoint refuses these
+   * with 409 + a project-scope hint — see internal/api/artifacts.go).
+   */
+  releaseLicenseBlocked: (
+    id: number,
+    ecosystem: string,
+    name: string,
+    version: string | null,
+    reason: string,
+  ) =>
+    api
+      .post<ProjectOverride>(`/projects/${id}/overrides`, {
+        ecosystem,
+        name,
+        version: version ?? '',
+        scope: version ? 'version' : 'package',
+        kind: 'allow',
+        reason,
+      })
+      .then((r) => r.data),
 
   /** Revoke an active per-project override (idempotent). */
   revokeOverride: (id: number, overrideId: number, reason: string) =>

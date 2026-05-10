@@ -1,7 +1,9 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { statsApi, healthApi, configApi } from '../api/client'
-import { AlertTriangle, Package, ShieldX, Archive, Activity, ShieldCheck, Clock, Ban, BookOpen, ChevronDown, ChevronUp, Terminal, RefreshCw, ShieldAlert } from 'lucide-react'
+import { vulnApi } from '../api/vulnerabilities'
+import { AlertTriangle, Package, ShieldX, Archive, Activity, ShieldCheck, Clock, Ban, BookOpen, ChevronDown, ChevronUp, Terminal, RefreshCw, ShieldAlert, Bug, Hourglass } from 'lucide-react'
 import type { PublicURLs } from '../api/types'
 import {
   ResponsiveContainer,
@@ -53,6 +55,13 @@ export default function Dashboard() {
   const statsQuery = useQuery({ queryKey: ['stats-summary'], queryFn: statsApi.summary, retry: 1 })
   const healthQuery = useQuery({ queryKey: ['health'], queryFn: healthApi.check, retry: 1 })
   const urlsQuery = useQuery({ queryKey: ['public-urls'], queryFn: configApi.publicURLs, retry: 1 })
+  // Vuln summary is opt-in (404 when vuln_scan disabled). retry:false keeps the card hidden gracefully.
+  const vulnQuery = useQuery({
+    queryKey: ['vuln-summary'],
+    queryFn: vulnApi.summary,
+    retry: false,
+    staleTime: 30_000,
+  })
 
   const stats = statsQuery.data
   const health = healthQuery.data
@@ -157,6 +166,24 @@ export default function Dashboard() {
           />
         </div>
       </div>
+
+      {/* Vulnerabilities section (only renders when feature is enabled — 404 hides it) */}
+      {vulnQuery.isSuccess && vulnQuery.data && (
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider">Vulnerabilities</h2>
+            <Link to="/vulnerabilities" className="text-xs text-blue-600 hover:underline">View all →</Link>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3">
+            <StatCard label="Critical"   value={vulnQuery.data.total_critical} icon={ShieldX}        color="bg-red-600" />
+            <StatCard label="High"       value={vulnQuery.data.total_high}     icon={ShieldAlert}    color="bg-orange-500" />
+            <StatCard label="Medium"     value={vulnQuery.data.total_medium}   icon={AlertTriangle}  color="bg-yellow-500" />
+            <StatCard label="Low"        value={vulnQuery.data.total_low}      icon={Bug}            color="bg-blue-400" />
+            <StatCard label="New CRIT"   value={vulnQuery.data.components_new_critical} icon={Bug}    color="bg-red-500" />
+            <StatCard label="Stale"      value={vulnQuery.data.stale_components}        icon={Hourglass} color="bg-gray-500" />
+          </div>
+        </div>
+      )}
 
       {/* Traffic chart */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">

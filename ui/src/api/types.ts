@@ -176,6 +176,7 @@ export interface APIKey {
   enabled: boolean
   created_at: string
   last_used_at?: string
+  scopes?: string
 }
 
 export interface PublicURLs {
@@ -194,8 +195,25 @@ export interface APIKeyCreateResponse {
   owner_email: string
   enabled: boolean
   created_at: string
+  scopes?: string[]
   token: string
 }
+
+/**
+ * Canonical scope tokens. Mirrors model.AllScopes in Go.
+ * proxy:fetch — required for Basic-auth proxy traffic
+ * scan:upload — required for POST .../components/{name}/scans
+ * admin:read  — read-only admin API access (artifacts, audit, vulns)
+ * admin:write — write admin API access (overrides, ignores, deletes)
+ */
+export type APIKeyScope = 'proxy:fetch' | 'scan:upload' | 'admin:read' | 'admin:write'
+
+export const ALL_SCOPES: APIKeyScope[] = [
+  'proxy:fetch',
+  'scan:upload',
+  'admin:read',
+  'admin:write',
+]
 
 // ---- v1.2+ projects & license policy ------------------------------------
 

@@ -555,6 +555,174 @@ func (x *TriageResponse) GetTokensUsed() int32 {
 	return 0
 }
 
+type DraftIgnoreReasonRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ComponentId    int64                  `protobuf:"varint,1,opt,name=component_id,json=componentId,proto3" json:"component_id,omitempty"`
+	CveId          string                 `protobuf:"bytes,2,opt,name=cve_id,json=cveId,proto3" json:"cve_id,omitempty"`
+	PackageName    string                 `protobuf:"bytes,3,opt,name=package_name,json=packageName,proto3" json:"package_name,omitempty"`
+	PackageVersion string                 `protobuf:"bytes,4,opt,name=package_version,json=packageVersion,proto3" json:"package_version,omitempty"`
+	Ecosystem      string                 `protobuf:"bytes,5,opt,name=ecosystem,proto3" json:"ecosystem,omitempty"`
+	CveSummary     string                 `protobuf:"bytes,6,opt,name=cve_summary,json=cveSummary,proto3" json:"cve_summary,omitempty"`          // OSV summary (~200 chars), already sanitized
+	RepoUrl        string                 `protobuf:"bytes,7,opt,name=repo_url,json=repoUrl,proto3" json:"repo_url,omitempty"`                   // optional; bridge SSRF-guards before fetching
+	OperatorEmail  string                 `protobuf:"bytes,8,opt,name=operator_email,json=operatorEmail,proto3" json:"operator_email,omitempty"` // for audit/log only — never sent to LLM
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *DraftIgnoreReasonRequest) Reset() {
+	*x = DraftIgnoreReasonRequest{}
+	mi := &file_scanner_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DraftIgnoreReasonRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DraftIgnoreReasonRequest) ProtoMessage() {}
+
+func (x *DraftIgnoreReasonRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_scanner_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DraftIgnoreReasonRequest.ProtoReflect.Descriptor instead.
+func (*DraftIgnoreReasonRequest) Descriptor() ([]byte, []int) {
+	return file_scanner_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *DraftIgnoreReasonRequest) GetComponentId() int64 {
+	if x != nil {
+		return x.ComponentId
+	}
+	return 0
+}
+
+func (x *DraftIgnoreReasonRequest) GetCveId() string {
+	if x != nil {
+		return x.CveId
+	}
+	return ""
+}
+
+func (x *DraftIgnoreReasonRequest) GetPackageName() string {
+	if x != nil {
+		return x.PackageName
+	}
+	return ""
+}
+
+func (x *DraftIgnoreReasonRequest) GetPackageVersion() string {
+	if x != nil {
+		return x.PackageVersion
+	}
+	return ""
+}
+
+func (x *DraftIgnoreReasonRequest) GetEcosystem() string {
+	if x != nil {
+		return x.Ecosystem
+	}
+	return ""
+}
+
+func (x *DraftIgnoreReasonRequest) GetCveSummary() string {
+	if x != nil {
+		return x.CveSummary
+	}
+	return ""
+}
+
+func (x *DraftIgnoreReasonRequest) GetRepoUrl() string {
+	if x != nil {
+		return x.RepoUrl
+	}
+	return ""
+}
+
+func (x *DraftIgnoreReasonRequest) GetOperatorEmail() string {
+	if x != nil {
+		return x.OperatorEmail
+	}
+	return ""
+}
+
+type DraftIgnoreReasonResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Reason        string                 `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"` // 1-2 sentence justification (max 500 chars)
+	ModelUsed     string                 `protobuf:"bytes,2,opt,name=model_used,json=modelUsed,proto3" json:"model_used,omitempty"`
+	TokensUsed    int32                  `protobuf:"varint,3,opt,name=tokens_used,json=tokensUsed,proto3" json:"tokens_used,omitempty"`
+	FromCache     bool                   `protobuf:"varint,4,opt,name=from_cache,json=fromCache,proto3" json:"from_cache,omitempty"` // sidecar may serve recent identical drafts from a cache
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DraftIgnoreReasonResponse) Reset() {
+	*x = DraftIgnoreReasonResponse{}
+	mi := &file_scanner_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DraftIgnoreReasonResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DraftIgnoreReasonResponse) ProtoMessage() {}
+
+func (x *DraftIgnoreReasonResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_scanner_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DraftIgnoreReasonResponse.ProtoReflect.Descriptor instead.
+func (*DraftIgnoreReasonResponse) Descriptor() ([]byte, []int) {
+	return file_scanner_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *DraftIgnoreReasonResponse) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *DraftIgnoreReasonResponse) GetModelUsed() string {
+	if x != nil {
+		return x.ModelUsed
+	}
+	return ""
+}
+
+func (x *DraftIgnoreReasonResponse) GetTokensUsed() int32 {
+	if x != nil {
+		return x.TokensUsed
+	}
+	return 0
+}
+
+func (x *DraftIgnoreReasonResponse) GetFromCache() bool {
+	if x != nil {
+		return x.FromCache
+	}
+	return false
+}
+
 type HealthRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -563,7 +731,7 @@ type HealthRequest struct {
 
 func (x *HealthRequest) Reset() {
 	*x = HealthRequest{}
-	mi := &file_scanner_proto_msgTypes[7]
+	mi := &file_scanner_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -575,7 +743,7 @@ func (x *HealthRequest) String() string {
 func (*HealthRequest) ProtoMessage() {}
 
 func (x *HealthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_scanner_proto_msgTypes[7]
+	mi := &file_scanner_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -588,7 +756,7 @@ func (x *HealthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthRequest.ProtoReflect.Descriptor instead.
 func (*HealthRequest) Descriptor() ([]byte, []int) {
-	return file_scanner_proto_rawDescGZIP(), []int{7}
+	return file_scanner_proto_rawDescGZIP(), []int{9}
 }
 
 type HealthResponse struct {
@@ -601,7 +769,7 @@ type HealthResponse struct {
 
 func (x *HealthResponse) Reset() {
 	*x = HealthResponse{}
-	mi := &file_scanner_proto_msgTypes[8]
+	mi := &file_scanner_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -613,7 +781,7 @@ func (x *HealthResponse) String() string {
 func (*HealthResponse) ProtoMessage() {}
 
 func (x *HealthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_scanner_proto_msgTypes[8]
+	mi := &file_scanner_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -626,7 +794,7 @@ func (x *HealthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthResponse.ProtoReflect.Descriptor instead.
 func (*HealthResponse) Descriptor() ([]byte, []int) {
-	return file_scanner_proto_rawDescGZIP(), []int{8}
+	return file_scanner_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *HealthResponse) GetHealthy() bool {
@@ -646,13 +814,13 @@ func (x *HealthResponse) GetVersion() string {
 type DiffScanRequest struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	ArtifactId         string                 `protobuf:"bytes,1,opt,name=artifact_id,json=artifactId,proto3" json:"artifact_id,omitempty"`
-	Ecosystem          string                 `protobuf:"bytes,2,opt,name=ecosystem,proto3" json:"ecosystem,omitempty"` // pypi, npm, nuget, maven, rubygems, go
+	Ecosystem          string                 `protobuf:"bytes,2,opt,name=ecosystem,proto3" json:"ecosystem,omitempty"` // pypi, npm, nuget, maven, rubygems, go (go added vs AIScanRequest — diff scanning supported for Go modules)
 	Name               string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
 	Version            string                 `protobuf:"bytes,4,opt,name=version,proto3" json:"version,omitempty"`
 	PreviousVersion    string                 `protobuf:"bytes,5,opt,name=previous_version,json=previousVersion,proto3" json:"previous_version,omitempty"`
-	LocalPath          string                 `protobuf:"bytes,6,opt,name=local_path,json=localPath,proto3" json:"local_path,omitempty"`          // path to NEW artifact on disk (in shared volume)
-	PreviousPath       string                 `protobuf:"bytes,7,opt,name=previous_path,json=previousPath,proto3" json:"previous_path,omitempty"` // path to PREVIOUS artifact on disk
-	OriginalFilename   string                 `protobuf:"bytes,8,opt,name=original_filename,json=originalFilename,proto3" json:"original_filename,omitempty"`
+	LocalPath          string                 `protobuf:"bytes,6,opt,name=local_path,json=localPath,proto3" json:"local_path,omitempty"`                               // path to NEW artifact on disk (in shared volume)
+	PreviousPath       string                 `protobuf:"bytes,7,opt,name=previous_path,json=previousPath,proto3" json:"previous_path,omitempty"`                      // path to PREVIOUS artifact on disk
+	OriginalFilename   string                 `protobuf:"bytes,8,opt,name=original_filename,json=originalFilename,proto3" json:"original_filename,omitempty"`          // original filename of the NEW artifact (e.g. "requests-2.32.3-py3-none-any.whl")
 	LocalPathSha256    string                 `protobuf:"bytes,9,opt,name=local_path_sha256,json=localPathSha256,proto3" json:"local_path_sha256,omitempty"`           // expected hash, bridge re-verifies before extraction (TOCTOU)
 	PreviousPathSha256 string                 `protobuf:"bytes,10,opt,name=previous_path_sha256,json=previousPathSha256,proto3" json:"previous_path_sha256,omitempty"` // expected hash, bridge re-verifies before extraction
 	PromptVersion      string                 `protobuf:"bytes,11,opt,name=prompt_version,json=promptVersion,proto3" json:"prompt_version,omitempty"`                  // SHA256[:12] of system prompt — bridge attaches to response
@@ -662,7 +830,7 @@ type DiffScanRequest struct {
 
 func (x *DiffScanRequest) Reset() {
 	*x = DiffScanRequest{}
-	mi := &file_scanner_proto_msgTypes[9]
+	mi := &file_scanner_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -674,7 +842,7 @@ func (x *DiffScanRequest) String() string {
 func (*DiffScanRequest) ProtoMessage() {}
 
 func (x *DiffScanRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_scanner_proto_msgTypes[9]
+	mi := &file_scanner_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -687,7 +855,7 @@ func (x *DiffScanRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiffScanRequest.ProtoReflect.Descriptor instead.
 func (*DiffScanRequest) Descriptor() ([]byte, []int) {
-	return file_scanner_proto_rawDescGZIP(), []int{9}
+	return file_scanner_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *DiffScanRequest) GetArtifactId() string {
@@ -786,7 +954,7 @@ type DiffScanResponse struct {
 
 func (x *DiffScanResponse) Reset() {
 	*x = DiffScanResponse{}
-	mi := &file_scanner_proto_msgTypes[10]
+	mi := &file_scanner_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -798,7 +966,7 @@ func (x *DiffScanResponse) String() string {
 func (*DiffScanResponse) ProtoMessage() {}
 
 func (x *DiffScanResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_scanner_proto_msgTypes[10]
+	mi := &file_scanner_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -811,7 +979,7 @@ func (x *DiffScanResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiffScanResponse.ProtoReflect.Descriptor instead.
 func (*DiffScanResponse) Descriptor() ([]byte, []int) {
-	return file_scanner_proto_rawDescGZIP(), []int{10}
+	return file_scanner_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *DiffScanResponse) GetVerdict() string {
@@ -950,7 +1118,25 @@ const file_scanner_proto_rawDesc = "" +
 	"\n" +
 	"model_used\x18\x04 \x01(\tR\tmodelUsed\x12\x1f\n" +
 	"\vtokens_used\x18\x05 \x01(\x05R\n" +
-	"tokensUsed\"\x0f\n" +
+	"tokensUsed\"\xa1\x02\n" +
+	"\x18DraftIgnoreReasonRequest\x12!\n" +
+	"\fcomponent_id\x18\x01 \x01(\x03R\vcomponentId\x12\x15\n" +
+	"\x06cve_id\x18\x02 \x01(\tR\x05cveId\x12!\n" +
+	"\fpackage_name\x18\x03 \x01(\tR\vpackageName\x12'\n" +
+	"\x0fpackage_version\x18\x04 \x01(\tR\x0epackageVersion\x12\x1c\n" +
+	"\tecosystem\x18\x05 \x01(\tR\tecosystem\x12\x1f\n" +
+	"\vcve_summary\x18\x06 \x01(\tR\n" +
+	"cveSummary\x12\x19\n" +
+	"\brepo_url\x18\a \x01(\tR\arepoUrl\x12%\n" +
+	"\x0eoperator_email\x18\b \x01(\tR\roperatorEmail\"\x92\x01\n" +
+	"\x19DraftIgnoreReasonResponse\x12\x16\n" +
+	"\x06reason\x18\x01 \x01(\tR\x06reason\x12\x1d\n" +
+	"\n" +
+	"model_used\x18\x02 \x01(\tR\tmodelUsed\x12\x1f\n" +
+	"\vtokens_used\x18\x03 \x01(\x05R\n" +
+	"tokensUsed\x12\x1d\n" +
+	"\n" +
+	"from_cache\x18\x04 \x01(\bR\tfromCache\"\x0f\n" +
 	"\rHealthRequest\"D\n" +
 	"\x0eHealthResponse\x12\x18\n" +
 	"\ahealthy\x18\x01 \x01(\bR\ahealthy\x12\x18\n" +
@@ -987,12 +1173,13 @@ const file_scanner_proto_rawDesc = "" +
 	"\rfiles_removed\x18\t \x01(\x05R\ffilesRemoved\x12%\n" +
 	"\x0eprompt_version\x18\n" +
 	" \x01(\tR\rpromptVersion\x12'\n" +
-	"\x0finput_truncated\x18\v \x01(\bR\x0einputTruncated2\xdb\x02\n" +
+	"\x0finput_truncated\x18\v \x01(\bR\x0einputTruncated2\xb7\x03\n" +
 	"\rScannerBridge\x12;\n" +
 	"\fScanArtifact\x12\x14.scanner.ScanRequest\x1a\x15.scanner.ScanResponse\x12A\n" +
 	"\x0eScanArtifactAI\x12\x16.scanner.AIScanRequest\x1a\x17.scanner.AIScanResponse\x12G\n" +
 	"\x10ScanArtifactDiff\x12\x18.scanner.DiffScanRequest\x1a\x19.scanner.DiffScanResponse\x12A\n" +
-	"\x0eTriageFindings\x12\x16.scanner.TriageRequest\x1a\x17.scanner.TriageResponse\x12>\n" +
+	"\x0eTriageFindings\x12\x16.scanner.TriageRequest\x1a\x17.scanner.TriageResponse\x12Z\n" +
+	"\x11DraftIgnoreReason\x12!.scanner.DraftIgnoreReasonRequest\x1a\".scanner.DraftIgnoreReasonResponse\x12>\n" +
 	"\vHealthCheck\x12\x16.scanner.HealthRequest\x1a\x17.scanner.HealthResponseBGZEgithub.com/cloudfieldcz/shieldoo-gate/internal/scanner/guarddog/protob\x06proto3"
 
 var (
@@ -1007,35 +1194,39 @@ func file_scanner_proto_rawDescGZIP() []byte {
 	return file_scanner_proto_rawDescData
 }
 
-var file_scanner_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_scanner_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_scanner_proto_goTypes = []any{
-	(*AIScanRequest)(nil),    // 0: scanner.AIScanRequest
-	(*AIScanResponse)(nil),   // 1: scanner.AIScanResponse
-	(*ScanRequest)(nil),      // 2: scanner.ScanRequest
-	(*ScanResponse)(nil),     // 3: scanner.ScanResponse
-	(*Finding)(nil),          // 4: scanner.Finding
-	(*TriageRequest)(nil),    // 5: scanner.TriageRequest
-	(*TriageResponse)(nil),   // 6: scanner.TriageResponse
-	(*HealthRequest)(nil),    // 7: scanner.HealthRequest
-	(*HealthResponse)(nil),   // 8: scanner.HealthResponse
-	(*DiffScanRequest)(nil),  // 9: scanner.DiffScanRequest
-	(*DiffScanResponse)(nil), // 10: scanner.DiffScanResponse
+	(*AIScanRequest)(nil),             // 0: scanner.AIScanRequest
+	(*AIScanResponse)(nil),            // 1: scanner.AIScanResponse
+	(*ScanRequest)(nil),               // 2: scanner.ScanRequest
+	(*ScanResponse)(nil),              // 3: scanner.ScanResponse
+	(*Finding)(nil),                   // 4: scanner.Finding
+	(*TriageRequest)(nil),             // 5: scanner.TriageRequest
+	(*TriageResponse)(nil),            // 6: scanner.TriageResponse
+	(*DraftIgnoreReasonRequest)(nil),  // 7: scanner.DraftIgnoreReasonRequest
+	(*DraftIgnoreReasonResponse)(nil), // 8: scanner.DraftIgnoreReasonResponse
+	(*HealthRequest)(nil),             // 9: scanner.HealthRequest
+	(*HealthResponse)(nil),            // 10: scanner.HealthResponse
+	(*DiffScanRequest)(nil),           // 11: scanner.DiffScanRequest
+	(*DiffScanResponse)(nil),          // 12: scanner.DiffScanResponse
 }
 var file_scanner_proto_depIdxs = []int32{
 	4,  // 0: scanner.ScanResponse.findings:type_name -> scanner.Finding
 	4,  // 1: scanner.TriageRequest.findings:type_name -> scanner.Finding
 	2,  // 2: scanner.ScannerBridge.ScanArtifact:input_type -> scanner.ScanRequest
 	0,  // 3: scanner.ScannerBridge.ScanArtifactAI:input_type -> scanner.AIScanRequest
-	9,  // 4: scanner.ScannerBridge.ScanArtifactDiff:input_type -> scanner.DiffScanRequest
+	11, // 4: scanner.ScannerBridge.ScanArtifactDiff:input_type -> scanner.DiffScanRequest
 	5,  // 5: scanner.ScannerBridge.TriageFindings:input_type -> scanner.TriageRequest
-	7,  // 6: scanner.ScannerBridge.HealthCheck:input_type -> scanner.HealthRequest
-	3,  // 7: scanner.ScannerBridge.ScanArtifact:output_type -> scanner.ScanResponse
-	1,  // 8: scanner.ScannerBridge.ScanArtifactAI:output_type -> scanner.AIScanResponse
-	10, // 9: scanner.ScannerBridge.ScanArtifactDiff:output_type -> scanner.DiffScanResponse
-	6,  // 10: scanner.ScannerBridge.TriageFindings:output_type -> scanner.TriageResponse
-	8,  // 11: scanner.ScannerBridge.HealthCheck:output_type -> scanner.HealthResponse
-	7,  // [7:12] is the sub-list for method output_type
-	2,  // [2:7] is the sub-list for method input_type
+	7,  // 6: scanner.ScannerBridge.DraftIgnoreReason:input_type -> scanner.DraftIgnoreReasonRequest
+	9,  // 7: scanner.ScannerBridge.HealthCheck:input_type -> scanner.HealthRequest
+	3,  // 8: scanner.ScannerBridge.ScanArtifact:output_type -> scanner.ScanResponse
+	1,  // 9: scanner.ScannerBridge.ScanArtifactAI:output_type -> scanner.AIScanResponse
+	12, // 10: scanner.ScannerBridge.ScanArtifactDiff:output_type -> scanner.DiffScanResponse
+	6,  // 11: scanner.ScannerBridge.TriageFindings:output_type -> scanner.TriageResponse
+	8,  // 12: scanner.ScannerBridge.DraftIgnoreReason:output_type -> scanner.DraftIgnoreReasonResponse
+	10, // 13: scanner.ScannerBridge.HealthCheck:output_type -> scanner.HealthResponse
+	8,  // [8:14] is the sub-list for method output_type
+	2,  // [2:8] is the sub-list for method input_type
 	2,  // [2:2] is the sub-list for extension type_name
 	2,  // [2:2] is the sub-list for extension extendee
 	0,  // [0:2] is the sub-list for field type_name
@@ -1052,7 +1243,7 @@ func file_scanner_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_scanner_proto_rawDesc), len(file_scanner_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   11,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

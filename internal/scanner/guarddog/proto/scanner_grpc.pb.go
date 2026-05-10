@@ -21,11 +21,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ScannerBridge_ScanArtifact_FullMethodName     = "/scanner.ScannerBridge/ScanArtifact"
-	ScannerBridge_ScanArtifactAI_FullMethodName   = "/scanner.ScannerBridge/ScanArtifactAI"
-	ScannerBridge_ScanArtifactDiff_FullMethodName = "/scanner.ScannerBridge/ScanArtifactDiff"
-	ScannerBridge_TriageFindings_FullMethodName   = "/scanner.ScannerBridge/TriageFindings"
-	ScannerBridge_HealthCheck_FullMethodName      = "/scanner.ScannerBridge/HealthCheck"
+	ScannerBridge_ScanArtifact_FullMethodName      = "/scanner.ScannerBridge/ScanArtifact"
+	ScannerBridge_ScanArtifactAI_FullMethodName    = "/scanner.ScannerBridge/ScanArtifactAI"
+	ScannerBridge_ScanArtifactDiff_FullMethodName  = "/scanner.ScannerBridge/ScanArtifactDiff"
+	ScannerBridge_TriageFindings_FullMethodName    = "/scanner.ScannerBridge/TriageFindings"
+	ScannerBridge_DraftIgnoreReason_FullMethodName = "/scanner.ScannerBridge/DraftIgnoreReason"
+	ScannerBridge_HealthCheck_FullMethodName       = "/scanner.ScannerBridge/HealthCheck"
 )
 
 // ScannerBridgeClient is the client API for ScannerBridge service.
@@ -36,6 +37,7 @@ type ScannerBridgeClient interface {
 	ScanArtifactAI(ctx context.Context, in *AIScanRequest, opts ...grpc.CallOption) (*AIScanResponse, error)
 	ScanArtifactDiff(ctx context.Context, in *DiffScanRequest, opts ...grpc.CallOption) (*DiffScanResponse, error)
 	TriageFindings(ctx context.Context, in *TriageRequest, opts ...grpc.CallOption) (*TriageResponse, error)
+	DraftIgnoreReason(ctx context.Context, in *DraftIgnoreReasonRequest, opts ...grpc.CallOption) (*DraftIgnoreReasonResponse, error)
 	HealthCheck(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error)
 }
 
@@ -87,6 +89,16 @@ func (c *scannerBridgeClient) TriageFindings(ctx context.Context, in *TriageRequ
 	return out, nil
 }
 
+func (c *scannerBridgeClient) DraftIgnoreReason(ctx context.Context, in *DraftIgnoreReasonRequest, opts ...grpc.CallOption) (*DraftIgnoreReasonResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DraftIgnoreReasonResponse)
+	err := c.cc.Invoke(ctx, ScannerBridge_DraftIgnoreReason_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *scannerBridgeClient) HealthCheck(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(HealthResponse)
@@ -105,6 +117,7 @@ type ScannerBridgeServer interface {
 	ScanArtifactAI(context.Context, *AIScanRequest) (*AIScanResponse, error)
 	ScanArtifactDiff(context.Context, *DiffScanRequest) (*DiffScanResponse, error)
 	TriageFindings(context.Context, *TriageRequest) (*TriageResponse, error)
+	DraftIgnoreReason(context.Context, *DraftIgnoreReasonRequest) (*DraftIgnoreReasonResponse, error)
 	HealthCheck(context.Context, *HealthRequest) (*HealthResponse, error)
 	mustEmbedUnimplementedScannerBridgeServer()
 }
@@ -127,6 +140,9 @@ func (UnimplementedScannerBridgeServer) ScanArtifactDiff(context.Context, *DiffS
 }
 func (UnimplementedScannerBridgeServer) TriageFindings(context.Context, *TriageRequest) (*TriageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TriageFindings not implemented")
+}
+func (UnimplementedScannerBridgeServer) DraftIgnoreReason(context.Context, *DraftIgnoreReasonRequest) (*DraftIgnoreReasonResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DraftIgnoreReason not implemented")
 }
 func (UnimplementedScannerBridgeServer) HealthCheck(context.Context, *HealthRequest) (*HealthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method HealthCheck not implemented")
@@ -224,6 +240,24 @@ func _ScannerBridge_TriageFindings_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ScannerBridge_DraftIgnoreReason_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DraftIgnoreReasonRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ScannerBridgeServer).DraftIgnoreReason(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ScannerBridge_DraftIgnoreReason_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ScannerBridgeServer).DraftIgnoreReason(ctx, req.(*DraftIgnoreReasonRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ScannerBridge_HealthCheck_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(HealthRequest)
 	if err := dec(in); err != nil {
@@ -264,6 +298,10 @@ var ScannerBridge_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "TriageFindings",
 			Handler:    _ScannerBridge_TriageFindings_Handler,
+		},
+		{
+			MethodName: "DraftIgnoreReason",
+			Handler:    _ScannerBridge_DraftIgnoreReason_Handler,
 		},
 		{
 			MethodName: "HealthCheck",

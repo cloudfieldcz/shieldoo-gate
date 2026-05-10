@@ -8,10 +8,16 @@ import (
 
 // CreateAPIKey inserts a new API key record and returns the generated ID.
 func (db *GateDB) CreateAPIKey(keyHash, name, ownerEmail string) (int64, error) {
+	return db.CreateAPIKeyWithScopes(keyHash, name, ownerEmail, "proxy:fetch")
+}
+
+// CreateAPIKeyWithScopes inserts a new API key record with the supplied scopes
+// (comma-separated; canonical scope tokens listed in internal/model/apikey.go).
+func (db *GateDB) CreateAPIKeyWithScopes(keyHash, name, ownerEmail, scopes string) (int64, error) {
 	var id int64
 	err := db.QueryRow(
-		"INSERT INTO api_keys (key_hash, name, owner_email) VALUES (?, ?, ?) RETURNING id",
-		keyHash, name, ownerEmail,
+		"INSERT INTO api_keys (key_hash, name, owner_email, scopes) VALUES (?, ?, ?, ?) RETURNING id",
+		keyHash, name, ownerEmail, scopes,
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("db: create api key: %w", err)
@@ -19,11 +25,20 @@ func (db *GateDB) CreateAPIKey(keyHash, name, ownerEmail string) (int64, error) 
 	return id, nil
 }
 
+// UpdateAPIKeyScopes replaces the scopes column for an api_key row.
+func (db *GateDB) UpdateAPIKeyScopes(id int64, scopes string) error {
+	_, err := db.Exec("UPDATE api_keys SET scopes = ? WHERE id = ?", scopes, id)
+	if err != nil {
+		return fmt.Errorf("db: update api key scopes: %w", err)
+	}
+	return nil
+}
+
 // GetAPIKeyByHash looks up an enabled API key by its SHA-256 hash.
 // Returns nil if not found or disabled.
 func (db *GateDB) GetAPIKeyByHash(keyHash string) (*model.APIKey, error) {
 	var key model.APIKey
-	err := db.Get(&key, "SELECT id, key_hash, name, owner_email, enabled, created_at, last_used_at FROM api_keys WHERE key_hash = ? AND enabled = TRUE", keyHash)
+	err := db.Get(&key, "SELECT id, key_hash, name, owner_email, enabled, created_at, last_used_at, COALESCE(scopes, '') AS scopes FROM api_keys WHERE key_hash = ? AND enabled = TRUE", keyHash)
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +48,7 @@ func (db *GateDB) GetAPIKeyByHash(keyHash string) (*model.APIKey, error) {
 // ListAPIKeys returns all API keys (enabled and disabled), ordered by creation time descending.
 func (db *GateDB) ListAPIKeys() ([]model.APIKey, error) {
 	var keys []model.APIKey
-	err := db.Select(&keys, "SELECT id, key_hash, name, owner_email, enabled, created_at, last_used_at FROM api_keys ORDER BY created_at DESC")
+	err := db.Select(&keys, "SELECT id, key_hash, name, owner_email, enabled, created_at, last_used_at, COALESCE(scopes, '') AS scopes FROM api_keys ORDER BY created_at DESC")
 	if err != nil {
 		return nil, fmt.Errorf("db: list api keys: %w", err)
 	}
@@ -43,7 +58,7 @@ func (db *GateDB) ListAPIKeys() ([]model.APIKey, error) {
 // ListAPIKeysByOwner returns API keys owned by the given email, ordered by creation time descending.
 func (db *GateDB) ListAPIKeysByOwner(ownerEmail string) ([]model.APIKey, error) {
 	var keys []model.APIKey
-	err := db.Select(&keys, "SELECT id, key_hash, name, owner_email, enabled, created_at, last_used_at FROM api_keys WHERE owner_email = ? ORDER BY created_at DESC", ownerEmail)
+	err := db.Select(&keys, "SELECT id, key_hash, name, owner_email, enabled, created_at, last_used_at, COALESCE(scopes, '') AS scopes FROM api_keys WHERE owner_email = ? ORDER BY created_at DESC", ownerEmail)
 	if err != nil {
 		return nil, fmt.Errorf("db: list api keys by owner: %w", err)
 	}
@@ -53,7 +68,7 @@ func (db *GateDB) ListAPIKeysByOwner(ownerEmail string) ([]model.APIKey, error) 
 // GetAPIKey returns a single API key by ID (regardless of enabled state).
 func (db *GateDB) GetAPIKey(id int64) (*model.APIKey, error) {
 	var key model.APIKey
-	err := db.Get(&key, "SELECT id, key_hash, name, owner_email, enabled, created_at, last_used_at FROM api_keys WHERE id = ?", id)
+	err := db.Get(&key, "SELECT id, key_hash, name, owner_email, enabled, created_at, last_used_at, COALESCE(scopes, '') AS scopes FROM api_keys WHERE id = ?", id)
 	if err != nil {
 		return nil, fmt.Errorf("db: get api key: %w", err)
 	}

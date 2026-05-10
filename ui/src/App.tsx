@@ -12,6 +12,9 @@ import Profile from './pages/Profile'
 import Projects from './pages/Projects'
 import ProjectDetail from './pages/ProjectDetail'
 import LicensePolicy from './pages/LicensePolicy'
+import Vulnerabilities from './pages/Vulnerabilities'
+import ComponentDetail from './pages/ComponentDetail'
+import ScanRunDetail from './pages/ScanRunDetail'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -33,6 +36,9 @@ export default function App() {
             <Route path="/artifacts" element={<Artifacts />} />
             <Route path="/projects" element={<Projects />} />
             <Route path="/projects/:id" element={<ProjectDetail />} />
+            <Route path="/vulnerabilities" element={<Vulnerabilities />} />
+            <Route path="/vulnerabilities/components/:id" element={<ComponentDetail />} />
+            <Route path="/vulnerabilities/scan-runs/:id" element={<ScanRunDetail />} />
             <Route path="/license-policy" element={<LicensePolicy />} />
             <Route path="/docker" element={<DockerRepositories />} />
             <Route path="/docker/repositories/:id" element={<DockerRepositoryDetail />} />

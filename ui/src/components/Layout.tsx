@@ -9,18 +9,21 @@ import {
   ShieldCheck,
   FolderTree,
   FileText,
+  Bug,
 } from 'lucide-react'
 import UserMenu from './UserMenu'
+import SidebarBadge from './vuln/SidebarBadge'
 
 const navItems = [
-  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/artifacts', label: 'Artifacts', icon: Package },
-  { to: '/projects', label: 'Projects', icon: FolderTree },
-  { to: '/license-policy', label: 'License Policy', icon: FileText },
-  { to: '/docker', label: 'Docker', icon: Container },
-  { to: '/overrides', label: 'Overrides', icon: ShieldAlert },
-  { to: '/audit-log', label: 'Audit Log', icon: ScrollText },
-  { to: '/settings', label: 'Settings', icon: Settings },
+  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, badge: false },
+  { to: '/artifacts', label: 'Artifacts', icon: Package, badge: false },
+  { to: '/projects', label: 'Projects', icon: FolderTree, badge: false },
+  { to: '/vulnerabilities', label: 'Vulnerabilities', icon: Bug, badge: true },
+  { to: '/license-policy', label: 'License Policy', icon: FileText, badge: false },
+  { to: '/docker', label: 'Docker', icon: Container, badge: false },
+  { to: '/overrides', label: 'Overrides', icon: ShieldAlert, badge: false },
+  { to: '/audit-log', label: 'Audit Log', icon: ScrollText, badge: false },
+  { to: '/settings', label: 'Settings', icon: Settings, badge: false },
 ]
 
 export default function Layout() {
@@ -36,7 +39,7 @@ export default function Layout() {
 
         {/* Navigation */}
         <nav className="flex-1 px-3 py-4 space-y-1">
-          {navItems.map(({ to, label, icon: Icon }) => (
+          {navItems.map(({ to, label, icon: Icon, badge }) => (
             <NavLink
               key={to}
               to={to}
@@ -50,6 +53,7 @@ export default function Layout() {
             >
               <Icon className="w-4 h-4" />
               {label}
+              {badge && <SidebarBadge />}
             </NavLink>
           ))}
         </nav>

@@ -6,6 +6,19 @@
 # Build context: repository root (../../)
 # Usage: docker compose -f tests/e2e-shell/docker-compose.e2e.yml up test-runner
 
+# --- shdg CLI build stage (added by test_vuln_scan_shdg) ---
+# We do NOT need the rest of internal/ — the shdg main package is Go-stdlib-only.
+# We also do NOT git-stamp the binary (no .git in the build context); a hard-coded
+# "e2e" value is sufficient for the smoke test.
+FROM golang:1.25-alpine AS shdg-build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/shdg ./cmd/shdg
+RUN CGO_ENABLED=0 go build \
+        -ldflags "-X main.Version=e2e -X main.Commit=e2e" \
+        -o /out/shdg ./cmd/shdg
+
 FROM ubuntu:24.04
 
 # Avoid interactive prompts during package install
@@ -99,6 +112,12 @@ RUN curl -fsSL "https://github.com/google/go-containerregistry/releases/download
     tar -C /usr/local/bin -xzf /tmp/crane.tar.gz crane && \
     chmod +x /usr/local/bin/crane && \
     rm /tmp/crane.tar.gz
+
+# ---------------------------------------------------------------------------
+# shdg CLI — built in the shdg-build stage above
+# ---------------------------------------------------------------------------
+COPY --from=shdg-build /out/shdg /usr/local/bin/shdg
+RUN chmod +x /usr/local/bin/shdg
 
 # ---------------------------------------------------------------------------
 # Copy test scripts

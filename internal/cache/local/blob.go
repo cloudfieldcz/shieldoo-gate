@@ -92,3 +92,49 @@ func (s *LocalCacheStore) DeleteBlob(_ context.Context, path string) error {
 	}
 	return nil
 }
+
+// ListBlobs satisfies scheduler.BlobLister. It returns all blob paths under
+// basePath/prefix as relative paths suitable for round-tripping through
+// PutBlob/GetBlob/DeleteBlob. A non-existent prefix is treated as empty.
+func (s *LocalCacheStore) ListBlobs(_ context.Context, prefix string) ([]string, error) {
+	cleanPrefix, err := sanitizeBlobPath(prefix)
+	if err != nil {
+		return nil, err
+	}
+	root := filepath.Join(s.basePath, cleanPrefix)
+	info, err := os.Stat(root)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("local blob: stat %s: %w", root, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("local blob: list prefix is not a directory: %q", prefix)
+	}
+	var out []string
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		// Skip in-flight temp files written by PutBlob.
+		if strings.HasPrefix(d.Name(), ".blob-tmp-") {
+			return nil
+		}
+		rel, err := filepath.Rel(s.basePath, path)
+		if err != nil {
+			return fmt.Errorf("local blob: rel %s: %w", path, err)
+		}
+		// Always emit forward-slash paths so they round-trip cleanly with the
+		// stored sbom_blob_path column even on Windows builds.
+		out = append(out, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("local blob: walk %s: %w", root, err)
+	}
+	return out, nil
+}

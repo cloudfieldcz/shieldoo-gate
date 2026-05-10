@@ -222,3 +222,32 @@ sbom:
   format: "cyclonedx-json"
   async_write: true
   ttl: "30d"
+
+# Vulnerability scan (push-from-CI). Enabled in E2E so the negative-path tests
+# exercise scope/rate-limit/payload-size guards on the upload endpoint. With
+# no scanner backends configured the actual scan runs as a no-op (status=done,
+# 0 findings) — that's exactly what we want: the surface tests stay isolated
+# from OSV.dev / Trivy availability.
+vuln_scan:
+  enabled: true
+  max_sbom_bytes: 1048576       # 1 MiB cap so test fixtures can be small
+  max_components: 100
+  max_components_per_project: 20
+  stale_threshold: "30d"
+  rescan:
+    interval: "24h"
+    max_concurrent: 1
+    timeout: "30s"
+  retention:
+    keep_n: 5
+    interval: "1h"
+    grace_period: "5m"
+  rate_limit:
+    uploads_per_hour: 60
+  scanners:
+    osv:
+      api_url: ""               # disabled — OSV.dev is unreliable in CI
+      timeout: "5s"
+    trivy:
+      binary_path: ""           # disabled — Trivy is exercised in dedicated tests
+      timeout: "5s"

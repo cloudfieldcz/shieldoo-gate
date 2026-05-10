@@ -1,0 +1,24 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "components": [
+    {
+      "type": "library",
+      "name": "xss-payload-pkg",
+      "version": "1.0.0",
+      "purl": "pkg:pypi/xss-payload-pkg@1.0.0",
+      "description": "<img src=x onerror=alert('xss-desc')>",
+      "externalReferences": [
+        { "type": "vcs", "url": "javascript:alert('xss-vcs')" }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "lodash",
+      "version": "4.17.10",
+      "purl": "pkg:npm/lodash@4.17.10",
+      "description": "<script>alert('xss-script')</script>"
+    }
+  ]
+}

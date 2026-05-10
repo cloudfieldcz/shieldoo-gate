@@ -27,6 +27,95 @@ type Config struct {
 	PublicURLs PublicURLsConfig `mapstructure:"public_urls"`
 	Projects   ProjectsConfig   `mapstructure:"projects"`
 	SBOM       SBOMConfig       `mapstructure:"sbom"`
+	VulnScan   VulnScanConfig   `mapstructure:"vuln_scan"`
+	AIFeatures AIFeaturesConfig `mapstructure:"ai_features"`
+}
+
+// VulnScanConfig controls the push-from-CI vulnerability scan feature.
+type VulnScanConfig struct {
+	Enabled                bool                  `mapstructure:"enabled"`
+	MaxSBOMBytes           int64                 `mapstructure:"max_sbom_bytes"`            // default 10 MiB
+	MaxComponents          int                   `mapstructure:"max_components"`            // default 10000
+	MaxComponentsPerProject int                  `mapstructure:"max_components_per_project"` // default 200
+	StaleThreshold         string                `mapstructure:"stale_threshold"`           // default "30d"
+	Rescan                 VulnRescanConfig      `mapstructure:"rescan"`
+	Retention              VulnRetentionConfig   `mapstructure:"retention"`
+	Scanners               VulnScannersConfig    `mapstructure:"scanners"`
+	Alerts                 VulnAlertsConfig      `mapstructure:"alerts"`
+	RateLimit              VulnRateLimitConfig   `mapstructure:"rate_limit"`
+}
+
+type VulnRescanConfig struct {
+	Interval      string `mapstructure:"interval"`       // default "6h"
+	MaxConcurrent int64  `mapstructure:"max_concurrent"` // default 4
+	Timeout       string `mapstructure:"timeout"`        // default "5m"
+}
+
+type VulnRetentionConfig struct {
+	KeepN       int    `mapstructure:"keep_n"`       // default 100
+	Interval    string `mapstructure:"interval"`     // default "1h"
+	GracePeriod string `mapstructure:"grace_period"` // default "5m"
+}
+
+type VulnScannersConfig struct {
+	OSV   VulnOSVConfig   `mapstructure:"osv"`
+	Trivy VulnTrivyConfig `mapstructure:"trivy"`
+}
+
+type VulnOSVConfig struct {
+	APIURL    string  `mapstructure:"api_url"`
+	Timeout   string  `mapstructure:"timeout"`
+	ChunkSize int     `mapstructure:"chunk_size"`
+	RateLimit float64 `mapstructure:"rate_limit"`
+	CacheTTL  string  `mapstructure:"cache_ttl"`
+}
+
+type VulnTrivyConfig struct {
+	BinaryPath string `mapstructure:"binary_path"`
+	Timeout    string `mapstructure:"timeout"`
+	UseServer  bool   `mapstructure:"use_server_mode"` // v1.1
+}
+
+type VulnAlertsConfig struct {
+	AggregationWindow   string `mapstructure:"aggregation_window"`     // default "5m"
+	AggregationMinEvents int   `mapstructure:"aggregation_min_events"` // default 3
+	IgnoreExpiredNotifyCreator bool `mapstructure:"ignore_expired_notify_creator"`
+}
+
+type VulnRateLimitConfig struct {
+	UploadsPerHour     int `mapstructure:"uploads_per_hour"`      // default 60
+	IgnoresPerHour     int `mapstructure:"ignores_per_hour"`      // default 30 per (token, component)
+	IgnoresGlobalHour  int `mapstructure:"ignores_global_per_hour"` // default 200
+	RescansPerHour     int `mapstructure:"rescans_per_hour"`      // default 6 per (token, component)
+}
+
+// AIFeaturesConfig is the master AI feature flag block. Default is OFF.
+type AIFeaturesConfig struct {
+	Enabled              bool                       `mapstructure:"enabled"`
+	IgnoreReasonDrafter  AIDrafterConfig            `mapstructure:"ignore_reason_drafter"`
+	AnomalyDetection     AIAnomalyConfig            `mapstructure:"anomaly_detection"`
+	AzureOpenAI          AzureOpenAIConfig          `mapstructure:"azure_openai"`
+}
+
+type AIDrafterConfig struct {
+	Enabled            bool    `mapstructure:"enabled"`
+	DailyTokenBudget   int64   `mapstructure:"daily_token_budget"` // default 5_000_000
+	MaxDraftTokens     int     `mapstructure:"max_draft_tokens"`   // default 200
+	RateLimitPerMinute float64 `mapstructure:"rate_limit_per_minute"` // default 1
+}
+
+type AIAnomalyConfig struct {
+	Enabled            bool    `mapstructure:"enabled"`
+	BaselineDays       int     `mapstructure:"baseline_days"`        // default 30
+	MinBaselineSamples int     `mapstructure:"min_baseline_samples"` // default 7
+	SigmaThreshold     float64 `mapstructure:"sigma_threshold"`      // default 3.0
+}
+
+type AzureOpenAIConfig struct {
+	Endpoint   string `mapstructure:"endpoint"`
+	APIKeyEnv  string `mapstructure:"api_key_env"`
+	Deployment string `mapstructure:"deployment"`
+	APIVersion string `mapstructure:"api_version"`
 }
 
 // ProjectsConfig controls project registry behavior.

@@ -120,19 +120,24 @@ scanners:
       - "-tool"
       - "-sdk"
     allowlist: []
+    persist_dedup_window_seconds: 300
+  # AI-driven version diff scanner (v2.0+) — opt-in. Requires scanner-bridge
+  # with AI scanner enabled. Leave disabled in this reference dev config so
+  # the stack runs without an Azure OpenAI key. To enable: set enabled: true,
+  # mode: "shadow" for ≥7 days, then flip to "active". See docs/scanners/version-diff.md.
   version_diff:
-    enabled: true
-    max_artifact_size_mb: 20
-    max_extracted_size_mb: 200
-    max_extracted_files: 10000
-    scanner_timeout: "10s"
-    entropy_sample_bytes: 8192
+    enabled: false
+    mode: "shadow"
+    max_artifact_size_mb: 50
+    max_extracted_size_mb: 50
+    max_extracted_files: 5000
+    scanner_timeout: "55s"
+    bridge_socket: ""
     allowlist: []
-    thresholds:
-      code_volume_ratio: 5.0
-      max_new_files: 20
-      entropy_delta: 2.0
-    sensitive_patterns: []
+    min_confidence: 0.6
+    per_package_rate_limit: 10
+    daily_cost_limit_usd: 5.0
+    circuit_breaker_threshold: 5
   reputation:
     enabled: true
     cache_ttl: "24h"
@@ -254,6 +259,79 @@ sbom:
   format: cyclonedx-json
   async_write: true
   ttl: 90d
+
+# Vulnerability scan — push-from-CI feature (v1.3+). Components/projects can
+# upload SBOMs via shdg CLI or POST /api/v1/projects/{label}/components/{name}/scans.
+# Trivy + OSV scan the SBOM and produce findings; the UI exposes ignore/release
+# workflows and per-project license-policy overrides. Without this block enabled
+# the /api/v1/vulnerabilities/* endpoints return 404 and the UI tab is hidden.
+vuln_scan:
+  enabled: true
+  max_sbom_bytes: 10485760           # 10 MiB
+  max_components: 10000
+  max_components_per_project: 200
+  stale_threshold: "30d"             # mark scans older than this as STALE
+  rescan:
+    interval: "6h"                   # background rescan cadence
+    max_concurrent: 4
+    timeout: "5m"                    # per-scan-run timeout
+  retention:
+    keep_n: 100                      # keep last N scan_runs per component
+    interval: "1h"                   # retention sweep cadence
+    grace_period: "5m"
+  scanners:
+    osv:
+      api_url: "https://api.osv.dev"
+      timeout: "30s"
+      chunk_size: 100                # max packages per OSV /querybatch
+      rate_limit: 5.0                # req/sec to api.osv.dev
+      cache_ttl: "1h"
+    trivy:
+      binary_path: "trivy"           # uses image's pinned trivy
+      timeout: "5m"
+      use_server_mode: false         # v1.1+ optional client/server split
+  alerts:
+    aggregation_window: "5m"
+    aggregation_min_events: 3
+    ignore_expired_notify_creator: true
+  rate_limit:
+    uploads_per_hour: 60             # per-token budget; bursts allowed
+    ignores_per_hour: 30             # per (token, component)
+    ignores_global_per_hour: 200
+    rescans_per_hour: 6              # per (token, component)
+
+# AI features — master flag for AI-assisted UX (ignore-reason drafter, anomaly
+# detection). Disabled by default in this reference dev config; requires Azure
+# OpenAI credentials to be useful. Flip enabled: true and fill azure_openai
+# block to activate.
+ai_features:
+  enabled: false
+  ignore_reason_drafter:
+    enabled: false
+    daily_token_budget: 5000000
+    max_draft_tokens: 200
+    rate_limit_per_minute: 1.0
+  anomaly_detection:
+    enabled: false
+    baseline_days: 30
+    min_baseline_samples: 7
+    sigma_threshold: 3.0
+  azure_openai:
+    endpoint: ""
+    api_key_env: "AI_FEATURES_API_KEY"
+    deployment: ""
+    api_version: "2024-08-01-preview"
+
+# Public-facing URLs for each ecosystem proxy, displayed in the admin UI
+# usage instructions. Empty = generic <host>:port placeholders.
+public_urls:
+  pypi: ""
+  npm: ""
+  nuget: ""
+  docker: ""
+  maven: ""
+  rubygems: ""
+  gomod: ""
 
 alerts:
   webhook:

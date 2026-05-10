@@ -142,9 +142,11 @@ Policy overrides allow administrators to create exceptions for artifacts that we
 
 | Tier | `project_id` | `kind` | Precedence | Created via |
 |---|---|---|---|---|
-| Global allow (typosquat release) | `NULL` | `allow` | 3rd | `POST /api/v1/artifacts/{id}/release`, `POST /api/v1/overrides` |
-| Per-project allow (whitelist) | set | `allow` | 2nd | Project artifacts pane → **Whitelist** |
+| Global allow (typosquat / scanner release) | `NULL` | `allow` | 3rd | `POST /api/v1/artifacts/{id}/release`, `POST /api/v1/overrides` |
+| Per-project allow (whitelist / **license release**) | set | `allow` | 2nd | Project artifacts pane → **Whitelist**, or `POST /api/v1/projects/{id}/overrides` |
 | Per-project deny (blacklist) | set | `deny` | 1st (wins) | Project artifacts pane → **Blacklist** |
+
+> **License blocks live per-project.** Since migration 036, `policy_overrides` rows with `project_id != NULL` and `kind='allow'` are the canonical home for license releases — `POST /api/v1/artifacts/{id}/release` rejects license-flavoured quarantines with **HTTP 409** + a `next_action` hint pointing the operator at the per-project endpoint. License decisions are project-scoped (project A may block GPL-3.0, project B may allow it), so a global override has the wrong blast radius. See [ADR-008](adr/ADR-008-license-overrides-per-project.md) for the architectural rationale and the [License-block releases live per-project](data-model.md#license-block-releases-live-per-project-migration-036) section in the data-model doc for the full migration story.
 
 ### Override Lifecycle
 
@@ -167,10 +169,11 @@ Created ──▶ Active ──▶ Revoked (soft-delete)
 | `POST` | `/api/v1/overrides` | Create global override (typosquat releases) |
 | `DELETE` | `/api/v1/overrides/{id}` | Revoke global override (soft-delete) |
 | `POST` | `/api/v1/artifacts/{id}/override` | Create override from artifact (convenience shortcut) |
-| `POST` | `/api/v1/artifacts/{id}/release` | Release artifact from quarantine — also creates a version-scoped override (or package-scoped if the artifact's `version` is `*`) |
-| `POST` | `/api/v1/projects/{id}/overrides` | Create per-project override (`kind` = `allow` or `deny`, `scope` = `package` or `version`, `reason` mandatory) |
+| `POST` | `/api/v1/artifacts/{id}/release` | Release artifact from quarantine — creates a version-scoped override (or package-scoped if the artifact's `version` is `*`). **Returns 409 + `next_action` hint** when the artifact's `quarantine_reason` is license-flavoured (release per-project instead). |
+| `GET`  | `/api/v1/projects/{id}/overrides` | List per-project overrides (active + revoked) — feeds the **Project license overrides** panel on Project Detail |
+| `POST` | `/api/v1/projects/{id}/overrides` | Create per-project override (`kind` = `allow` or `deny`, `scope` = `package` or `version`, `reason` mandatory). **Canonical endpoint for license releases.** |
 | `POST` | `/api/v1/projects/{id}/overrides/{overrideId}/revoke` | Revoke a per-project override (idempotent) |
-| `GET` | `/api/v1/projects/{id}/artifacts` | Project artifacts pane data — merged list of pulled artifacts, license-block events, and active overrides with a `decision` field per row |
+| `GET`  | `/api/v1/projects/{id}/artifacts` | Project artifacts pane data — merged list of pulled artifacts, license-block events, and active overrides with a `decision` field per row |
 
 The release endpoint is the primary UI action for quarantined artifacts. It sets the artifact status to `CLEAN` and creates a policy override so the artifact is not re-quarantined on the next scan.
 
@@ -198,9 +201,11 @@ The project Artifacts tab in the admin UI is the primary place to manage per-pro
 
 Override decision wins over CLEAN/BLOCKED_LICENSE when both contribute. The UI renders one row per package with a contextual action button:
 
-- `BLOCKED_LICENSE` → **Whitelist** (creates an allow override)
+- `BLOCKED_LICENSE` → **Whitelist** (creates an allow override — releases the artifact for this project)
 - `CLEAN` → **Blacklist** (creates a deny override)
 - `WHITELISTED` / `BLACKLISTED` → **Revert** (revokes the override)
+
+Below the artifacts table, the **Project license overrides** panel lists every active per-project allow/deny row (sourced from `GET /api/v1/projects/{id}/overrides`) with a per-row Revoke. This is the audit-trail view for everything the operator has explicitly approved or banned for this project, including rows mirrored from globals by migration 036.
 
 ## Example Scenarios
 

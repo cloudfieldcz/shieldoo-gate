@@ -9,6 +9,7 @@ service ScannerBridge {
     rpc ScanArtifactAI(AIScanRequest) returns (AIScanResponse);
     rpc ScanArtifactDiff(DiffScanRequest) returns (DiffScanResponse);
     rpc TriageFindings(TriageRequest) returns (TriageResponse);
+    rpc DraftIgnoreReason(DraftIgnoreReasonRequest) returns (DraftIgnoreReasonResponse);
     rpc HealthCheck(HealthRequest) returns (HealthResponse);
 }
 
@@ -66,6 +67,24 @@ message TriageResponse {
     string explanation = 3;  // human-readable reasoning for audit log (max 500 chars)
     string model_used  = 4;
     int32  tokens_used = 5;
+}
+
+message DraftIgnoreReasonRequest {
+    int64  component_id     = 1;
+    string cve_id           = 2;
+    string package_name     = 3;
+    string package_version  = 4;
+    string ecosystem        = 5;
+    string cve_summary      = 6;   // OSV summary (~200 chars), already sanitized
+    string repo_url         = 7;   // optional; bridge SSRF-guards before fetching
+    string operator_email   = 8;   // for audit/log only — never sent to LLM
+}
+
+message DraftIgnoreReasonResponse {
+    string reason       = 1;   // 1-2 sentence justification (max 500 chars)
+    string model_used   = 2;
+    int32  tokens_used  = 3;
+    bool   from_cache   = 4;   // sidecar may serve recent identical drafts from a cache
 }
 
 message HealthRequest {}

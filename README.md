@@ -91,6 +91,7 @@ Shieldoo Gate is built for teams that take software supply chain seriously:
 - **Admin UI** — browse artifacts, review verdicts, manage quarantine, override with justification
 - **Self-hostable** — single Docker Compose stack, Helm chart, air-gap friendly
 - **Open source, Apache 2.0** — no vendor lock-in, auditable code, community-driven
+- **`shdg` CLI for CI vulnerability-scan ingestion** — push CycloneDX SBOMs from any pipeline, see [docs/cli/shdg.md](docs/cli/shdg.md)
 
 ## Scanners
 

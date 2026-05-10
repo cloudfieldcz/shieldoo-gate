@@ -577,6 +577,12 @@ func (s *Server) handleQuarantineArtifact(w http.ResponseWriter, r *http.Request
 }
 
 // handleReleaseArtifact handles POST /api/v1/artifacts/{id}/release.
+//
+// License-block guard: if the artifact's current quarantine_reason matches
+// isLicenseQuarantineReason, the global release is refused with 409. License
+// decisions are project-scoped (project A may block GPL-3.0, project B may
+// allow it), so a global override has the wrong blast radius. The response
+// body's `next_action` points the operator at the per-project override flow.
 func (s *Server) handleReleaseArtifact(w http.ResponseWriter, r *http.Request) {
 	id := artifactID(r)
 	now := time.Now().UTC()
@@ -590,6 +596,26 @@ func (s *Server) handleReleaseArtifact(w http.ResponseWriter, r *http.Request) {
 	).Scan(&artEcosystem, &artName, &artVersion)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "artifact not found")
+		return
+	}
+
+	// License-block branch: refuse the global release with a project-scope hint.
+	// The caller is expected to open the project that pulled this artifact and
+	// release it from there via POST /api/v1/projects/{id}/overrides.
+	var quarReason sql.NullString
+	_ = s.db.QueryRowContext(r.Context(),
+		`SELECT quarantine_reason FROM artifact_status WHERE artifact_id = ?`, id,
+	).Scan(&quarReason)
+	if quarReason.Valid && isLicenseQuarantineReason(quarReason.String) {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": "license_block_requires_project_scope",
+			"next_action": map[string]string{
+				"type":     "release_per_project",
+				"endpoint": "/api/v1/projects/{id}/overrides",
+				"method":   "POST",
+				"hint":     "open the project that pulled this artifact and release from there",
+			},
+		})
 		return
 	}
 

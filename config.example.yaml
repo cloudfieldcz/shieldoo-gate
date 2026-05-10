@@ -359,3 +359,60 @@ alerts:
     tls_skip_verify: false
     batch_interval: "30s"
     on: ["QUARANTINED", "TAG_MUTATED"]
+
+# Vulnerability scan — push-from-CI CycloneDX SBOM scanning with OSV+Trivy.
+# When enabled, exposes /api/v1/projects/:label/components/:name/scans for CI
+# uploads, plus the /vulnerabilities admin API and UI.
+vuln_scan:
+  enabled: false
+  max_sbom_bytes: 10485760        # 10 MiB hard cap on SBOM upload size
+  max_components: 10000           # max CycloneDX components in one SBOM
+  max_components_per_project: 200 # per-project cap on Component rows
+  stale_threshold: "720h"         # 30d — components older than this surface "stale"
+  rescan:
+    interval: "6h"
+    max_concurrent: 4
+    timeout: "5m"
+  retention:
+    keep_n: 100                   # keep most recent N runs per Component
+    interval: "1h"
+    grace_period: "5m"
+  scanners:
+    osv:
+      api_url: "https://api.osv.dev"
+      timeout: "30s"
+      chunk_size: 1000
+      cache_ttl: "1h"
+    trivy:
+      binary_path: "trivy"
+      timeout: "5m"
+      use_server_mode: false      # v1.1 — long-running trivy server
+  alerts:
+    aggregation_window: "5m"
+    aggregation_min_events: 3
+    ignore_expired_notify_creator: true
+  rate_limit:
+    uploads_per_hour: 60
+    ignores_per_hour: 30
+    ignores_global_per_hour: 200
+    rescans_per_hour: 6
+
+# AI-assisted surfaces (anomaly detection, fix-path insights, ignore-reason drafting).
+# Default OFF for production. Enable per deployment after providing Azure OpenAI creds.
+ai_features:
+  enabled: false
+  ignore_reason_drafter:
+    enabled: false
+    daily_token_budget: 5000000
+    max_draft_tokens: 200
+    rate_limit_per_minute: 1
+  anomaly_detection:
+    enabled: true
+    baseline_days: 30
+    min_baseline_samples: 7
+    sigma_threshold: 3.0
+  azure_openai:
+    endpoint: ""
+    api_key_env: "AZURE_OPENAI_API_KEY"
+    deployment: ""
+    api_version: "2024-02-15-preview"

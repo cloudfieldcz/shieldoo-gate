@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { healthApi, adminApi } from '../api/client'
-import { CheckCircle, XCircle, RefreshCw, ShieldAlert, AlertTriangle } from 'lucide-react'
+import { CheckCircle, XCircle, RefreshCw, ShieldAlert, AlertTriangle, Bell, Bug } from 'lucide-react'
 
 const POLICY_MODES = [
   {
@@ -261,6 +261,54 @@ export default function Settings() {
         ) : null}
       </div>
 
+      {/* Alerting — Vulnerability scans (Screen 8, read-only documentation) */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-4">
+        <div className="flex items-center gap-2">
+          <Bell className="w-4 h-4 text-purple-600" />
+          <h2 className="text-base font-semibold text-gray-900">Alerting — Vulnerability scans</h2>
+        </div>
+        <p className="text-sm text-gray-500 -mt-2">
+          Channels (Slack / Webhook / Email) are configured in{' '}
+          <code className="font-mono bg-gray-100 px-1 rounded">alerts.*</code> in
+          <code className="font-mono bg-gray-100 px-1 rounded">config.yaml</code>.
+          Subscribing a channel to a vuln-scan event type happens via its{' '}
+          <code className="font-mono bg-gray-100 px-1 rounded">on:</code> filter.
+        </p>
+
+        <div className="border border-gray-200 rounded-lg divide-y divide-gray-100">
+          <AlertEventRow
+            type="scan.new_critical"
+            label="New CRITICAL CVE"
+            help="Δ vs the previous successful run grew the critical_count. Recommended for an always-on Slack/Email channel."
+          />
+          <AlertEventRow
+            type="scan.new_high"
+            label="New HIGH CVE"
+            help="Same delta logic, HIGH severity. Higher volume — typically routed to a triage channel, not the on-call one."
+          />
+          <AlertEventRow
+            type="scan.anomaly_detected"
+            label="3σ anomaly"
+            help="AI surface (only when ai_features.anomaly_detection.enabled). Fires when CRITICAL+HIGH counts spike past the BaselineDays-window mean."
+          />
+          <AlertEventRow
+            type="ignore.expired"
+            label="CVE ignore expired"
+            help="An ignore reached its expires_at and was auto-revoked. Notifies the original creator when alerts.ignore_expired_notify_creator=true."
+          />
+        </div>
+
+        <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-900 flex items-start gap-2">
+          <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+          <span>
+            Channel dispatch for these event types is being rolled out incrementally.
+            The events are written to <code className="font-mono bg-white px-1 rounded">audit_log</code> on
+            every run; Slack/Email/Webhook payload templates are landing in a follow-up
+            (tracked in IMPLEMENTATION_STATUS.md, Phase 5).
+          </span>
+        </div>
+      </div>
+
       {/* Info box */}
       <div className="bg-blue-50 border border-blue-200 rounded-xl p-5 space-y-3">
         <h2 className="text-base font-semibold text-blue-900">Configuration</h2>
@@ -293,6 +341,25 @@ export default function Settings() {
             </div>
           ))}
         </dl>
+      </div>
+    </div>
+  )
+}
+
+function AlertEventRow({ type, label, help }: { type: string; label: string; help: string }) {
+  return (
+    <div className="flex items-start gap-3 px-4 py-3">
+      <div className="rounded-md bg-purple-100 text-purple-700 p-1.5 flex-shrink-0">
+        <Bug className="w-3.5 h-3.5" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-gray-900">{label}</span>
+          <code className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 border border-gray-200">
+            {type}
+          </code>
+        </div>
+        <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">{help}</p>
       </div>
     </div>
   )

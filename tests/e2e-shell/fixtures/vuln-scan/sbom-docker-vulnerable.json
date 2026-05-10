@@ -1,0 +1,19 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "components": [
+    {
+      "type": "operating-system",
+      "name": "alpine",
+      "version": "3.10.0",
+      "purl": "pkg:apk/alpine/alpine-baselayout@3.10.0?distro=alpine-3.10.0"
+    },
+    {
+      "type": "library",
+      "name": "openssl",
+      "version": "1.1.1c-r0",
+      "purl": "pkg:apk/alpine/openssl@1.1.1c-r0?distro=alpine-3.10.0"
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # Makefile — Shieldoo Gate
 
-.PHONY: build test test-e2e test-e2e-containerized lint clean proto
+.PHONY: build build-gate build-shdg test test-e2e test-e2e-containerized lint clean proto
 
 BINARY := shieldoo-gate
 CMD_DIR := ./cmd/shieldoo-gate
@@ -11,8 +11,13 @@ ifdef SGW_TOKEN
   export GOPROXY := https://$(SGW_USER):$(SGW_TOKEN)@go.shieldoo-gate.cloudfield.cz,direct
 endif
 
-build:
+build: build-gate build-shdg
+
+build-gate:
 	go build -o bin/$(BINARY) $(CMD_DIR)
+
+build-shdg:
+	go build -ldflags "-X main.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev) -X main.Commit=$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)" -o bin/shdg ./cmd/shdg
 
 test:
 	go test -tags '!e2e' ./... -v -race

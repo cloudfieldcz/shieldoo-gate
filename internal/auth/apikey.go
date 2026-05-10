@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/project"
 	"github.com/rs/zerolog/log"
 )
@@ -26,6 +27,10 @@ type APIKeyMiddleware struct {
 	// projectSvc, when non-nil, resolves Basic auth username to a project
 	// and injects it into the request context. If nil, project resolution is skipped.
 	projectSvc project.Service
+
+	// auditWriter, when non-nil, records super_token_used events whenever
+	// the global token authenticates a proxy request.
+	auditWriter *AuditWriter
 
 	// lastUsed debounces last_used_at DB updates.
 	// Key: api_keys.id, Value: time.Time of last flush.
@@ -54,6 +59,13 @@ func (m *APIKeyMiddleware) WithProjectService(svc project.Service) *APIKeyMiddle
 	return m
 }
 
+// WithAuditWriter wires an AuditWriter for super_token_used events on the proxy
+// (Basic-auth) path. Must be called before Authenticate is registered.
+func (m *APIKeyMiddleware) WithAuditWriter(w *AuditWriter) *APIKeyMiddleware {
+	m.auditWriter = w
+	return m
+}
+
 // Authenticate returns HTTP middleware that validates Basic Auth credentials.
 func (m *APIKeyMiddleware) Authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -75,6 +87,15 @@ func (m *APIKeyMiddleware) Authenticate(next http.Handler) http.Handler {
 				Name:  "global-token",
 			}
 			identity = "global-token"
+			if m.auditWriter != nil {
+				_ = m.auditWriter.WriteVulnEvent(r.Context(), model.AuditEntry{
+					EventType:    model.EventSuperTokenUsed,
+					Reason:       "proxy endpoint accessed via global token",
+					ClientIP:     r.RemoteAddr,
+					UserAgent:    r.UserAgent(),
+					MetadataJSON: `{"name":"global-token","path":"basic-auth"}`,
+				})
+			}
 		} else {
 			// 2. Check PAT via SHA-256 hash lookup.
 			hash := sha256Hex(password)

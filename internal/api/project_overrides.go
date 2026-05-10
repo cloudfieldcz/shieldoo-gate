@@ -49,6 +49,87 @@ type projectOverrideResponse struct {
 	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
 }
 
+// handleListProjectOverrides returns active + revoked overrides for a project.
+//
+// GET /api/v1/projects/{id}/overrides
+//
+// Used by the Project Detail UI to surface per-project allow/deny rows
+// (especially license-flavoured ones backfilled by migration 036). Includes
+// revoked rows so operators can see history; the UI filters by `revoked` for
+// the "active" panel.
+func (s *Server) handleListProjectOverrides(w http.ResponseWriter, r *http.Request) {
+	projectID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid project id")
+		return
+	}
+	// Confirm project exists so the response distinguishes "no overrides" from
+	// "no such project".
+	if _, err := s.projectSvc.GetByID(projectID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		log.Error().Err(err).Int64("project_id", projectID).Msg("api: project lookup failed")
+		writeError(w, http.StatusInternalServerError, "project lookup failed")
+		return
+	}
+
+	rows, err := s.db.QueryxContext(r.Context(),
+		`SELECT id, project_id, ecosystem, name, version, scope, kind, reason,
+		        created_by, created_at, expires_at, revoked, revoked_at
+		   FROM policy_overrides
+		  WHERE project_id = ?
+		  ORDER BY created_at DESC, id DESC`, projectID)
+	if err != nil {
+		log.Error().Err(err).Int64("project_id", projectID).Msg("api: list project overrides failed")
+		writeError(w, http.StatusInternalServerError, "failed to list overrides")
+		return
+	}
+	defer rows.Close() //nolint:errcheck
+
+	out := []projectOverrideResponse{}
+	for rows.Next() {
+		var (
+			po         projectOverrideResponse
+			version    sql.NullString
+			expiresAt  sql.NullTime
+			revokedAt  sql.NullTime
+			projectIDc sql.NullInt64
+		)
+		if err := rows.Scan(
+			&po.ID, &projectIDc, &po.Ecosystem, &po.Name, &version, &po.Scope, &po.Kind, &po.Reason,
+			&po.CreatedBy, &po.CreatedAt, &expiresAt, &po.Revoked, &revokedAt,
+		); err != nil {
+			log.Error().Err(err).Msg("api: scan project override row failed")
+			writeError(w, http.StatusInternalServerError, "failed to scan override")
+			return
+		}
+		if projectIDc.Valid {
+			po.ProjectID = projectIDc.Int64
+		}
+		if version.Valid {
+			po.Version = version.String
+		}
+		if expiresAt.Valid {
+			t := expiresAt.Time
+			po.ExpiresAt = &t
+		}
+		if revokedAt.Valid {
+			t := revokedAt.Time
+			po.RevokedAt = &t
+		}
+		out = append(out, po)
+	}
+	if err := rows.Err(); err != nil {
+		log.Error().Err(err).Msg("api: iterate project overrides failed")
+		writeError(w, http.StatusInternalServerError, "failed to iterate overrides")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"items": out})
+}
+
 // handleCreateProjectOverride writes a new per-project policy override.
 //
 // POST /api/v1/projects/{id}/overrides

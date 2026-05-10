@@ -361,6 +361,16 @@ Key method: `Matches(ecosystem, name, version string) bool` — checks if the ov
 - `idx_policy_overrides_unique_active ON (ecosystem, name, version, scope, COALESCE(project_id, 0), kind) WHERE revoked = FALSE` — partial unique index preventing duplicate active overrides for the same (artifact, scope, project, kind) tuple. The `COALESCE(project_id, 0)` lets `NULL` (global override) coexist with project-scoped overrides on the same package. Replaces the pre-026 unique index, which did not include `project_id` or `kind`.
 - `idx_policy_overrides_project_lookup ON (project_id, ecosystem, name, version, revoked)` — fast per-project override lookup (added by migration 026)
 
+#### License-block releases live per-project (migration 036)
+
+License-policy decisions are project-scoped: project A may block GPL-3.0 while project B allows it. Releasing a license-blocked artifact via a global override would have the wrong blast radius — every project would silently inherit the waiver. Migration **036_license_overrides_per_project.sql** therefore makes `policy_overrides.project_id != NULL` (`kind='allow'`) the canonical home for license releases — see [ADR-008](adr/ADR-008-license-overrides-per-project.md) for the architectural rationale:
+
+- **Backfill.** For every existing project, the migration mirrors active global `manual release` rows into per-project allow rows (`created_by='migration:036'`). Globals stay (revoked=FALSE) so the lookup still falls through to global if a per-project allow is later revoked. The migration is idempotent (`NOT EXISTS` guard + `ON CONFLICT DO NOTHING`) and safe to re-run.
+- **Runtime guard.** `POST /api/v1/artifacts/{id}/release` now refuses license-flavoured quarantines with **HTTP 409** and a `next_action` hint pointing the operator at `POST /api/v1/projects/{id}/overrides`. The predicate is `internal/api/license_predicate.go:isLicenseQuarantineReason`, which reuses `licenseQuarantineReasonPrefix = "license policy:"` from `internal/api/license_reevaluation.go` (single source of truth).
+- **UI.** The Project Detail page renders a "Project license overrides" panel listing active per-project allow/deny rows with a per-row Revoke. The global Artifact Detail panel swaps its Release button for an info banner when the artifact is license-quarantined.
+
+Other quarantine reasons (typosquat, scanner verdicts, integrity violations) keep the global Release flow unchanged.
+
 ### `docker_repositories`
 
 Tracks known Docker image repositories, both upstream (proxied) and internal (pushed).
@@ -432,10 +442,13 @@ API keys for proxy endpoint authentication. Keys are either per-user PATs (gener
 | `created_at` | DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP | Creation timestamp |
 | `last_used_at` | DATETIME | Last time the key was used for authentication |
 | `expires_at` | DATETIME | Optional expiration (null = never expires) |
+| `scopes` | TEXT NOT NULL DEFAULT '' | Comma-separated capability tokens (added by migration 032). Empty string is treated as legacy `proxy:fetch` only. |
 
 **Go struct:** `model.APIKey` (`internal/model/apikey.go`)
 
 **Indexes:** `idx_api_keys_owner_email ON (owner_email)`
+
+**Scope vocabulary** (`model.AllScopes`): `proxy:fetch`, `scan:upload`, `admin:read`, `admin:write`. Enforced by the `auth.RequireScope` middleware. The global super-token (`proxy_auth.global_token_env`) carries an implicit `*` wildcard.
 
 ### `triage_cache`
 
@@ -646,6 +659,142 @@ Singleton row (CHECK constraint `id = 1`) holding the global license policy used
 | `updated_by` | TEXT | User who last updated the policy |
 
 If the row is missing (fresh install before first admin save), the API falls back to the policy embedded in `config.yaml` (`source: 'config'`).
+
+### `components` (vuln-scan)
+
+Project-scoped service unit that owns a stream of scan runs. One row per
+(project, name) pair. Cap of `vuln_scan.max_components_per_project` enforced
+via TOCTOU-safe `INSERT ... SELECT WHERE COUNT < cap`.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER PK | Component ID |
+| `project_id` | INTEGER NOT NULL REFERENCES projects(id) ON DELETE RESTRICT | Owning project — restrict prevents accidental cascades that would lose scan history |
+| `name` | TEXT NOT NULL | Component name; matches `^[a-z0-9][a-z0-9._/-]{0,255}$` |
+| `display_name` | TEXT NOT NULL DEFAULT '' | Human-readable label shown in the UI |
+| `description` | TEXT NOT NULL DEFAULT '' | Free-form description |
+| `ecosystem` | TEXT NOT NULL DEFAULT '' | e.g. `pypi`, `npm`, `docker` |
+| `repo_url` | TEXT NOT NULL DEFAULT '' | Source repo URL (display-only) |
+| `ai_enabled` | BOOLEAN NOT NULL DEFAULT TRUE | Whether AI surfaces apply to this component |
+| `enabled` | BOOLEAN NOT NULL DEFAULT TRUE | Disabled components skip scheduled rescans |
+| `last_scan_id` | INTEGER REFERENCES scan_runs(id) ON DELETE SET NULL | Cached pointer to the most recent successful run |
+| `created_at` | TIMESTAMPTZ NOT NULL | Creation timestamp |
+
+**Indexes:** UNIQUE `(project_id, name)`; `(last_scan_id)`.
+
+### `scan_runs` (vuln-scan)
+
+One row per SBOM upload or scheduled rescan. Denormalized severity counts let
+Screen 1 list queries run as a single SELECT per component.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER PK | Run ID |
+| `component_id` | INTEGER NOT NULL REFERENCES components(id) ON DELETE CASCADE | Owning component |
+| `trigger` | TEXT NOT NULL | `upload`, `manual`, or `rescan` |
+| `status` | TEXT NOT NULL | `pending`, `running`, `done`, or `failed` |
+| `sbom_blob_path` | TEXT NOT NULL DEFAULT '' | BlobStore path under `sboms/components/<id>/runs/<id>.json` |
+| `sbom_size_bytes` | INTEGER NOT NULL | Body size at upload |
+| `sbom_format` | TEXT NOT NULL | Always `cyclonedx-json` today |
+| `sbom_sha256` | TEXT NOT NULL | Lowercase hex; verified on every read |
+| `started_at` | TIMESTAMPTZ NOT NULL | Run start |
+| `finished_at` | TIMESTAMPTZ | Run completion |
+| `scanner_status` | TEXT NOT NULL DEFAULT '' | JSON object `{scannerName: status}` |
+| `critical_count` / `high_count` / `medium_count` / `low_count` | INTEGER | Severity tallies post-suppression |
+| `new_critical_count` / `new_high_count` | INTEGER | Δ vs the previous successful run |
+| `component_count` | INTEGER NOT NULL DEFAULT 0 | Number of CycloneDX components in the SBOM |
+| `error_message` | TEXT NOT NULL DEFAULT '' | Populated when `status='failed'` |
+| `integrity_violated` | BOOLEAN NOT NULL DEFAULT FALSE | True when SBOM SHA-256 mismatches blob on read |
+
+**Indexes:** `(component_id, started_at DESC)`, `(status, started_at)`.
+
+### `scan_findings` (vuln-scan)
+
+Aggregated per-(scan_run, cve, package) deduplicated finding rows. Bulk-inserted
+in 100-row VALUES batches.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER PK | Finding ID |
+| `scan_run_id` | INTEGER NOT NULL REFERENCES scan_runs(id) ON DELETE CASCADE | Owning run |
+| `component_id` | INTEGER NOT NULL | Denormalized for join-free Screen 1 queries |
+| `cve_id` | TEXT NOT NULL | e.g. `CVE-2024-12345` |
+| `package_name` / `package_version` / `ecosystem` | TEXT | Package coordinates |
+| `severity` | TEXT NOT NULL | `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `UNKNOWN`, `INFO` |
+| `cvss_score` | REAL | 0.0–10.0 |
+| `fixed_version` | TEXT | Empty when no fix is available |
+| `summary` | TEXT | Vendor-supplied short description |
+| `detected_by` | TEXT NOT NULL | Scanner name (`osv`, `trivy`) |
+| `is_suppressed` | BOOLEAN NOT NULL DEFAULT FALSE | True when an active ignore covers this finding |
+| `suppressed_by` | INTEGER | `cve_ignores.id` when suppressed; **no FK** (forward reference avoidance — managed application-side by IgnoreService) |
+
+**Indexes:** `(scan_run_id)`, `(component_id, cve_id, package_name)`.
+
+### `cve_ignores` (vuln-scan)
+
+Per-package CVE suppression with optional expiry and AI-draft acceptance flag.
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER PK | Ignore ID |
+| `component_id` | INTEGER NOT NULL REFERENCES components(id) ON DELETE CASCADE | Owning component |
+| `cve_id` / `package_name` | TEXT NOT NULL | Suppression key |
+| `package_version` | TEXT NOT NULL DEFAULT '' | **Informational only** — suppression is per-package, not per-version |
+| `reason` | TEXT NOT NULL | Operator-supplied explanation |
+| `ai_draft_accepted` | BOOLEAN NOT NULL DEFAULT FALSE | True when reason came verbatim from the AI drafter |
+| `expires_at` | TIMESTAMPTZ | Optional expiry; the ignore-expiry watcher revokes after this time |
+| `created_against_run_id` | INTEGER | The scan run that surfaced the CVE |
+| `created_by_email` | TEXT NOT NULL | Operator email (from OIDC or PAT owner) |
+| `created_at` | TIMESTAMPTZ NOT NULL | Creation timestamp |
+| `revoked_at` / `revoked_by_email` | TIMESTAMPTZ / TEXT | Set on manual revoke or expiry |
+
+**Indexes:** UNIQUE `(component_id, cve_id, package_name) WHERE revoked_at IS NULL` (partial — many revoked rows are allowed).
+
+### `anomalies` + `anomaly_acknowledgments` (vuln-scan, AI)
+
+3σ baseline anomalies persisted by the `AnomalyDetector`. The acknowledgments
+table is per-(anomaly, viewer) so multiple admins can each dismiss
+independently.
+
+| `anomalies` column | Type | Description |
+|---|---|---|
+| `id` | INTEGER PK | Anomaly ID |
+| `component_id` | INTEGER NOT NULL | Component the spike occurred on |
+| `triggering_run_id` | INTEGER | Scan run that surfaced the spike |
+| `severity_delta` | INTEGER | `current - baseline_mean` |
+| `baseline_mean` / `baseline_stddev` / `sigma` | DOUBLE | Window statistics |
+| `summary` | TEXT NOT NULL | One-line headline rendered in the banner |
+| `detected_at` | TIMESTAMPTZ NOT NULL | Detection timestamp |
+
+| `anomaly_acknowledgments` column | Type | Description |
+|---|---|---|
+| `anomaly_id` | INTEGER NOT NULL REFERENCES anomalies(id) | |
+| `user_email` | TEXT NOT NULL | Per-user dismissal |
+| `acknowledged_at` | TIMESTAMPTZ NOT NULL | |
+
+PRIMARY KEY `(anomaly_id, user_email)` keeps acknowledgements idempotent.
+
+### `audit_log` (vuln-scan extensions)
+
+Migration 035 adds four nullable columns — `component_id`, `scan_run_id`,
+`ignore_id`, `api_key_id`. They are FK-shaped but **not enforced as foreign
+keys** because `audit_log` is append-only forensic evidence (CLAUDE.md
+security invariant #5) — referential cascades would silently rewrite history.
+
+The new event types written by the vuln-scan pipeline:
+
+| Event type | When |
+|---|---|
+| `sbom_uploaded` | CI pushed a new SBOM |
+| `scan_run_failed` | Scanner pipeline returned an error before findings were persisted |
+| `rescan_triggered` | Manual or scheduled rescan |
+| `ignore_created` / `ignore_revoked` / `ignore_expired` | CVE-ignore lifecycle |
+| `ai_draft_called` / `ai_draft_accepted` | AI drafter invocation + acceptance |
+| `anomaly_acknowledged` | Operator dismissed a 3σ banner |
+| `api_key_scope_changed` / `super_token_used` | Auth-scope churn / global-token usage (both PAT and Basic-auth paths) |
+| `repo_url_changed` | PATCH on component metadata |
+| `sbom_integrity_violation` | SBOM SHA-256 mismatch on read |
+| `scan.new_critical` / `scan.new_high` / `scan.anomaly_detected` / `ignore.expired` | Alert events (audit-only today; channel dispatch is a follow-up) |
 
 ### `schema_migrations`
 

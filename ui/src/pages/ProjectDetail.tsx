@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, FolderTree, Package, ScrollText, RotateCcw, ShieldCheck, ShieldX, Undo2 } from 'lucide-react'
+import { ArrowLeft, FolderTree, Package, ScrollText, RotateCcw, ShieldCheck, ShieldX, Undo2, Bug } from 'lucide-react'
 import { projectsApi } from '../api/client'
+import { vulnApi } from '../api/vulnerabilities'
 import type {
   ProjectArtifact,
   ProjectArtifactDecision,
@@ -14,9 +15,10 @@ import LicensePolicyEditor, {
   type LicensePolicyValue,
 } from '../components/LicensePolicyEditor'
 import OverrideModal from '../components/OverrideModal'
+import ProjectLicenseOverridesPanel from '../components/ProjectLicenseOverridesPanel'
 import { formatDate, truncateSha256 } from '../utils/format'
 
-type Tab = 'artifacts' | 'policy'
+type Tab = 'artifacts' | 'policy' | 'vulns'
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>()
@@ -73,10 +75,14 @@ export default function ProjectDetail() {
             <TabButton active={tab === 'policy'} onClick={() => setTab('policy')}>
               <ScrollText className="w-4 h-4" /> License policy
             </TabButton>
+            <TabButton active={tab === 'vulns'} onClick={() => setTab('vulns')}>
+              <Bug className="w-4 h-4" /> Vulnerabilities
+            </TabButton>
           </div>
 
           {tab === 'artifacts' && <ArtifactsTab projectId={projectId} />}
           {tab === 'policy' && <PolicyTab projectId={projectId} />}
+          {tab === 'vulns' && <VulnerabilitiesTab projectLabel={projectQ.data.label} />}
         </>
       )}
     </div>
@@ -126,14 +132,17 @@ function ArtifactsTab({ projectId }: { projectId: number }) {
     onSuccess: () => {
       setModal(null)
       void qc.invalidateQueries({ queryKey: ['project-artifacts', projectId] })
+      void qc.invalidateQueries({ queryKey: ['project-overrides', projectId] })
     },
   })
 
   const revokeOverride = useMutation({
     mutationFn: ({ overrideId, reason }: { overrideId: number; reason: string }) =>
       projectsApi.revokeOverride(projectId, overrideId, reason),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: ['project-artifacts', projectId] }) as unknown as void,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['project-artifacts', projectId] })
+      void qc.invalidateQueries({ queryKey: ['project-overrides', projectId] })
+    },
   })
 
   if (q.isLoading) return <div className="text-sm text-gray-500">Loading artifacts…</div>
@@ -141,11 +150,17 @@ function ArtifactsTab({ projectId }: { projectId: number }) {
 
   const artifacts = q.data ?? []
   if (artifacts.length === 0) {
+    // Even when no artifacts have been pulled, show the per-project overrides
+    // panel so operators can see globals migrated by 036 or any standalone
+    // allow/deny rows that exist server-side.
     return (
-      <div className="mt-4 p-6 rounded-md bg-gray-50 border border-gray-200 text-sm text-gray-600">
-        This project has not pulled any artifacts yet, has no license-blocked attempts,
-        and no per-project overrides. Usage is tracked ~30 s after a proxy request.
-      </div>
+      <>
+        <div className="mt-4 p-6 rounded-md bg-gray-50 border border-gray-200 text-sm text-gray-600">
+          This project has not pulled any artifacts yet, has no license-blocked attempts,
+          and no per-project overrides. Usage is tracked ~30 s after a proxy request.
+        </div>
+        <ProjectLicenseOverridesPanel projectId={projectId} />
+      </>
     )
   }
 
@@ -200,6 +215,7 @@ function ArtifactsTab({ projectId }: { projectId: number }) {
             ?.error ?? 'unknown error'}
         </div>
       )}
+      <ProjectLicenseOverridesPanel projectId={projectId} />
     </>
   )
 }
@@ -446,6 +462,112 @@ function PolicyTab({ projectId }: { projectId: number }) {
           </button>
         </div>
       )}
+    </div>
+  )
+}
+
+function VulnerabilitiesTab({ projectLabel }: { projectLabel: string }) {
+  const q = useQuery({
+    queryKey: ['project-vulns', projectLabel],
+    queryFn: () => vulnApi.list({ project: projectLabel, limit: 200 }),
+  })
+
+  if (q.isLoading) return <div className="text-sm text-gray-500">Loading components…</div>
+  if (q.isError) return <div className="text-sm text-red-700">Failed to load components.</div>
+
+  const items = q.data?.items ?? []
+  if (items.length === 0) {
+    return (
+      <div className="mt-4 p-6 rounded-md bg-gray-50 border border-gray-200 text-sm text-gray-600 space-y-2">
+        <p>No components have uploaded an SBOM for this project yet.</p>
+        <p>
+          See the{' '}
+          <Link to="/vulnerabilities" className="text-blue-600 hover:underline">
+            Vulnerabilities page
+          </Link>{' '}
+          for the integration guide. Each component pushes a CycloneDX SBOM via{' '}
+          <code className="px-1 bg-white border rounded">POST /api/v1/projects/{projectLabel}/components/&lt;name&gt;/scans</code>.
+        </p>
+      </div>
+    )
+  }
+
+  const totals = items.reduce(
+    (acc, c) => ({
+      critical: acc.critical + (c.critical_count ?? 0),
+      high:     acc.high     + (c.high_count ?? 0),
+      newCrit:  acc.newCrit  + (c.new_critical_count ?? 0),
+    }),
+    { critical: 0, high: 0, newCrit: 0 },
+  )
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <SummaryStat label="Components" value={items.length} tone="neutral" />
+        <SummaryStat label="Critical"   value={totals.critical} tone={totals.critical > 0 ? 'critical' : 'neutral'} />
+        <SummaryStat label="High"       value={totals.high}     tone={totals.high > 0 ? 'high' : 'neutral'} />
+        <SummaryStat label="New (CRIT/HIGH)" value={totals.newCrit} tone={totals.newCrit > 0 ? 'critical' : 'neutral'} />
+      </div>
+
+      <div className="bg-white border border-gray-200 rounded-md overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wide">
+            <tr>
+              <th className="px-4 py-2 text-left font-medium">Component</th>
+              <th className="px-4 py-2 text-left font-medium">Ecosystem</th>
+              <th className="px-4 py-2 text-right font-medium">Critical</th>
+              <th className="px-4 py-2 text-right font-medium">High</th>
+              <th className="px-4 py-2 text-right font-medium">New</th>
+              <th className="px-4 py-2 text-left font-medium">Last scan</th>
+              <th className="px-4 py-2 text-left font-medium">Status</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200">
+            {items.map((c) => (
+              <tr key={c.id} className={c.stale ? 'bg-red-50/40' : ''}>
+                <td className="px-4 py-2">
+                  <Link to={`/vulnerabilities/components/${c.id}`} className="font-mono text-blue-700 hover:underline">
+                    {c.display_name || c.name}
+                  </Link>
+                </td>
+                <td className="px-4 py-2 text-xs uppercase tracking-wide text-gray-600">{c.ecosystem || '—'}</td>
+                <td className={`px-4 py-2 text-right tabular-nums ${c.critical_count > 0 ? 'text-red-700 font-semibold' : 'text-gray-500'}`}>{c.critical_count}</td>
+                <td className={`px-4 py-2 text-right tabular-nums ${c.high_count > 0 ? 'text-orange-700 font-semibold' : 'text-gray-500'}`}>{c.high_count}</td>
+                <td className={`px-4 py-2 text-right tabular-nums ${(c.new_critical_count + c.new_high_count) > 0 ? 'text-red-700 font-semibold' : 'text-gray-500'}`}>
+                  {c.new_critical_count + c.new_high_count}
+                </td>
+                <td className="px-4 py-2 text-gray-600">
+                  {c.last_scan_at ? formatDate(c.last_scan_at) : '—'}
+                  {c.last_scan_trigger && (
+                    <span className="ml-1 text-xs text-gray-400">({c.last_scan_trigger})</span>
+                  )}
+                </td>
+                <td className="px-4 py-2">
+                  {c.stale ? (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200">stale</span>
+                  ) : (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-50 text-green-700 border border-green-200">fresh</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function SummaryStat({ label, value, tone }: { label: string; value: number; tone: 'neutral' | 'critical' | 'high' }) {
+  const cls =
+    tone === 'critical' ? 'border-red-200 bg-red-50 text-red-900' :
+    tone === 'high'     ? 'border-orange-200 bg-orange-50 text-orange-900' :
+                          'border-gray-200 bg-white text-gray-900'
+  return (
+    <div className={`rounded-md border ${cls} p-3`}>
+      <div className="text-xs uppercase tracking-wide text-gray-500">{label}</div>
+      <div className="text-2xl font-semibold tabular-nums">{value}</div>
     </div>
   )
 }

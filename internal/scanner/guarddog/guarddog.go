@@ -40,6 +40,16 @@ func (s *GuardDogScanner) Close() error {
 	return s.conn.Close()
 }
 
+// BridgeClient exposes the underlying gRPC client so other features
+// (e.g. ai.IgnoreReasonDrafter for DraftIgnoreReason) can share the same
+// scanner-bridge connection. Returns nil when the scanner failed to dial.
+func (s *GuardDogScanner) BridgeClient() pb.ScannerBridgeClient {
+	if s == nil {
+		return nil
+	}
+	return s.client
+}
+
 func (s *GuardDogScanner) Name() string    { return "guarddog" }
 func (s *GuardDogScanner) Version() string { return "0.1.17" }
 

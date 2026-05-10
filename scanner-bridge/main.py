@@ -247,6 +247,44 @@ class ScannerBridgeServicer(scanner_pb2_grpc.ScannerBridgeServicer):
                 tokens_used=0,
             )
 
+    def DraftIgnoreReason(self, request, context):
+        """Generate a 1-2 sentence justification draft for a CVE ignore.
+
+        Returns an empty `reason` when AI is not configured — Go side surfaces
+        503 to the UI which then hides the panel cleanly.
+        """
+        if self._ai_scanner is None:
+            return scanner_pb2.DraftIgnoreReasonResponse(
+                reason="",
+                model_used="none",
+                tokens_used=0,
+                from_cache=False,
+            )
+        try:
+            import vuln_drafter
+            future = asyncio.run_coroutine_threadsafe(
+                vuln_drafter.draft(request, self._ai_scanner._client, self._ai_scanner._model),
+                self._ai_loop,
+            )
+            result = future.result(timeout=15)
+            return scanner_pb2.DraftIgnoreReasonResponse(
+                reason=result.get("reason", ""),
+                model_used=result.get("model_used", ""),
+                tokens_used=result.get("tokens_used", 0),
+                from_cache=result.get("from_cache", False),
+            )
+        except Exception as e:
+            # Operator log only — never propagate raw exception text to the
+            # caller (it can include Azure deployment hints).
+            logger.error("DraftIgnoreReason error for %s/%s@%s: %s",
+                         request.ecosystem, request.package_name, request.package_version, e)
+            return scanner_pb2.DraftIgnoreReasonResponse(
+                reason="",
+                model_used="none",
+                tokens_used=0,
+                from_cache=False,
+            )
+
     def HealthCheck(self, request, context):
         return scanner_pb2.HealthResponse(
             healthy=True,

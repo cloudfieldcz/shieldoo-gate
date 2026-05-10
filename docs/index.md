@@ -24,6 +24,8 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
 ### Reference
 
 - [API Reference](api/) — OpenAPI 3.1 spec for the REST API
+- [`shdg` CLI](cli/shdg.md) — push CycloneDX SBOMs to the vulnerability-scan API from CI
+- [Architecture Decision Records](adr/) — ADR-001 through ADR-008 (latest: [ADR-008 — license overrides per-project](adr/ADR-008-license-overrides-per-project.md))
 - [Planned Features](features/index.md) — phased roadmap with 15 proposed features across enterprise foundation, advanced detection, compliance, developer experience, and advanced deployment
 
 ## Architecture
@@ -100,6 +102,7 @@ Shieldoo Gate Protocol Adapter
 | — | SBOM generation (CycloneDX via Trivy single-run) — see [Scanners](scanners.md) | Done (v1.2) |
 | — | License policy enforcement (SPDX, per-project overrides) — see [Policy Engine](policy.md) | Done (v1.2) |
 | — | Per-project, per-package overrides — whitelist or blacklist a single package within one project, with revoke (see [ADR-006](adr/ADR-006-per-project-package-overrides.md) and the [Policy Engine](policy.md#policy-overrides) doc) | Done |
+| — | [Vulnerability scan](features/vulnerability-scan.md) — push-from-CI CycloneDX SBOM scanning with OSV+Trivy, scheduled rescans, per-component CVE ignore lifecycle, optional AI surfaces (anomaly detection, ignore-reason drafting, fix-path insights) | In progress |
 
 ## Client Authentication — How Basic Auth Maps to Projects (v1.2+)
 

@@ -38,6 +38,19 @@ tags:
     description: Runtime configuration endpoints
   - name: metrics
     description: Prometheus metrics
+  - name: vuln-scan
+    description: |
+      Push-from-CI vulnerability scanning. CI uploads CycloneDX SBOMs per
+      Component; OSV + Trivy scan and aggregate findings; admins manage
+      ignores and trigger rescans. Routes are registered only when
+      `vuln_scan.enabled` is true. Scan-upload uses Bearer-PAT auth with
+      `scan:upload` scope; admin reads use the AdminAuthChain (PAT-Bearer
+      first, OIDC cookie fallback) with `admin:read` / `admin:write`.
+  - name: ai
+    description: |
+      AI surfaces — anomaly detection (3σ baseline), fix-path insights,
+      and ignore-reason drafting. Routes are registered only when
+      `ai_features.enabled` is true; otherwise endpoints 404 by absence.
 
 paths:
   /auth/login:
@@ -202,6 +215,31 @@ paths:
                 $ref: "#/components/schemas/ArtifactDetail"
         "404":
           $ref: "#/components/responses/NotFound"
+    delete:
+      summary: Delete artifact (cache + DB)
+      description: |
+        Permanently removes an artifact from cache and database, including all
+        associated scan results and status records. This is the only resolution
+        for SHA256 integrity violations — delete the artifact, next request
+        re-fetches fresh from upstream.
+      operationId: deleteArtifact
+      tags: [artifacts]
+      responses:
+        "200":
+          description: Artifact deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: deleted
+                  artifact:
+                    type: string
+                    example: "npm:lodash:4.17.21"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /api/v1/artifacts/{id}/scan-results:
     parameters:
@@ -296,35 +334,39 @@ paths:
                     example: 1
         "404":
           $ref: "#/components/responses/NotFound"
-
-  /api/v1/artifacts/{id}:
-    parameters:
-      - $ref: "#/components/parameters/artifactId"
-    delete:
-      summary: Delete artifact (cache + DB)
-      description: |
-        Permanently removes an artifact from cache and database, including all
-        associated scan results and status records. This is the only resolution
-        for SHA256 integrity violations — delete the artifact, next request
-        re-fetches fresh from upstream.
-      operationId: deleteArtifact
-      tags: [artifacts]
-      responses:
-        "200":
-          description: Artifact deleted
+        "409":
+          description: |
+            Artifact was license-quarantined; release must be project-scoped.
+            License decisions are project-scoped (project A may forbid a
+            license while project B allows it), so a global release would have
+            the wrong blast radius. Re-issue the release against
+            `POST /api/v1/projects/{id}/overrides` for each project that needs
+            the waiver. See [ADR-008](../adr/ADR-008-license-overrides-per-project.md).
           content:
             application/json:
               schema:
                 type: object
+                required: [error, next_action]
                 properties:
-                  status:
+                  error:
                     type: string
-                    example: deleted
-                  artifact:
-                    type: string
-                    example: "npm:lodash:4.17.21"
-        "404":
-          $ref: "#/components/responses/NotFound"
+                    example: license_block_requires_project_scope
+                  next_action:
+                    type: object
+                    required: [type, endpoint, method, hint]
+                    properties:
+                      type:
+                        type: string
+                        example: release_per_project
+                      endpoint:
+                        type: string
+                        example: /api/v1/projects/{id}/overrides
+                      method:
+                        type: string
+                        example: POST
+                      hint:
+                        type: string
+                        example: open the project that pulled this artifact and release from there
 
   /api/v1/audit:
     get:
@@ -686,6 +728,15 @@ paths:
                   type: string
                   description: Human-readable label for the key
                   example: ci-pipeline
+                scopes:
+                  type: array
+                  items: { $ref: "#/components/schemas/APIKeyScope" }
+                  description: |
+                    Optional list of scopes granted to this key. Empty list defaults
+                    to `[proxy:fetch]` for backwards compatibility. Unknown scopes
+                    return 400. Duplicates are deduplicated and reordered into the
+                    canonical order (proxy:fetch, scan:upload, admin:read, admin:write).
+                  example: ["proxy:fetch", "scan:upload"]
       responses:
         "201":
           description: API key created
@@ -694,7 +745,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/APIKeyCreateResponse"
         "400":
-          description: Invalid request (missing name)
+          description: Invalid request (missing name, name too long, or invalid scope)
 
     get:
       summary: List API keys owned by the authenticated user
@@ -990,6 +1041,30 @@ paths:
   /api/v1/projects/{id}/overrides:
     parameters:
       - { in: path, name: id, required: true, schema: { type: integer, format: int64 } }
+    get:
+      summary: List per-project policy overrides (active + revoked)
+      operationId: listProjectOverrides
+      tags: [projects, overrides]
+      description: |
+        Returns every `policy_overrides` row scoped to this project, ordered by
+        `created_at DESC, id DESC`. Both active and revoked rows are included so
+        the audit-trail panel on Project Detail can render history.
+
+        Backs the **Project license overrides** panel on Project Detail (see
+        [ADR-008](../adr/ADR-008-license-overrides-per-project.md)).
+      responses:
+        "200":
+          description: Active + revoked per-project overrides
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ProjectOverride" }
+        "404": { description: Project not found }
     post:
       summary: Create a per-project policy override (whitelist or blacklist)
       operationId: createProjectOverride
@@ -1003,6 +1078,11 @@ paths:
 
         Per-project DENY beats per-project ALLOW which beats global ALLOW.
         Returns 409 when an active override of the same `(ecosystem, name, version, scope, kind)` already exists for this project.
+
+        This is the **canonical endpoint for license-block releases** since
+        migration 036 (ADR-008). The global `POST /api/v1/artifacts/{id}/release`
+        returns 409 + `next_action` when called against a license-quarantined
+        artifact and points the caller here.
       requestBody:
         required: true
         content:
@@ -1143,6 +1223,416 @@ paths:
                   generator:       { type: string }
                   generated_at:    { type: string, format: date-time }
 
+  # ---- Vulnerability scan: push-from-CI SBOM ingestion -----------------
+  /api/v1/projects/{label}/components/{name}/scans:
+    post:
+      summary: Upload a CycloneDX SBOM for a project component (CI ingestion)
+      operationId: uploadComponentSBOM
+      tags: [vuln-scan]
+      description: |
+        Authenticated with `Authorization: Bearer <PAT>` carrying the
+        `scan:upload` scope (`/auth/login` is *not* used by CI). The body is a
+        CycloneDX 1.5+ JSON SBOM (max ~50 MB). Component is auto-created on
+        first upload, capped at `vuln_scan.max_components_per_project`.
+
+        Returns the queued `scan_run` row; the actual scan runs asynchronously
+        and findings appear once `status` transitions to `done`.
+      parameters:
+        - name: label
+          in: path
+          required: true
+          schema: { type: string }
+          description: Project label (per ADR-001)
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[a-z0-9][a-z0-9._/-]{0,255}$"
+        - name: trigger
+          in: query
+          schema: { type: string, enum: [upload, manual, rescan], default: upload }
+      requestBody:
+        required: true
+        content:
+          application/vnd.cyclonedx+json:
+            schema:
+              type: string
+              format: binary
+              description: CycloneDX 1.5+ JSON document
+      responses:
+        "202":
+          description: Accepted — scan queued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScanRun" }
+        "400": { description: SBOM body fails structural validation (depth/component/string limits) }
+        "401": { description: Missing or invalid Bearer PAT }
+        "403": { description: PAT does not carry the scan:upload scope }
+        "413": { description: SBOM body exceeds vuln_scan.max_sbom_bytes }
+        "415": { description: Unsupported Content-Type (must be application/vnd.cyclonedx+json) }
+        "422": { description: Per-project component cap reached }
+        "429": { description: Rate-limited by vuln_scan.rate_limit.uploads_per_hour }
+
+  # ---- Vulnerability scan: admin reads (AdminAuthChain) ----------------
+  /api/v1/vulnerabilities/components:
+    get:
+      summary: List components with denormalized severity counts (Screen 1)
+      operationId: listVulnerabilityComponents
+      tags: [vuln-scan]
+      parameters:
+        - name: project
+          in: query
+          schema: { type: string }
+        - name: ecosystem
+          in: query
+          schema: { type: string }
+        - name: severity_floor
+          in: query
+          schema: { type: string, enum: [LOW, MEDIUM, HIGH, CRITICAL] }
+        - name: has_new
+          in: query
+          schema: { type: boolean }
+        - name: q
+          in: query
+          schema: { type: string, description: "Substring filter on name/display_name" }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+        - name: cursor
+          in: query
+          description: >
+            Opaque keyset cursor returned by a prior call's `next_cursor` field.
+            When provided, the page is filtered with `id < cursor` and ordered
+            by id DESC for stable, O(LIMIT) pagination. Mutually exclusive with
+            offset; cursor wins when both are supplied.
+          schema: { type: string }
+      responses:
+        "200":
+          description: Component list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ComponentRow" }
+                  next_cursor:
+                    type: string
+                    description: >
+                      Present when more rows likely exist. Pass back as
+                      `cursor` to fetch the next page. Absence indicates
+                      end-of-stream.
+        "503":
+          description: Vulnerability scanning is not enabled in this deployment
+
+  /api/v1/vulnerabilities/components/{id}:
+    get:
+      summary: Get component metadata
+      operationId: getVulnerabilityComponent
+      tags: [vuln-scan]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      responses:
+        "200":
+          description: Component
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Component" }
+        "404": { description: Component not found }
+
+    patch:
+      summary: Update component metadata (display_name, description, repo_url, ai_enabled, enabled)
+      operationId: updateVulnerabilityComponent
+      tags: [vuln-scan]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name: { type: string }
+                description:  { type: string }
+                repo_url:     { type: string }
+                enabled:      { type: boolean }
+                ai_enabled:   { type: boolean }
+      responses:
+        "204": { description: Updated }
+        "400": { description: Invalid request body }
+        "404": { description: Component not found }
+
+  /api/v1/vulnerabilities/components/{id}/scans:
+    get:
+      summary: List recent scan runs for a component
+      operationId: listVulnerabilityScans
+      tags: [vuln-scan]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+        - { name: limit, in: query, schema: { type: integer, default: 100 } }
+        - name: cursor
+          in: query
+          description: >
+            Keyset cursor (id of the last row from the previous page). When
+            provided, returns rows with `id < cursor` ordered DESC. Page until
+            the response omits `next_cursor`.
+          schema: { type: string }
+      responses:
+        "200":
+          description: Scan run list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ScanRun" }
+                  next_cursor:
+                    type: string
+                    description: Present when the page filled to `limit`; pass back as `cursor` to continue.
+
+  /api/v1/vulnerabilities/components/{id}/rescan:
+    post:
+      summary: Trigger an immediate rescan against the most recent SBOM
+      operationId: triggerComponentRescan
+      tags: [vuln-scan]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      responses:
+        "202":
+          description: Rescan queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  scan_run_id: { type: integer, format: int64 }
+        "404": { description: Component not found or has no SBOMs to rescan }
+        "429": { description: Rate-limited }
+
+  /api/v1/vulnerabilities/components/{id}/ignores:
+    get:
+      summary: List CVE ignore records for a component (active + revoked + expired)
+      operationId: listComponentIgnores
+      tags: [vuln-scan]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      responses:
+        "200":
+          description: Ignore list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Ignore" }
+
+    post:
+      summary: Create a CVE ignore for a (cve_id, package_name) pair
+      operationId: createComponentIgnore
+      tags: [vuln-scan]
+      description: |
+        Suppression is per-package (version is informational only). Cap of
+        100 active ignores per component. Writes `ignore_created` audit row
+        and (when ai_draft_accepted=true) `ai_draft_accepted` audit row.
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IgnoreCreateRequest" }
+      responses:
+        "201":
+          description: Ignore created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ignore" }
+        "400": { description: Invalid request body }
+        "409": { description: Per-component ignore cap (100) reached }
+
+  /api/v1/vulnerabilities/components/{id}/ignores/{ignoreId}:
+    delete:
+      summary: Revoke a CVE ignore (sets revoked_at)
+      operationId: revokeComponentIgnore
+      tags: [vuln-scan]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+        - { name: ignoreId, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "204": { description: Revoked }
+        "404": { description: Ignore not found }
+
+  /api/v1/vulnerabilities/scan-runs/{id}:
+    get:
+      summary: Get scan run metadata
+      operationId: getScanRun
+      tags: [vuln-scan]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      responses:
+        "200":
+          description: Scan run
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ScanRun" }
+        "404": { description: Run not found }
+
+  /api/v1/vulnerabilities/scan-runs/{id}/findings:
+    get:
+      summary: List findings for a scan run
+      operationId: getScanRunFindings
+      tags: [vuln-scan]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      responses:
+        "200":
+          description: Findings list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/ScanFinding" }
+
+  /api/v1/vulnerabilities/scan-runs/{id}/sbom:
+    get:
+      summary: Stream the original CycloneDX SBOM (verifies SHA-256 on read)
+      operationId: getScanRunSBOM
+      tags: [vuln-scan]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      responses:
+        "200":
+          description: CycloneDX SBOM body
+          content:
+            application/vnd.cyclonedx+json:
+              schema: { type: string, format: binary }
+        "502":
+          description: SBOM blob fetch failed or SHA-256 mismatch (integrity violation)
+
+  /api/v1/vulnerabilities/summary:
+    get:
+      summary: Aggregate severity counts across all components
+      operationId: getVulnerabilitySummary
+      tags: [vuln-scan]
+      responses:
+        "200":
+          description: Summary
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VulnSummary" }
+
+  /api/v1/vulnerabilities/badge:
+    get:
+      summary: New-CRITICAL badge counter for the sidebar (polled every 30s)
+      operationId: getVulnerabilityBadge
+      tags: [vuln-scan]
+      responses:
+        "200":
+          description: Badge counter
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+
+  /api/v1/projects/{id}/components:
+    get:
+      summary: List components owned by a project
+      operationId: listProjectComponents
+      tags: [vuln-scan]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      responses:
+        "200":
+          description: Component list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Component" }
+
+  # ---- AI surfaces (registered only when ai_features.enabled = true) -----
+  /api/v1/ai/anomalies:
+    get:
+      summary: List recent unacknowledged anomalies
+      operationId: listAnomalies
+      tags: [ai]
+      responses:
+        "200":
+          description: Anomaly list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Anomaly" } }
+
+  /api/v1/ai/anomalies/{id}/acknowledge:
+    post:
+      summary: Acknowledge an anomaly for the current user
+      operationId: acknowledgeAnomaly
+      tags: [ai]
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      responses:
+        "204": { description: Acknowledged }
+
+  /api/v1/ai/components/{id}/fix-path:
+    get:
+      summary: Pure-SQL fix-path insight (no LLM)
+      operationId: getFixPathInsight
+      tags: [ai]
+      description: |
+        Returns the smallest single upgrade that resolves the most CRITICAL+HIGH
+        findings on a component. Computed deterministically from scan_findings
+        + fixed_version columns; no scanner-bridge call.
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer, format: int64 } }]
+      responses:
+        "200":
+          description: Fix-path insight or null when no recommendation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FixPathInsight" }
+
+  /api/v1/ai/draft-ignore-reason:
+    post:
+      summary: Draft an ignore-reason via the scanner-bridge gRPC sidecar
+      operationId: draftIgnoreReason
+      tags: [ai]
+      description: |
+        Always returns 503 when `ai_features.ignore_reason_drafter.enabled` is
+        false (Go-side stub). When enabled, calls the Python `vuln_drafter`
+        RPC (currently a placeholder).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [component_id, cve_id, package_name, package_version]
+              properties:
+                component_id:    { type: integer, format: int64 }
+                cve_id:          { type: string, example: "CVE-2024-12345" }
+                package_name:    { type: string }
+                package_version: { type: string }
+      responses:
+        "200":
+          description: Draft reason
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reason: { type: string }
+        "503": { description: Drafter disabled or sidecar unreachable }
+
 components:
   parameters:
     artifactId:
@@ -1211,6 +1701,26 @@ components:
           type: string
           format: date-time
           nullable: true
+        scopes:
+          type: string
+          description: |
+            Comma-separated capability tokens granted to this key. Empty string is
+            treated as legacy `proxy:fetch` only (rows created before migration 032).
+          example: "proxy:fetch,scan:upload"
+
+    APIKeyScope:
+      type: string
+      enum:
+        - proxy:fetch
+        - scan:upload
+        - admin:read
+        - admin:write
+      description: |
+        Canonical capability tokens used by `RequireScope` middleware.
+        - `proxy:fetch` — required for Basic-auth proxy traffic (pip/npm/docker/etc).
+        - `scan:upload` — POST CycloneDX SBOMs to `/api/v1/projects/{label}/components/{name}/scans`.
+        - `admin:read` — read-only admin API (artifacts, vulnerabilities, audit log).
+        - `admin:write` — write admin API (overrides, ignores, deletes, rescan).
 
     APIKeyCreateResponse:
       type: object
@@ -1227,6 +1737,10 @@ components:
         created_at:
           type: string
           format: date-time
+        scopes:
+          type: array
+          items: { $ref: "#/components/schemas/APIKeyScope" }
+          description: Canonical-ordered list of scopes granted to this key.
         token:
           type: string
           description: Plaintext API key — shown only once, never again
@@ -1738,7 +2252,7 @@ components:
           example: "False positive: safe package"
         scope:
           type: string
-          description: Override scope (default: version)
+          description: "Override scope (default: version)"
           enum: [version, package]
           example: version
 
@@ -2023,3 +2537,151 @@ components:
         unknown_action: { type: string, enum: [allow, warn, block] }
         on_sbom_error:  { type: string, enum: [allow, warn, block] }
         or_semantics:   { type: string, enum: [any_allowed, all_allowed], default: any_allowed }
+
+    # ---- Vulnerability scan schemas (Phase 1+2 contracts) ----------------
+    Severity:
+      type: string
+      enum: [CRITICAL, HIGH, MEDIUM, LOW, UNKNOWN, INFO]
+
+    Component:
+      type: object
+      required: [id, project_id, name, ecosystem]
+      properties:
+        id:           { type: integer, format: int64 }
+        project_id:   { type: integer, format: int64 }
+        name:         { type: string, pattern: "^[a-z0-9][a-z0-9._/-]{0,255}$" }
+        display_name: { type: string }
+        description:  { type: string }
+        ecosystem:    { type: string, example: "pypi" }
+        repo_url:     { type: string }
+        ai_enabled:   { type: boolean }
+        enabled:      { type: boolean }
+        last_scan_id: { type: integer, format: int64, nullable: true }
+
+    ComponentRow:
+      allOf:
+        - $ref: "#/components/schemas/Component"
+        - type: object
+          properties:
+            project_label:       { type: string }
+            last_scan_at:        { type: string, format: date-time }
+            last_scan_trigger:   { type: string, enum: [upload, manual, rescan] }
+            critical_count:      { type: integer }
+            high_count:          { type: integer }
+            medium_count:        { type: integer }
+            low_count:           { type: integer }
+            new_critical_count:  { type: integer, description: "Δ vs the previous successful run" }
+            new_high_count:      { type: integer }
+            stale:               { type: boolean, description: "True when last_scan_at is older than vuln_scan.stale_threshold" }
+
+    ScanRun:
+      type: object
+      required: [id, component_id, trigger, status, sbom_blob_path, sbom_sha256]
+      properties:
+        id:                  { type: integer, format: int64 }
+        component_id:        { type: integer, format: int64 }
+        trigger:             { type: string, enum: [upload, manual, rescan] }
+        status:              { type: string, enum: [pending, running, done, failed] }
+        sbom_blob_path:      { type: string }
+        sbom_size_bytes:     { type: integer, format: int64 }
+        sbom_format:         { type: string, example: "cyclonedx-json" }
+        sbom_sha256:         { type: string, description: "Lowercase hex; verified on every read" }
+        started_at:          { type: string, format: date-time }
+        finished_at:         { type: string, format: date-time, nullable: true }
+        scanner_status:      { type: string, description: "JSON object: {scannerName: status}" }
+        critical_count:      { type: integer }
+        high_count:          { type: integer }
+        medium_count:        { type: integer }
+        low_count:           { type: integer }
+        new_critical_count:  { type: integer }
+        new_high_count:      { type: integer }
+        component_count:     { type: integer, description: "Number of CycloneDX components in the SBOM" }
+        error_message:       { type: string }
+        integrity_violated:  { type: boolean, description: "True when SBOM SHA-256 mismatches blob" }
+
+    ScanFinding:
+      type: object
+      required: [id, scan_run_id, component_id, cve_id, package_name, severity, detected_by]
+      properties:
+        id:               { type: integer, format: int64 }
+        scan_run_id:      { type: integer, format: int64 }
+        component_id:     { type: integer, format: int64 }
+        cve_id:           { type: string, example: "CVE-2024-12345" }
+        package_name:     { type: string }
+        package_version:  { type: string }
+        ecosystem:        { type: string }
+        severity:         { $ref: "#/components/schemas/Severity" }
+        cvss_score:       { type: number, format: float }
+        fixed_version:    { type: string, description: "Empty when no fix is available" }
+        summary:          { type: string }
+        detected_by:      { type: string, description: "Scanner name (osv, trivy, etc)" }
+        is_suppressed:    { type: boolean }
+        suppressed_by:    { type: integer, format: int64, nullable: true, description: "ignore_id when is_suppressed" }
+
+    Ignore:
+      type: object
+      required: [id, component_id, cve_id, package_name, reason, created_by_email, created_at]
+      properties:
+        id:                       { type: integer, format: int64 }
+        component_id:             { type: integer, format: int64 }
+        cve_id:                   { type: string }
+        package_name:             { type: string }
+        package_version:          { type: string, description: "Informational only — suppression is per-package" }
+        reason:                   { type: string }
+        ai_draft_accepted:        { type: boolean }
+        expires_at:               { type: string, format: date-time, nullable: true }
+        created_against_run_id:   { type: integer, format: int64, nullable: true }
+        created_by_email:         { type: string }
+        created_at:               { type: string, format: date-time }
+        revoked_at:               { type: string, format: date-time, nullable: true }
+        revoked_by_email:         { type: string, nullable: true }
+
+    IgnoreCreateRequest:
+      type: object
+      required: [cve_id, package_name, reason]
+      properties:
+        cve_id:             { type: string }
+        package_name:       { type: string }
+        package_version:    { type: string }
+        reason:             { type: string }
+        expires_at:         { type: string, format: date-time, nullable: true }
+        ai_draft_accepted:  { type: boolean }
+        against_run_id:     { type: integer, format: int64 }
+
+    VulnSummary:
+      type: object
+      required: [total_critical, total_high, total_medium, total_low]
+      properties:
+        total_critical:           { type: integer }
+        total_high:               { type: integer }
+        total_medium:             { type: integer }
+        total_low:                { type: integer }
+        components_new_critical:  { type: integer }
+        stale_components:         { type: integer }
+
+    Anomaly:
+      type: object
+      required: [id, component_id, detected_at, sigma, summary]
+      properties:
+        id:                 { type: integer, format: int64 }
+        component_id:       { type: integer, format: int64 }
+        detected_at:        { type: string, format: date-time }
+        triggering_run_id:  { type: integer, format: int64, nullable: true }
+        severity_delta:     { type: integer, description: "current - baseline_mean" }
+        baseline_mean:      { type: number, format: double }
+        baseline_stddev:    { type: number, format: double }
+        sigma:              { type: number, format: double }
+        summary:            { type: string }
+
+    FixPathInsight:
+      type: object
+      properties:
+        component_id:        { type: integer, format: int64 }
+        package_name:        { type: string }
+        current_version:     { type: string }
+        recommended_version: { type: string }
+        cves_resolved:       { type: array, items: { type: string } }
+        critical_resolved:   { type: integer }
+        high_resolved:       { type: integer }
+
+    # ---- Vulnerability scan schemas (Phase 1+2 contracts) -----------------

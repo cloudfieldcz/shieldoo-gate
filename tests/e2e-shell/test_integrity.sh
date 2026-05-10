@@ -136,15 +136,20 @@ test_integrity() {
         local desc="integrity: delete after violation -> fresh re-fetch succeeds"
 
         # 1. Download a clean package.
-        local pkg="picomatch"
-        local ver="4.0.2"
+        # NOTE: use `is-number@6.0.0` rather than `picomatch@4.0.2` because
+        # GuardDog findings on picomatch (npm-install-script, shady-links, etc.)
+        # cause the AI triage scanner (Run 2 with SGW_POLICY_AI_TRIAGE_ENABLED=true)
+        # to QUARANTINE the artifact, breaking this test's "clean initial download"
+        # precondition. is-number is a trivial utility that AI consistently classifies CLEAN.
+        local pkg="is-number"
+        local ver="6.0.0"
         local tarball_url="${E2E_NPM_URL}/${pkg}/-/${pkg}-${ver}.tgz"
+        local artifact_id="npm:${pkg}:${ver}"
         local http_code
         http_code=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_CURL_AUTH[@]}" "$tarball_url")
         if [ "$http_code" != "200" ]; then
             log_fail "$desc — initial download failed (HTTP $http_code)"
         else
-            local artifact_id="npm:${pkg}:${ver}"
             sleep 2
 
             # 2. Tamper SHA256.

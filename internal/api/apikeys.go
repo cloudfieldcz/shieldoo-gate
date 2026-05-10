@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/auth"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 )
 
 const (
@@ -23,18 +25,20 @@ const (
 
 // apiKeyCreateRequest is the JSON body for POST /api/v1/api-keys.
 type apiKeyCreateRequest struct {
-	Name string `json:"name"`
+	Name   string   `json:"name"`
+	Scopes []string `json:"scopes,omitempty"`
 }
 
 // apiKeyCreateResponse is the JSON response for POST /api/v1/api-keys.
 // The Token field contains the plaintext key — shown only once.
 type apiKeyCreateResponse struct {
-	ID         int64      `json:"id"`
-	Name       string     `json:"name"`
-	OwnerEmail string     `json:"owner_email"`
-	Enabled    bool       `json:"enabled"`
-	CreatedAt  time.Time  `json:"created_at"`
-	Token      string     `json:"token"`
+	ID         int64     `json:"id"`
+	Name       string    `json:"name"`
+	OwnerEmail string    `json:"owner_email"`
+	Enabled    bool      `json:"enabled"`
+	CreatedAt  time.Time `json:"created_at"`
+	Scopes     []string  `json:"scopes"`
+	Token      string    `json:"token"`
 }
 
 // handleCreateAPIKey creates a new API key and returns the plaintext token once.
@@ -70,7 +74,14 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		ownerEmail = user.Email
 	}
 
-	id, err := s.db.CreateAPIKey(hash, req.Name, ownerEmail)
+	// Validate + canonicalize scopes. Empty list defaults to legacy proxy:fetch.
+	scopes, err := canonicalizeScopes(req.Scopes)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	id, err := s.db.CreateAPIKeyWithScopes(hash, req.Name, ownerEmail, strings.Join(scopes, ","))
 	if err != nil {
 		log.Error().Err(err).Msg("api: failed to create api key")
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create key"})
@@ -83,10 +94,61 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		OwnerEmail: ownerEmail,
 		Enabled:    true,
 		CreatedAt:  time.Now().UTC(),
+		Scopes:     scopes,
 		Token:      plaintext,
 	}
 	writeJSON(w, http.StatusCreated, resp)
 }
+
+// canonicalizeScopes deduplicates, validates, and orders the requested scopes.
+// Empty input expands to [proxy:fetch] for backwards compatibility.
+func canonicalizeScopes(in []string) ([]string, error) {
+	if len(in) == 0 {
+		return []string{model.ScopeProxyFetch}, nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(in))
+	for _, raw := range in {
+		s := strings.TrimSpace(raw)
+		if s == "" {
+			continue
+		}
+		valid := false
+		for _, allowed := range model.AllScopes {
+			if s == allowed {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return nil, errInvalidScope(s)
+		}
+		if seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	if len(out) == 0 {
+		return []string{model.ScopeProxyFetch}, nil
+	}
+	// Stable canonical ordering matching model.AllScopes.
+	canonical := make([]string, 0, len(out))
+	for _, allowed := range model.AllScopes {
+		if seen[allowed] {
+			canonical = append(canonical, allowed)
+		}
+	}
+	return canonical, nil
+}
+
+func errInvalidScope(s string) error {
+	return scopeError("invalid scope: " + s)
+}
+
+type scopeError string
+
+func (e scopeError) Error() string { return string(e) }
 
 // handleListAPIKeys returns API keys owned by the authenticated user.
 func (s *Server) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {

@@ -158,6 +158,9 @@ func FormatSubject(batch []AlertPayload) string {
 }
 
 // FormatBody builds the plain-text email body from a batch of payloads.
+// Vuln-scan event types (which carry component_id/scan_run_id/ignore_id rather
+// than an artifact ID) get the EventDescription helper so the operator sees
+// the relevant identifiers without parsing the raw metadata blob.
 func FormatBody(batch []AlertPayload) string {
 	var b strings.Builder
 	b.WriteString("Shieldoo Gate Security Alert\n")
@@ -165,8 +168,18 @@ func FormatBody(batch []AlertPayload) string {
 	fmt.Fprintf(&b, "%d event(s) detected:\n\n", len(batch))
 
 	for i, p := range batch {
-		fmt.Fprintf(&b, "%d. [%s] %s\n", i+1, p.EventType, p.ArtifactID)
-		fmt.Fprintf(&b, "   Reason: %s\n", p.Reason)
+		// Header line: legacy artifact events keep their existing shape; vuln-scan
+		// events that have no ArtifactID get the curated EventTitle so the digest
+		// stays readable when component/scan_run rows fan out alongside artifacts.
+		if p.ArtifactID != "" {
+			fmt.Fprintf(&b, "%d. [%s] %s\n", i+1, p.EventType, p.ArtifactID)
+		} else {
+			fmt.Fprintf(&b, "%d. [%s] %s\n", i+1, p.EventType, EventTitle(p.EventType))
+		}
+		// Reason line: keep "Reason:" prefix for back-compat with existing
+		// dashboards / log scrapers, but enrich vuln-scan rows via EventDescription
+		// so the FK identifiers (component_id, scan_run_id, ignore_id) appear inline.
+		fmt.Fprintf(&b, "   Reason: %s\n", EventDescription(p))
 		fmt.Fprintf(&b, "   Time: %s\n\n", p.Timestamp.Format(time.RFC3339))
 	}
 

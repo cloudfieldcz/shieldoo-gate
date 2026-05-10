@@ -1,10 +1,18 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import axios from 'axios'
 import { artifactsApi, artifactLicensesApi } from '../api/client'
 import StatusBadge from './StatusBadge'
 import ScanResultCard from './ScanResultCard'
-import { X, RefreshCw, ShieldX, ShieldCheck, Trash2, FileText } from 'lucide-react'
+import { X, RefreshCw, ShieldX, ShieldCheck, Trash2, FileText, Info } from 'lucide-react'
 import { formatBytes } from '../utils/format'
+
+// Mirrors the Go-side `isLicenseQuarantineReason` predicate. Keep in sync with
+// `licenseQuarantineReasonPrefix = "license policy:"` in license_reevaluation.go.
+function isLicenseQuarantine(reason: string | undefined): boolean {
+  if (!reason) return false
+  return reason.toLowerCase().startsWith('license policy:')
+}
 
 interface ArtifactDetailByIdProps {
   artifactId: string
@@ -63,6 +71,22 @@ export default function ArtifactDetailPanel({ artifactId, search, onClose }: Art
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['artifacts'] })
       void qc.invalidateQueries({ queryKey: ['artifact-detail', resolvedId] })
+    },
+    onError: (e: unknown) => {
+      // The backend returns 409 with `{error, next_action}` for license-flavoured
+      // quarantines (see internal/api/artifacts.go: handleReleaseArtifact). The
+      // UI normally hides the Release button in that case; this is the belt-
+      // and-braces fallback if a stale page state slipped through.
+      if (axios.isAxiosError(e)) {
+        const data = e.response?.data as
+          | { error?: string; next_action?: { hint?: string } }
+          | undefined
+        if (data?.error === 'license_block_requires_project_scope' && data?.next_action?.hint) {
+          window.alert(`Cannot release globally: ${data.next_action.hint}`)
+          return
+        }
+      }
+      window.alert('Release failed: ' + (e instanceof Error ? e.message : 'unknown error'))
     },
   })
 
@@ -215,16 +239,28 @@ export default function ArtifactDetailPanel({ artifactId, search, onClose }: Art
             </button>
           )}
 
-          {status === 'QUARANTINED' && (
-            <button
-              onClick={() => releaseMutation.mutate(resolvedId!)}
-              disabled={releaseMutation.isPending}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-green-300 text-green-700 hover:bg-green-50 disabled:opacity-50"
-            >
-              <ShieldCheck className="w-3.5 h-3.5" />
-              Release
-            </button>
-          )}
+          {status === 'QUARANTINED' &&
+            (isLicenseQuarantine(detail.status.quarantine_reason) ? (
+              // License-policy blocks are project-scoped: a global release has
+              // the wrong blast radius. Point the operator at Project Detail
+              // instead, where they can release for one project at a time.
+              <div className="flex items-start gap-1.5 px-3 py-1.5 text-xs rounded-md border border-amber-300 bg-amber-50 text-amber-900">
+                <Info className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                <span>
+                  Blocked by a project's license policy. Open the project to release
+                  for that project specifically.
+                </span>
+              </div>
+            ) : (
+              <button
+                onClick={() => releaseMutation.mutate(resolvedId!)}
+                disabled={releaseMutation.isPending}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-green-300 text-green-700 hover:bg-green-50 disabled:opacity-50"
+              >
+                <ShieldCheck className="w-3.5 h-3.5" />
+                Release
+              </button>
+            ))}
 
           {!confirmDelete ? (
             <button

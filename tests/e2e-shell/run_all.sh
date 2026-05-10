@@ -33,6 +33,16 @@ source "${SCRIPT_DIR}/test_integrity.sh"
 source "${SCRIPT_DIR}/test_projects.sh"
 source "${SCRIPT_DIR}/test_sbom.sh"
 source "${SCRIPT_DIR}/test_license_policy.sh"
+source "${SCRIPT_DIR}/test_license_per_project.sh"
+source "${SCRIPT_DIR}/test_vuln_scan_negative.sh"
+source "${SCRIPT_DIR}/test_vuln_scan_lifecycle.sh"
+source "${SCRIPT_DIR}/test_vuln_scan_pypi.sh"
+source "${SCRIPT_DIR}/test_vuln_scan_npm.sh"
+source "${SCRIPT_DIR}/test_vuln_scan_docker.sh"
+source "${SCRIPT_DIR}/test_vuln_scan_log_redaction.sh"
+source "${SCRIPT_DIR}/test_vuln_scan_super_token_audit.sh"
+source "${SCRIPT_DIR}/test_vuln_scan_ai_ssrf.sh"
+source "${SCRIPT_DIR}/test_vuln_scan_shdg.sh"
 
 _run_label=""
 if [ "${SGW_PROXY_AUTH_ENABLED:-false}" = "true" ]; then
@@ -140,6 +150,21 @@ test_license_nuget
 test_license_maven
 test_license_rubygems
 test_license_cache_hit
+
+# Per-project license-release flow: 409 on global, 201 on project, GET listing, revoke.
+test_license_per_project
+
+# Vulnerability-scan endpoints (push-from-CI SBOM upload, ignores, rescan, cursor pagination).
+# Each function self-skips when the feature is disabled (503 from /summary).
+test_vuln_scan_negative
+test_vuln_scan_lifecycle
+test_vuln_scan_pypi
+test_vuln_scan_npm
+test_vuln_scan_docker
+test_vuln_scan_log_redaction
+test_vuln_scan_super_token_audit
+test_vuln_scan_ai_ssrf
+test_vuln_scan_shdg
 
 # ---------------------------------------------------------------------------
 # Summary and exit code

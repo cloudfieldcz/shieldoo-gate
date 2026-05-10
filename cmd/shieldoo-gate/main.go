@@ -157,13 +157,17 @@ func main() {
 		builtin.NewThreatFeedChecker(db),
 	}
 
-	// Optional: GuardDog scanner
+	// Optional: GuardDog scanner. We retain the *GuardDogScanner reference so the
+	// vuln-scan setup can reuse the same scanner-bridge connection for the
+	// DraftIgnoreReason RPC (no second dial, no second auth handshake).
+	var guardDog *guarddog.GuardDogScanner
 	if cfg.Scanners.GuardDog.Enabled {
 		gd, err := guarddog.NewGuardDogScanner(cfg.Scanners.GuardDog.BridgeSocket)
 		if err != nil {
 			log.Warn().Err(err).Msg("guarddog scanner disabled: failed to init")
 		} else {
 			scanners = append(scanners, gd)
+			guardDog = gd
 			log.Info().Str("socket", cfg.Scanners.GuardDog.BridgeSocket).Msg("guarddog scanner enabled")
 		}
 	}
@@ -473,6 +477,7 @@ func main() {
 	apiServer.SetPublicURLs(cfg.PublicURLs)
 
 	// Init OIDC authentication (if enabled).
+	var oidcMw *auth.OIDCMiddleware
 	if cfg.Auth.Enabled {
 		authCfg := auth.AuthConfig{
 			Enabled:         true,
@@ -482,10 +487,11 @@ func main() {
 			RedirectURL:     cfg.Auth.RedirectURL,
 			Scopes:          cfg.Auth.Scopes,
 		}
-		oidcMw, err := auth.NewOIDCMiddleware(context.Background(), cfg.Auth.IssuerURL, cfg.Auth.ClientID)
+		mw, err := auth.NewOIDCMiddleware(context.Background(), cfg.Auth.IssuerURL, cfg.Auth.ClientID)
 		if err != nil {
 			log.Fatal().Err(err).Msg("failed to initialize OIDC middleware")
 		}
+		oidcMw = mw
 		authHandlers, err := auth.NewAuthHandlers(authCfg)
 		if err != nil {
 			log.Fatal().Err(err).Msg("failed to initialize auth handlers")
@@ -567,18 +573,32 @@ func main() {
 		log.Info().Str("format", "cyclonedx-json").Msg("SBOM storage enabled")
 	}
 
+	// Resolve global token once (shared by proxy Basic-auth + admin PAT-Bearer paths).
+	globalToken := ""
+	if cfg.ProxyAuth.Enabled && cfg.ProxyAuth.GlobalTokenEnv != "" {
+		globalToken = os.Getenv(cfg.ProxyAuth.GlobalTokenEnv)
+	}
+
+	// Shared audit writer for the new vuln-scan event types (super_token_used etc).
+	// Inherits the alerter constructed earlier so vuln-scan events fan out to
+	// webhook/Slack/email per channel filter configuration.
+	adminAudit := auth.NewAuditWriter(db).WithAlerter(alerterInstance)
+
 	// Init proxy auth middleware (if enabled).
 	var apiKeyMw *auth.APIKeyMiddleware
 	if cfg.ProxyAuth.Enabled {
-		globalToken := ""
-		if cfg.ProxyAuth.GlobalTokenEnv != "" {
-			globalToken = os.Getenv(cfg.ProxyAuth.GlobalTokenEnv)
-		}
-		apiKeyMw = auth.NewAPIKeyMiddleware(db, globalToken).WithProjectService(projectSvc)
+		apiKeyMw = auth.NewAPIKeyMiddleware(db, globalToken).
+			WithProjectService(projectSvc).
+			WithAuditWriter(adminAudit)
 		log.Info().Msg("proxy API key authentication enabled")
 	}
 	// SetProxyAuth on apiServer so it can conditionally register API key management endpoints.
 	apiServer.SetProxyAuth(cfg.ProxyAuth.Enabled, cfg.Auth.Enabled)
+
+	// Wire admin-API auth chain: Authorization Bearer <PAT> first, OIDC cookie fallback.
+	// Always-on so CI tokens authenticate even when OIDC is disabled.
+	adminPATMw := auth.NewPATBearerMiddleware(db, globalToken, adminAudit)
+	apiServer.SetAdminAuthChain(auth.NewAdminAuthChain(adminPATMw, oidcMw), adminPATMw)
 
 	host := cfg.Server.Host
 	if host == "" {
@@ -591,6 +611,19 @@ func main() {
 			return apiKeyMw.Authenticate(h)
 		}
 		return h
+	}
+
+	// Graceful shutdown context — created BEFORE setupVulnScan so the vuln-scan
+	// schedulers can latch on to it for cancellation.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Vulnerability-scan wiring MUST run before apiServer.Routes() — Routes()
+	// snapshots the route table at call time, and the vuln-scan + AI route
+	// groups are only registered when VulnEnabled()/AIEnabled() report true,
+	// which requires SetVulnDeps + SetAIDeps to have run.
+	if cfg.VulnScan.Enabled {
+		setupVulnScan(ctx, cfg, db, blobStore, projectSvc, apiServer, alerterInstance, guardDog)
 	}
 
 	// Build HTTP servers
@@ -610,10 +643,6 @@ func main() {
 	}
 
 	log.Info().Msg("shieldoo-gate starting")
-
-	// Graceful shutdown context
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// Start Docker sync service (if enabled). Uses ctx for graceful shutdown.
 	if cfg.Upstreams.Docker.Sync.Enabled {

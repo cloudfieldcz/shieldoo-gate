@@ -53,45 +53,45 @@ type slackTextObj struct {
 	Text string `json:"text"`
 }
 
-// eventTitle maps an event type string to a human-readable Slack header title.
+// eventTitle delegates to the package-level EventTitle so vuln-scan events get
+// their curated header text. Kept as a thin wrapper for backward compatibility
+// with existing tests that import the lowercase symbol.
 func eventTitle(eventType string) string {
-	switch eventType {
-	case "BLOCKED":
-		return "Artifact Blocked"
-	case "QUARANTINED":
-		return "Artifact Quarantined"
-	case "RELEASED":
-		return "Artifact Released"
-	case "TAG_MUTATED":
-		return "Tag Digest Changed"
-	case "RESCAN_QUEUED":
-		return "Rescan Queued"
-	case "OVERRIDE_CREATED":
-		return "Override Created"
-	case "OVERRIDE_REVOKED":
-		return "Override Revoked"
-	default:
-		return "Security Event: " + eventType
-	}
+	return EventTitle(eventType)
 }
 
 // buildSlackMessage constructs a Slack Block Kit message from an AlertPayload.
+// Vuln-scan events get a "Component" / "Scan run" / "Ignore" field row when
+// the structured FK columns are populated; legacy proxy events render the
+// pre-existing Artifact + Reason layout unchanged.
 func buildSlackMessage(payload AlertPayload) slackMessage {
+	mainFields := []slackTextObj{}
+	if payload.ArtifactID != "" {
+		mainFields = append(mainFields, slackTextObj{Type: "mrkdwn", Text: "*Artifact:*\n" + payload.ArtifactID})
+	}
+	if payload.ComponentID != nil && *payload.ComponentID > 0 {
+		mainFields = append(mainFields, slackTextObj{Type: "mrkdwn", Text: fmt.Sprintf("*Component:*\n#%d", *payload.ComponentID)})
+	}
+	if payload.ScanRunID != nil && *payload.ScanRunID > 0 {
+		mainFields = append(mainFields, slackTextObj{Type: "mrkdwn", Text: fmt.Sprintf("*Scan run:*\n#%d", *payload.ScanRunID)})
+	}
+	if payload.IgnoreID != nil && *payload.IgnoreID > 0 {
+		mainFields = append(mainFields, slackTextObj{Type: "mrkdwn", Text: fmt.Sprintf("*Ignore:*\n#%d", *payload.IgnoreID)})
+	}
+	mainFields = append(mainFields, slackTextObj{Type: "mrkdwn", Text: "*Reason:*\n" + payload.Reason})
+
 	return slackMessage{
 		Blocks: []slackBlock{
 			{
 				Type: "header",
 				Text: &slackTextObj{
 					Type: "plain_text",
-					Text: eventTitle(payload.EventType),
+					Text: EventTitle(payload.EventType),
 				},
 			},
 			{
-				Type: "section",
-				Fields: []slackTextObj{
-					{Type: "mrkdwn", Text: "*Artifact:*\n" + payload.ArtifactID},
-					{Type: "mrkdwn", Text: "*Reason:*\n" + payload.Reason},
-				},
+				Type:   "section",
+				Fields: mainFields,
 			},
 			{
 				Type: "context",

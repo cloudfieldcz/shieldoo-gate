@@ -174,7 +174,9 @@ Each task should map to **one module**. Do not modify multiple unrelated modules
 2. **Never trust artifact content before scan completes** — scan before cache write
 3. **Never log secrets** — scrub Authorization headers, API keys from all log output
 4. **Never unpin scanner dependencies** — `requirements.txt` must always use `==` with hashes
-5. **Audit log is append-only** — no UPDATE or DELETE on `audit_log` table
+5. **Audit log is append-only** — no UPDATE or DELETE on `audit_log` table; FK-shaped vuln-scan extension columns (`component_id`, `scan_run_id`, `ignore_id`, `api_key_id`) are **not** enforced as foreign keys for the same reason — cascades would silently rewrite history
+6. **Global super-token usage MUST emit `super_token_used`** — both the Basic-auth proxy path (`internal/auth/apikey.go`) and the Bearer-PAT admin path (`internal/auth/pat_bearer.go`) write this audit row whenever the global token authenticates a request. Adding a new authentication path that accepts the global token requires emitting the same event.
+7. **Re-verify SBOM SHA-256 on every read** — `ScanService.GetSBOM` and the rescan path both recompute and compare to `scan_runs.sbom_sha256`; mismatches mark `integrity_violated = true` and write an `sbom_integrity_violation` audit row.
 
 ## Docker Image
 

@@ -1,8 +1,16 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { userApi, apiKeysApi, configApi } from '../api/client'
 import { Key, Plus, Copy, Check, Trash2, AlertTriangle } from 'lucide-react'
-import type { APIKey, PublicURLs } from '../api/types'
+import type { APIKey, PublicURLs, APIKeyScope } from '../api/types'
+import { ALL_SCOPES } from '../api/types'
+
+const SCOPE_LABELS: Record<APIKeyScope, { title: string; help: string }> = {
+  'proxy:fetch':  { title: 'Proxy fetch',   help: 'Required for Basic-auth proxy traffic (pip/npm/docker/etc).' },
+  'scan:upload':  { title: 'Scan upload',   help: 'POST CycloneDX SBOMs to /api/v1/projects/{label}/components/{name}/scans.' },
+  'admin:read':   { title: 'Admin read',    help: 'Read-only admin API: artifacts, vulnerabilities, audit log.' },
+  'admin:write':  { title: 'Admin write',   help: 'Write admin API: ignores, overrides, deletes, rescan.' },
+}
 
 export default function Profile() {
   const queryClient = useQueryClient()
@@ -91,17 +99,41 @@ function APIKeysSection({
   const [newToken, setNewToken] = useState<string | null>(null)
   const [newKeyName, setNewKeyName] = useState('')
   const [nameError, setNameError] = useState('')
+  const [selectedScopes, setSelectedScopes] = useState<APIKeyScope[]>(['proxy:fetch'])
+
+  // Deep-link: ?scope=scan:upload pre-checks the box and opens the create panel.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const wanted = params.getAll('scope').filter((s): s is APIKeyScope => (ALL_SCOPES as string[]).includes(s))
+    if (wanted.length === 0) return
+    setSelectedScopes((prev) => {
+      const merged = new Set<APIKeyScope>([...prev, ...wanted])
+      return ALL_SCOPES.filter((s) => merged.has(s))
+    })
+    setShowCreate(true)
+  }, [])
 
   const createMutation = useMutation({
-    mutationFn: (name: string) => apiKeysApi.create(name),
+    mutationFn: ({ name, scopes }: { name: string; scopes: APIKeyScope[] }) =>
+      apiKeysApi.create(name, scopes),
     onSuccess: (data) => {
       setNewToken(data.token)
       setShowCreate(false)
       setNewKeyName('')
       setNameError('')
+      setSelectedScopes(['proxy:fetch'])
       queryClient.invalidateQueries({ queryKey: ['api-keys'] })
     },
   })
+
+  const toggleScope = (scope: APIKeyScope) => {
+    setSelectedScopes((prev) => {
+      const has = prev.includes(scope)
+      const next = has ? prev.filter((s) => s !== scope) : [...prev, scope]
+      // keep canonical order (matches ALL_SCOPES)
+      return ALL_SCOPES.filter((s) => next.includes(s))
+    })
+  }
 
   const handleCreate = () => {
     const trimmed = newKeyName.trim()
@@ -113,8 +145,12 @@ function APIKeysSection({
       setNameError('Name too long (max 255 characters)')
       return
     }
+    if (selectedScopes.length === 0) {
+      setNameError('Select at least one scope')
+      return
+    }
     setNameError('')
-    createMutation.mutate(trimmed)
+    createMutation.mutate({ name: trimmed, scopes: selectedScopes })
   }
 
   return (
@@ -137,34 +173,65 @@ function APIKeysSection({
 
       {/* Create form */}
       {showCreate && (
-        <div className="flex items-start gap-2">
-          <div className="flex-1">
+        <div className="space-y-3 border border-gray-200 rounded-lg p-4 bg-gray-50">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Key name</label>
             <input
               type="text"
               value={newKeyName}
               onChange={(e) => { setNewKeyName(e.target.value); setNameError('') }}
               onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
-              placeholder="Key name (e.g. ci-pipeline)"
+              placeholder="ci-pipeline, github-actions, …"
               className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               autoFocus
               maxLength={255}
             />
-            {nameError && <p className="text-xs text-red-500 mt-1">{nameError}</p>}
-            {createMutation.isError && <p className="text-xs text-red-500 mt-1">Failed to create key.</p>}
           </div>
-          <button
-            onClick={handleCreate}
-            disabled={createMutation.isPending}
-            className="px-3 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50"
-          >
-            {createMutation.isPending ? 'Creating...' : 'Create'}
-          </button>
-          <button
-            onClick={() => { setShowCreate(false); setNewKeyName(''); setNameError('') }}
-            className="px-3 py-2 text-sm text-gray-500 hover:text-gray-700"
-          >
-            Cancel
-          </button>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-2">Scopes</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {ALL_SCOPES.map((scope) => {
+                const meta = SCOPE_LABELS[scope]
+                const checked = selectedScopes.includes(scope)
+                return (
+                  <label
+                    key={scope}
+                    className={`flex items-start gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer ${
+                      checked ? 'border-blue-400 bg-blue-50' : 'border-gray-200 bg-white hover:border-gray-300'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleScope(scope)}
+                      className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="flex-1">
+                      <span className="font-mono text-xs text-gray-700">{scope}</span>
+                      <span className="block text-xs text-gray-500 mt-0.5">{meta.help}</span>
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+          </div>
+          {nameError && <p className="text-xs text-red-500">{nameError}</p>}
+          {createMutation.isError && <p className="text-xs text-red-500">Failed to create key.</p>}
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => { setShowCreate(false); setNewKeyName(''); setNameError('') }}
+              className="px-3 py-2 text-sm text-gray-500 hover:text-gray-700"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleCreate}
+              disabled={createMutation.isPending}
+              className="px-3 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50"
+            >
+              {createMutation.isPending ? 'Creating...' : 'Create'}
+            </button>
+          </div>
         </div>
       )}
 
@@ -262,6 +329,7 @@ function KeysTable({
           <thead>
             <tr className="border-b border-gray-200 text-left text-gray-500">
               <th className="pb-2 font-medium">Name</th>
+              <th className="pb-2 font-medium">Scopes</th>
               <th className="pb-2 font-medium">Created</th>
               <th className="pb-2 font-medium">Last Used</th>
               <th className="pb-2 font-medium">Status</th>
@@ -269,11 +337,22 @@ function KeysTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {keys.map((key) => (
+            {keys.map((key) => {
+              const keyScopes = (key.scopes ? key.scopes.split(',').map((s) => s.trim()).filter(Boolean) : ['proxy:fetch']) as APIKeyScope[]
+              return (
               <tr key={key.id} className={key.enabled ? '' : 'opacity-50'}>
                 <td className="py-2.5 font-mono flex items-center gap-2">
                   <Key className="w-3.5 h-3.5 text-gray-400" />
                   {key.name}
+                </td>
+                <td className="py-2.5">
+                  <div className="flex flex-wrap gap-1">
+                    {keyScopes.map((s) => (
+                      <span key={s} className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-mono bg-gray-100 text-gray-700 border border-gray-200">
+                        {s}
+                      </span>
+                    ))}
+                  </div>
                 </td>
                 <td className="py-2.5 text-gray-500">{formatDate(key.created_at)}</td>
                 <td className="py-2.5 text-gray-500">{key.last_used_at ? formatDate(key.last_used_at) : 'Never'}</td>
@@ -296,7 +375,8 @@ function KeysTable({
                   )}
                 </td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
       </div>

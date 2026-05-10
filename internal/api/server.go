@@ -32,6 +32,8 @@ type Server struct {
 	dockerConfig  config.DockerUpstreamConfig
 	syncSvc       *docker.SyncService
 	oidcMw           *auth.OIDCMiddleware
+	adminChain       *auth.AdminAuthChain
+	patMw            *auth.PATBearerMiddleware
 	authHandlers     *auth.AuthHandlers
 	authEnabled      bool
 	proxyAuthEnabled bool
@@ -40,6 +42,9 @@ type Server struct {
 	projectSvc       project.Service
 	sbomStore        sbom.Storage
 	licenseResolver  *license.Resolver
+	vulnDeps         VulnDeps
+	aiDeps           AIDeps
+	rateLimiter      *auth.RateLimiter
 }
 
 // NewServer creates a new Server with the given dependencies.
@@ -59,6 +64,19 @@ func (s *Server) SetAuth(oidcMw *auth.OIDCMiddleware, authHandlers *auth.AuthHan
 	s.oidcMw = oidcMw
 	s.authHandlers = authHandlers
 	s.authEnabled = true
+}
+
+// SetAdminAuthChain registers the PAT-Bearer + OIDC chain used by the admin API.
+// Called after SetAuth when proxy_auth is enabled.
+func (s *Server) SetAdminAuthChain(chain *auth.AdminAuthChain, pat *auth.PATBearerMiddleware) {
+	s.adminChain = chain
+	s.patMw = pat
+}
+
+// SetRateLimiter wires the per-token rate limiter used on scan-upload, ignore-create,
+// AI-draft, and SBOM download endpoints.
+func (s *Server) SetRateLimiter(rl *auth.RateLimiter) {
+	s.rateLimiter = rl
 }
 
 // SetRescanNotifier sets a callback invoked when a manual rescan is queued,
@@ -99,7 +117,7 @@ func (s *Server) SetProjectService(svc project.Service) {
 func (s *Server) Routes() chi.Router {
 	r := chi.NewRouter()
 
-	r.Use(middleware.Recoverer)
+	r.Use(auth.Recoverer)
 	r.Use(middleware.RealIP)
 
 	// Health endpoint — always unauthenticated.
@@ -118,9 +136,27 @@ func (s *Server) Routes() chi.Router {
 		})
 	}
 
+	// Public scan-upload endpoint — protected by PAT scan:upload scope, NOT by OIDC.
+	// Mounted outside the OIDC group so a CI runner can authenticate with a token.
+	if s.VulnEnabled() {
+		r.Group(func(r chi.Router) {
+			if s.patMw != nil {
+				r.Use(s.patMw.Authenticate)
+			}
+			r.Use(auth.RequireScope("scan:upload"))
+			if s.rateLimiter != nil {
+				r.Use(s.rateLimiter.Middleware("scan-upload"))
+			}
+			r.Post("/api/v1/projects/{label}/components/{name}/scans", s.handleScanUpload)
+		})
+	}
+
 	// Protected admin API routes.
 	r.Group(func(r chi.Router) {
-		if s.authEnabled && s.oidcMw != nil {
+		switch {
+		case s.adminChain != nil:
+			r.Use(s.adminChain.Authenticate)
+		case s.authEnabled && s.oidcMw != nil:
 			r.Use(s.oidcMw.Authenticate)
 		}
 
@@ -182,6 +218,7 @@ func (s *Server) Routes() chi.Router {
 				r.Get("/projects/{id}/license-policy", s.handleGetProjectLicensePolicy)
 				r.Put("/projects/{id}/license-policy", s.handlePutProjectLicensePolicy)
 				r.Delete("/projects/{id}/license-policy", s.handleDeleteProjectLicensePolicy)
+				r.Get("/projects/{id}/overrides", s.handleListProjectOverrides)
 				r.Post("/projects/{id}/overrides", s.handleCreateProjectOverride)
 				r.Post("/projects/{id}/overrides/{overrideId}/revoke", s.handleRevokeProjectOverride)
 			}
@@ -198,6 +235,59 @@ func (s *Server) Routes() chi.Router {
 				r.Post("/api-keys", s.handleCreateAPIKey)
 				r.Get("/api-keys", s.handleListAPIKeys)
 				r.Delete("/api-keys/{id}", s.handleRevokeAPIKey)
+			}
+
+			// Vulnerability scan routes.
+			if s.VulnEnabled() {
+				r.Get("/vulnerabilities/components", s.handleListVulnerabilities)
+				r.Get("/vulnerabilities/components/{id}", s.handleGetComponent)
+				r.Patch("/vulnerabilities/components/{id}", s.handleUpdateComponent)
+				r.Get("/vulnerabilities/components/{id}/scans", s.handleListScanRuns)
+				r.Get("/vulnerabilities/components/{id}/ignores", s.handleListIgnores)
+				// Mutating ignore endpoints are rate-limited on two dimensions:
+				//   ignore-create-token : per-token global (covers fan-out)
+				//   ignore-create-comp  : per-(token,component) — prevents one comp
+				//                          from exhausting the global token quota.
+				r.Group(func(r chi.Router) {
+					if s.rateLimiter != nil {
+						r.Use(s.rateLimiter.Middleware("ignore-create-token"))
+						r.Use(s.rateLimiter.MiddlewareByPath("ignore-create-comp", "id"))
+					}
+					r.Post("/vulnerabilities/components/{id}/ignores", s.handleCreateIgnore)
+					r.Delete("/vulnerabilities/components/{id}/ignores/{ignoreId}", s.handleRevokeIgnore)
+				})
+				r.Group(func(r chi.Router) {
+					if s.rateLimiter != nil {
+						r.Use(s.rateLimiter.Middleware("rescan"))
+					}
+					r.Post("/vulnerabilities/components/{id}/rescan", s.handleManualRescan)
+				})
+				r.Get("/vulnerabilities/scan-runs/{id}", s.handleGetScanRun)
+				r.Get("/vulnerabilities/scan-runs/{id}/findings", s.handleGetScanRunFindings)
+				r.Group(func(r chi.Router) {
+					if s.rateLimiter != nil {
+						r.Use(s.rateLimiter.Middleware("sbom-download"))
+					}
+					r.Get("/vulnerabilities/scan-runs/{id}/sbom", s.handleGetScanRunSBOM)
+				})
+				r.Get("/vulnerabilities/summary", s.handleVulnSummary)
+				r.Get("/vulnerabilities/badge", s.handleVulnBadge)
+				if s.projectSvc != nil {
+					r.Get("/projects/{id}/components", s.handleListComponentsByProject)
+				}
+			}
+
+			// AI surfaces (registered ONLY when ai_features.enabled = true; 404 by absence).
+			if s.AIEnabled() {
+				r.Get("/ai/anomalies", s.handleListAnomalies)
+				r.Post("/ai/anomalies/{id}/acknowledge", s.handleAcknowledgeAnomaly)
+				r.Get("/ai/components/{id}/fix-path", s.handleFixPathInsight)
+				r.Group(func(r chi.Router) {
+					if s.rateLimiter != nil {
+						r.Use(s.rateLimiter.Middleware("ai-draft"))
+					}
+					r.Post("/ai/draft-ignore-reason", s.handleDraftIgnoreReason)
+				})
 			}
 		})
 

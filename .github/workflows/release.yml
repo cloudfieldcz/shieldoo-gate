@@ -1,4 +1,4 @@
-name: Release Docker Images
+name: Release
 
 on:
   push:
@@ -6,17 +6,19 @@ on:
       - "v[0-9]+.[0-9]+.[0-9]+"
 
 permissions:
-  contents: read
-  packages: write
+  contents: write   # release creation + asset upload
+  packages: write   # ghcr push
 
 env:
   REGISTRY: ghcr.io
+  GO_VERSION: "1.25.7"
 
 jobs:
-  build-and-push:
+  docker:
+    name: Docker (${{ matrix.image }})
     runs-on: ubuntu-latest
-
     strategy:
+      fail-fast: false
       matrix:
         include:
           - image: shieldoo-gate
@@ -25,7 +27,8 @@ jobs:
           - image: scanner-bridge
             dockerfile: scanner-bridge/Dockerfile
             context: scanner-bridge
-
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -69,3 +72,187 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
           platforms: linux/amd64
+
+  shdg:
+    name: shdg ${{ matrix.target.os }}/${{ matrix.target.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { os: linux,   arch: amd64, archive: tar.gz, ext: "" }
+          - { os: linux,   arch: arm64, archive: tar.gz, ext: "" }
+          - { os: darwin,  arch: amd64, archive: tar.gz, ext: "" }
+          - { os: darwin,  arch: arm64, archive: tar.gz, ext: "" }
+          - { os: windows, arch: amd64, archive: zip,    ext: ".exe" }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: false
+
+      - name: Resolve version + commit
+        id: meta
+        run: |
+          set -eu
+          # Strip the `v` prefix so shdg's runtime version matches the Docker
+          # tag (`shieldoo-gate:1.2.3` and `shdg version` → `1.2.3`).
+          version="${GITHUB_REF_NAME#v}"
+          commit="$(git rev-parse --short HEAD)"
+          stem="shdg-${version}-${{ matrix.target.os }}-${{ matrix.target.arch }}"
+          echo "version=${version}"   >> "$GITHUB_OUTPUT"
+          echo "commit=${commit}"     >> "$GITHUB_OUTPUT"
+          echo "stem=${stem}"         >> "$GITHUB_OUTPUT"
+
+      # CGO is off — shdg is stdlib-only, so a static cross-compile from a
+      # Linux runner produces deterministic binaries for every target.
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.target.os }}
+          GOARCH: ${{ matrix.target.arch }}
+        run: |
+          set -eu
+          mkdir -p dist
+          out="dist/shdg${{ matrix.target.ext }}"
+          go build \
+            -trimpath \
+            -ldflags "-s -w -X main.Version=${{ steps.meta.outputs.version }} -X main.Commit=${{ steps.meta.outputs.commit }}" \
+            -o "${out}" \
+            ./cmd/shdg
+          ls -la dist/
+
+      - name: Package
+        id: package
+        run: |
+          set -eu
+          stem="${{ steps.meta.outputs.stem }}"
+          cd dist
+          if [ "${{ matrix.target.archive }}" = "zip" ]; then
+            archive="${stem}.zip"
+            zip -q "${archive}" "shdg${{ matrix.target.ext }}"
+          else
+            archive="${stem}.tar.gz"
+            tar -czf "${archive}" "shdg${{ matrix.target.ext }}"
+          fi
+          sha256sum "${archive}" | tee "${archive}.sha256"
+          echo "archive=${archive}"        >> "$GITHUB_OUTPUT"
+          echo "checksum=${archive}.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shdg-${{ matrix.target.os }}-${{ matrix.target.arch }}
+          path: |
+            dist/${{ steps.package.outputs.archive }}
+            dist/${{ steps.package.outputs.checksum }}
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: GitHub release
+    needs: [docker, shdg]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need full history for changelog
+
+      - name: Download shdg artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: shdg-*
+          merge-multiple: true
+
+      - name: Aggregate checksums
+        id: assets
+        run: |
+          set -eu
+          mkdir -p release
+          # Move archives + per-file checksums into a flat release/ dir, and
+          # collapse all the per-file *.sha256 stubs into a single SHA256SUMS
+          # file (the conventional format users feed into `sha256sum -c`).
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} release/ \;
+          ( cd release && sha256sum *.tar.gz *.zip 2>/dev/null > SHA256SUMS )
+          echo "--- release/ ---"
+          ls -la release/
+          echo "--- SHA256SUMS ---"
+          cat release/SHA256SUMS
+
+      - name: Build release notes
+        id: notes
+        env:
+          VERSION: ${{ needs.docker.outputs.version }}
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -eu
+          # Two distinct identifiers are needed below:
+          #   * tag (with v) — used as a git ref for `git log <prev>..<tag>`,
+          #     because annotated tags are stored as `v1.2.3`
+          #   * VERSION (no v) — used in user-facing strings (Docker tags,
+          #     archive filenames) so all release artifacts agree
+          tag="${GITHUB_REF_NAME}"
+          previous="$(git tag --sort=-creatordate | grep -vFx "${tag}" | head -n1 || true)"
+          if [ -z "${previous}" ]; then
+            range="$(git rev-list --max-parents=0 HEAD | head -n1)..HEAD"
+            range_label="initial release"
+          else
+            range="${previous}..${tag}"
+            range_label="${previous}…${tag}"
+          fi
+
+          {
+            echo "## Docker images"
+            echo ""
+            echo "Pull the matching ghcr.io tag:"
+            echo ""
+            echo '```bash'
+            echo "docker pull ${REGISTRY}/${REPO_OWNER}/shieldoo-gate:${VERSION}"
+            echo "docker pull ${REGISTRY}/${REPO_OWNER}/scanner-bridge:${VERSION}"
+            echo '```'
+            echo ""
+            echo "Image pages:"
+            echo "- [shieldoo-gate](https://github.com/${REPO_OWNER}/shieldoo-gate/pkgs/container/shieldoo-gate)"
+            echo "- [scanner-bridge](https://github.com/${REPO_OWNER}/shieldoo-gate/pkgs/container/scanner-bridge)"
+            echo ""
+            echo "## shdg CLI"
+            echo ""
+            echo "Push-from-CI client. Pre-built for Linux, macOS, and Windows:"
+            echo ""
+            echo "| OS | Arch | Archive |"
+            echo "|---|---|---|"
+            echo "| Linux   | x86_64  | shdg-${VERSION}-linux-amd64.tar.gz |"
+            echo "| Linux   | aarch64 | shdg-${VERSION}-linux-arm64.tar.gz |"
+            echo "| macOS   | Intel   | shdg-${VERSION}-darwin-amd64.tar.gz |"
+            echo "| macOS   | Apple Silicon | shdg-${VERSION}-darwin-arm64.tar.gz |"
+            echo "| Windows | x86_64  | shdg-${VERSION}-windows-amd64.zip |"
+            echo ""
+            echo "\`shdg version\` reports \`${VERSION}\` to match the Docker tag."
+            echo "Verify archive integrity with \`SHA256SUMS\` (also attached)."
+            echo ""
+            echo "## Changes (${range_label})"
+            echo ""
+            git log --pretty=format:"- %s (%h)" "${range}"
+            echo ""
+          } > release/RELEASE_NOTES.md
+
+          echo "--- RELEASE_NOTES.md ---"
+          cat release/RELEASE_NOTES.md
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          body_path: release/RELEASE_NOTES.md
+          files: |
+            release/shdg-*.tar.gz
+            release/shdg-*.zip
+            release/SHA256SUMS
+          fail_on_unmatched_files: true

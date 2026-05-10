@@ -30,6 +30,12 @@ type AuditEntry struct {
 	MetadataJSON string    `db:"metadata_json" json:"metadata_json,omitempty"`
 	UserEmail    string    `db:"user_email" json:"user_email,omitempty"`
 	ProjectID    *int64    `db:"project_id" json:"project_id,omitempty"`
+	// Vuln-scan lifecycle FK-shaped columns (migration 035). Nullable; not enforced as FKs
+	// because audit_log is append-only forensic evidence (CLAUDE.md security invariant #5).
+	ComponentID *int64 `db:"component_id" json:"component_id,omitempty"`
+	ScanRunID   *int64 `db:"scan_run_id"  json:"scan_run_id,omitempty"`
+	IgnoreID    *int64 `db:"ignore_id"    json:"ignore_id,omitempty"`
+	APIKeyID    *int64 `db:"api_key_id"   json:"api_key_id,omitempty"`
 }
 
 // License policy + project-related event types (v1.2).
@@ -45,4 +51,29 @@ const (
 	// MetadataJSON has shape: {"scanner":"version-diff","original_verdict":"MALICIOUS",
 	// "downgraded_verdict":"SUSPICIOUS","ai_confidence":0.92,"reason":"asymmetric-diff-downgrade"}
 	EventScannerVerdictDowngraded EventType = "SCANNER_VERDICT_DOWNGRADED"
+)
+
+// Vulnerability scan event types (action events written unconditionally to audit_log).
+const (
+	EventSBOMUploaded         EventType = "sbom_uploaded"
+	EventScanRunFailed        EventType = "scan_run_failed"
+	EventRescanTriggered      EventType = "rescan_triggered"
+	EventIgnoreCreated        EventType = "ignore_created"
+	EventIgnoreRevoked        EventType = "ignore_revoked"
+	EventIgnoreExpired        EventType = "ignore_expired"
+	EventAIDraftCalled        EventType = "ai_draft_called"
+	EventAIDraftAccepted      EventType = "ai_draft_accepted"
+	EventAnomalyAcknowledged  EventType = "anomaly_acknowledged"
+	EventAPIKeyScopeChanged   EventType = "api_key_scope_changed"
+	EventSuperTokenUsed       EventType = "super_token_used"
+	EventRepoURLChanged       EventType = "repo_url_changed"
+	EventSBOMIntegrityViolation EventType = "sbom_integrity_violation"
+)
+
+// Vulnerability scan alert event types (consumed by the alerter; opt-in via Settings → Alerting).
+const (
+	EventScanNewCritical    EventType = "scan.new_critical"
+	EventScanNewHigh        EventType = "scan.new_high"
+	EventScanAnomaly        EventType = "scan.anomaly_detected"
+	EventScanIgnoreExpired  EventType = "ignore.expired"
 )

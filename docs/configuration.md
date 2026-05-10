@@ -657,3 +657,78 @@ Examples:
 - `pypi:litellm:==1.82.6` — Allow only version 1.82.6
 - `npm:lodash` — Allow all versions of lodash
 - `nuget:Newtonsoft.Json:==13.0.3` — Allow only version 13.0.3
+
+## `shdg` CLI runtime
+
+The [`shdg` CLI](cli/shdg.md) is a separate binary (`cmd/shdg`) configured
+exclusively via environment variables — it does not read `config.yaml`. The
+gate it talks to has its own server-side `vuln_scan` config block (see below).
+
+| Env | Default | Notes |
+|-----|---------|-------|
+| `SHIELDOO_TOKEN` | — | PAT with the `scan:upload` scope, or the global super-token from `proxy_auth.global_token_env`. Required by `shdg scan`. |
+| `SHIELDOO_URL` | — | Base URL of the gate (e.g. `https://gate.example.com`). Required by `shdg scan`. |
+| `SHDG_CACHE_DIR` | `~/.cache/shdg` | Where the bundled Trivy v0.70.0 binary is cached after first download. The binary lives at `<dir>/trivy-0.70.0/trivy`. |
+
+`SHIELDOO_TOKEN` is sent verbatim as `Authorization: Bearer ...` to both the
+upload and polling endpoints. The CLI never persists it to disk.
+
+## Vulnerability Scan (push-from-CI SBOMs)
+
+`vuln_scan` configures the CycloneDX SBOM ingestion pipeline (ADR-007). When
+`vuln_scan.enabled` is `true`, three things happen:
+
+1. The admin port registers `/api/v1/vulnerabilities/...` reads.
+2. A public `POST /api/v1/projects/{label}/components/{name}/scans` endpoint
+   accepts CycloneDX 1.5+ JSON bodies authenticated by a PAT carrying the
+   `scan:upload` scope.
+3. Background goroutines start — manifest rescan scheduler, scan-run retention
+   reaper, ignore-expiry watcher, orphan-blob sweeper.
+
+Key knobs (defaults in `config.example.yaml`):
+
+| Field | Default | Meaning |
+|---|---|---|
+| `max_sbom_bytes` | `10485760` (10 MiB) | Hard cap on SBOM upload body. Exceeding returns 413. |
+| `max_components` | `10000` | Max CycloneDX components per SBOM (structural validator). 422 on overflow. |
+| `max_components_per_project` | `200` | Per-project cap on `components` rows. 422 on creation when full. |
+| `stale_threshold` | `720h` (30d) | Rows older than this render with the red-tint "stale" affordance. |
+| `rescan.interval` | `6h` | How often the scheduled rescan walks active components. |
+| `rescan.max_concurrent` | `4` | Semaphore on concurrent rescan jobs. |
+| `retention.keep_n` | `100` | Most-recent N successful runs kept per component (DB row + blob). |
+| `scanners.osv.chunk_size` | `1000` | Components per `/v1/querybatch` call. |
+| `scanners.trivy.binary_path` | `trivy` | Path to `trivy` binary; resolved against `PATH`. |
+| `rate_limit.uploads_per_hour` | `60` | Per-PAT rate cap on `POST .../scans`. |
+
+### AI features
+
+`ai_features` is a separate top-level block, default off. When enabled it wires
+in:
+
+- **AnomalyDetector** (`anomaly_detection.*`) — 3σ baseline check on every
+  successful scan run; persisted to the `anomalies` table; surfaced via
+  `GET /api/v1/ai/anomalies` and the (planned) Screen 1 banner.
+- **FixPathAnalyzer** — pure-SQL recommendation; no LLM calls. Always-on once
+  `ai_features.enabled = true`.
+- **IgnoreReasonDrafter** (`ignore_reason_drafter.*`) — Go-side stub today;
+  the gRPC client is wired but the Python sidecar is a follow-up. Endpoint
+  returns 503 until the bridge is in place.
+
+`ai_features.azure_openai.*` is reserved for the drafter and unused until
+the sidecar lands.
+
+### Required scopes
+
+The following routes enforce least-privilege scopes via `RequireScope`:
+
+| Route | Scope | Notes |
+|---|---|---|
+| `POST /api/v1/projects/{label}/components/{name}/scans` | `scan:upload` | CI ingestion; PAT-Bearer only. |
+| Admin reads (artifacts, vulnerabilities, audit, projects, …) | `admin:read` | OIDC sessions get this implicitly. |
+| Admin writes (overrides, ignores, deletes, rescan) | `admin:write` | OIDC sessions get this implicitly. |
+| Proxy Basic-auth (pip/npm/docker/…) | `proxy:fetch` | Default scope on legacy keys. |
+
+The global super-token (`proxy_auth.global_token_env`) bypasses scope checks
+(it carries the `*` wildcard). Both authentication paths — Basic-auth proxy
+and Bearer-PAT admin — emit `super_token_used` audit rows when the global
+token authenticates a request.
