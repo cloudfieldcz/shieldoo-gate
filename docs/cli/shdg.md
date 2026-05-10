@@ -10,14 +10,57 @@ from a CI pipeline.
 
 ## Install
 
-> Pre-built binaries are not yet published. Build from source:
->
-> ```bash
-> git clone https://github.com/cloudfieldcz/shieldoo-gate.git
-> cd shieldoo-gate
-> make build-shdg
-> sudo cp bin/shdg /usr/local/bin/
-> ```
+Pre-built binaries are attached to every [GitHub release](https://github.com/cloudfieldcz/shieldoo-gate/releases)
+for `linux/{amd64,arm64}`, `darwin/{amd64,arm64}`, and `windows/amd64`. Each
+release ships a `SHA256SUMS` file you can feed into `sha256sum -c`.
+
+### From GitHub Releases (recommended for CI)
+
+With the `gh` CLI:
+
+```bash
+# Latest release
+gh release download --repo cloudfieldcz/shieldoo-gate \
+  --pattern 'shdg-*-linux-amd64.tar.gz' --pattern 'SHA256SUMS'
+
+# Pinned tag (recommended — reproducible builds)
+gh release download v1.2.3 --repo cloudfieldcz/shieldoo-gate \
+  --pattern 'shdg-*-linux-amd64.tar.gz' --pattern 'SHA256SUMS'
+
+sha256sum -c --ignore-missing SHA256SUMS
+tar -xzf shdg-*-linux-amd64.tar.gz
+sudo install -m 0755 shdg /usr/local/bin/shdg
+```
+
+Without `gh` — plain `curl` + GitHub API (handy for minimal CI images):
+
+```bash
+TAG=v1.2.3                      # pin in CI; or use /latest below
+ASSET="shdg-${TAG#v}-linux-amd64.tar.gz"
+curl -fsSL -o "${ASSET}" \
+  "https://github.com/cloudfieldcz/shieldoo-gate/releases/download/${TAG}/${ASSET}"
+curl -fsSL -o SHA256SUMS \
+  "https://github.com/cloudfieldcz/shieldoo-gate/releases/download/${TAG}/SHA256SUMS"
+sha256sum -c --ignore-missing SHA256SUMS
+tar -xzf "${ASSET}" && sudo install -m 0755 shdg /usr/local/bin/shdg
+```
+
+To resolve `/latest` programmatically:
+
+```bash
+curl -fsSL "https://api.github.com/repos/cloudfieldcz/shieldoo-gate/releases/latest" \
+  | jq -r '.assets[] | select(.name|endswith("-linux-amd64.tar.gz")) | .browser_download_url' \
+  | xargs curl -fsSLo shdg.tar.gz
+```
+
+### Build from source
+
+```bash
+git clone https://github.com/cloudfieldcz/shieldoo-gate.git
+cd shieldoo-gate
+make build-shdg
+sudo cp bin/shdg /usr/local/bin/
+```
 
 The `make build-shdg` target stamps `Version` and `Commit` from `git describe`
 + `git rev-parse --short HEAD`. A static cross-build for Linux runners is the

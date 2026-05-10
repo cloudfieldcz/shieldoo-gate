@@ -64,12 +64,14 @@ Shieldoo Gate runs as a single Go binary that exposes **eight HTTP servers** on 
 | **Tag Mutability** | `internal/adapter/mutability.go` | Detect when upstream tag/version resolves to a different digest than cached; quarantine/warn/block on change |
 | **Threat Feed Client** | `internal/threatfeed/` | Periodically fetch community threat feed and store entries in DB for fast-path lookups |
 | **Alerter** | `internal/alert/` | Multi-channel alert dispatch: webhook (HMAC-SHA256), Slack (Block Kit), email (SMTP batch digest) |
-| **Rescan Scheduler** | `internal/scheduler/` | Process manually triggered rescans (PENDING_SCAN) to detect newly discovered threats; AI scanner excluded |
-| **Auth** | `internal/auth/` | OIDC admin authentication (Authorization Code + PKCE), proxy API key authentication (per-user PAT + global token) |
-| **Admin API** | `internal/api/` | REST API for artifact management, audit log, statistics, policy overrides, API keys, health checks |
+| **Schedulers** | `internal/scheduler/` | Manual rescan worker (PENDING_SCAN, AI excluded); manifest rescan (vuln-scan SBOM re-evaluation, default 6h); scan-run retention (keep N most-recent runs); version-diff retention; ignore-expiry watcher; orphan-blob sweeper; baseline recompute (3σ anomaly stats) |
+| **Manifest Scanner (vuln-scan)** | `internal/scanner/manifest/` + `internal/component/` | Push-from-CI CycloneDX SBOM ingestion: parses SBOM, fans out to OSV + Trivy in parallel, aggregates findings per `(package, version, CVE-ID)`, persists `components` / `scan_runs` / `scan_findings` / `cve_ignores`. Wired in `cmd/shieldoo-gate/vuln_scan_wiring.go`; see [Vulnerability Scan](features/vulnerability-scan.md) and [ADR-007](adr/ADR-007-vulnerability-scan.md). |
+| **`shdg` CLI** | `cmd/shdg/` | Cross-platform CI helper: bundles SHA-256-pinned Trivy v0.70.0, auto-detects ecosystem, generates CycloneDX SBOM, uploads to `POST /api/v1/projects/:label/components/:name/scans`, polls scan-run status, exits non-zero on `--fail-on critical|high`. See [docs/cli/shdg.md](cli/shdg.md). |
+| **Auth** | `internal/auth/` | OIDC admin authentication (Authorization Code + PKCE), proxy API key authentication (per-user PAT + global token), PAT scope enforcement (`proxy:fetch`, `scan:upload`, `admin:read`, `admin:write`), rate limiter, log redactor |
+| **Admin API** | `internal/api/` | REST API for artifact management, audit log, statistics, policy overrides, per-project overrides, API keys, vulnerabilities (components / scan-runs / findings / ignores / SBOM), AI surfaces (anomaly, fix-path, draft-ignore), health checks |
 | **Data Models** | `internal/model/` | Shared Go structs for artifacts, scan results, audit entries, overrides, API keys, threat feed entries |
-| **Configuration** | `internal/config/` | YAML config loading with Viper, environment variable overrides (`SGW_` prefix), DB initialization and migrations (SQLite + PostgreSQL) |
-| **Scanner Bridge** | `scanner-bridge/` | Python gRPC sidecar running GuardDog for PyPI and npm behavioral analysis |
+| **Configuration** | `internal/config/` | YAML config loading with Viper, environment variable overrides (`SGW_` prefix), DB initialization and embedded migrations (SQLite + PostgreSQL, currently 001–036) |
+| **Scanner Bridge** | `scanner-bridge/` | Python gRPC sidecar: GuardDog (PyPI/npm behavioral), AI scanner (single-version LLM), version-diff orchestrator (cross-version LLM), vulnerability ignore-reason drafter |
 
 ## Request Flow
 
@@ -126,7 +128,7 @@ The main entrypoint (`cmd/shieldoo-gate/main.go`) initializes components in this
 1. **Parse config** — Read YAML config file (`-config` flag, default `config.yaml`), apply `SGW_*` environment overrides
 2. **Validate config** — Check required fields (cache path, DB path, cloud storage credentials)
 3. **Setup logger** — Configure zerolog level and format (JSON or text), optional file output
-4. **Initialize database** — Open SQLite or PostgreSQL, run embedded migrations (001–013 in `sqlite/` or `postgres/` subdirectory), set WAL mode and foreign keys (SQLite)
+4. **Initialize database** — Open SQLite or PostgreSQL, run embedded migrations (currently 001–036 in `sqlite/` or `postgres/` subdirectory), set WAL mode and foreign keys (SQLite)
 5. **Initialize cache store** — Create storage backend based on config: local filesystem (default), S3, Azure Blob, or GCS
 6. **Register scanners** — Always register 6 built-in scanners; conditionally add GuardDog, Trivy, OSV based on config
 7. **Create scan engine** — Wrap all scanners with parallel execution and timeout
@@ -158,6 +160,11 @@ The bridge runs as a separate process (separate container in Docker Compose). Th
 - **HTTP servers** run concurrently via `errgroup`. Each ecosystem adapter (7) and the admin API run on their own port.
 - **Threat feed refresh** runs in a background goroutine with `time.Ticker`.
 - **Rescan scheduler** runs in a background goroutine, processing only manually triggered rescans (`PENDING_SCAN`) with configurable concurrency. AI scanner is excluded from rescans.
+- **Manifest rescan scheduler** (vuln-scan, when `vuln_scan.enabled`) walks active components on a configurable cadence (default 6 h) and re-runs OSV + Trivy against the cached SBOM so newly-published CVEs against unchanged code are caught. Concurrency-bounded by a semaphore.
+- **Scan-run retention reaper** prunes the oldest successful scan runs per component beyond `retention.keep_n` (default 100), removing both DB rows and SBOM blobs.
+- **Ignore-expiry watcher** revokes `cve_ignores` rows whose `expires_at` has passed and emits an `ignore.expired` audit event.
+- **Orphan-blob sweeper** garbage-collects SBOM blobs no longer referenced by any `scan_runs` row.
+- **Baseline-recompute job** rolls the 3σ baseline cache used by the AI anomaly detector.
 - **Docker sync service** runs in a background goroutine, periodically re-scanning pushed images.
 - **Alerter** dispatches alerts asynchronously; email sender batches digests at configurable intervals.
 - **Graceful shutdown** propagates via context cancellation + `http.Server.Shutdown()` with a 15-second deadline.

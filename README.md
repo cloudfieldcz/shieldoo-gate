@@ -82,16 +82,18 @@ Shieldoo Gate is built for teams that take software supply chain seriously:
 - **Transparent proxy** — zero client-side changes beyond pointing at the Gate URL
 - **Multi-ecosystem** — Docker, PyPI, npm, NuGet, Maven, RubyGems, Go Modules
 - **Deep, layered scanning pipeline** — hash feed, static heuristics, typosquat detection, version-diff, reputation, GuardDog, Trivy, OSV, LLM-powered AI analysis, optional sandbox
-- **License policy enforcement (v1.2+)** — block GPL/AGPL or any other SPDX license at the proxy layer; per-project overrides; runtime-editable from the admin UI with one-click "License Groups" presets (strong copyleft, network copyleft, weak copyleft, permissive…)
+- **License policy enforcement (v1.2+)** — block GPL/AGPL or any other SPDX license at the proxy layer; per-project overrides ([ADR-008](docs/adr/ADR-008-license-overrides-per-project.md)); runtime-editable from the admin UI with one-click "License Groups" presets (strong copyleft, network copyleft, weak copyleft, permissive…)
+- **Per-project package whitelist / blacklist** — admins can allow a single package whose license is otherwise blocked, or ban a package the project doesn't want, scoped to one project at a time ([ADR-006](docs/adr/ADR-006-per-project-package-overrides.md))
 - **Project segmentation (v1.2+)** — per-team / per-service audit trail and policy, derived from the HTTP Basic-auth username, zero client changes
-- **CycloneDX SBOM (v1.2+)** — every scanned artifact gets a CycloneDX 1.5 SBOM persisted alongside the cache, accessible via API and admin UI
+- **CycloneDX SBOM** — every scanned artifact gets a CycloneDX 1.5 SBOM persisted alongside the cache; the push-from-CI vulnerability-scan ingestion accepts CycloneDX 1.5+ (Trivy 0.70 / 1.6 supported)
+- **Push-from-CI vulnerability scanning** — pipelines upload a CycloneDX SBOM (or use the bundled [`shdg`](docs/cli/shdg.md) CLI); the gate runs **OSV-Scanner + Trivy in parallel**, aggregates findings per `(package, version, CVE-ID)`, schedules background rescans (default 6 h) so newly-published CVEs against unchanged code are still caught, and offers a per-component **CVE ignore** lifecycle with audit trail. Optional AI surfaces (3σ anomaly banner, fix-path recommendations, ignore-reason drafter) gated behind `ai_features.enabled`. See [docs/features/vulnerability-scan.md](docs/features/vulnerability-scan.md) and [ADR-007](docs/adr/ADR-007-vulnerability-scan.md).
 - **Block & quarantine** — malicious packages never reach developers, CI, or production
 - **Community threat feed** — fast-path blocking of known malicious package hashes, updated continuously
 - **Append-only audit log** — every request, scan verdict, and override is recorded
-- **Admin UI** — browse artifacts, review verdicts, manage quarantine, override with justification
+- **Admin UI** — browse artifacts, review verdicts, manage quarantine, override with justification, browse vulnerabilities & SBOMs per component
 - **Self-hostable** — single Docker Compose stack, Helm chart, air-gap friendly
 - **Open source, Apache 2.0** — no vendor lock-in, auditable code, community-driven
-- **`shdg` CLI for CI vulnerability-scan ingestion** — push CycloneDX SBOMs from any pipeline, see [docs/cli/shdg.md](docs/cli/shdg.md)
+- **`shdg` CLI** — cross-platform CI helper (linux/darwin amd64+arm64, windows/amd64) that bundles a SHA-256-pinned Trivy, generates the SBOM, uploads it, and exits non-zero on new criticals/highs — see [docs/cli/shdg.md](docs/cli/shdg.md)
 
 ## Scanners
 

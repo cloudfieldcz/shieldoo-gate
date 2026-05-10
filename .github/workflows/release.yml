@@ -153,9 +153,58 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  vuln-scan:
+    # Dogfood: every release uploads a CycloneDX SBOM of each Shieldoo Gate
+    # component to the production gate itself, gating the release on new
+    # criticals. Uses the freshly-built shdg from the `shdg` job (linux-amd64
+    # artifact) — no chicken-and-egg with previous releases.
+    name: Vuln-scan ${{ matrix.component.name }}
+    needs: [docker, shdg]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+          - { name: ui,             dir: ui,             ecosystem: npm  }
+          - { name: gate,           dir: ".",            ecosystem: go   }
+          - { name: scanner-bridge, dir: scanner-bridge, ecosystem: pypi }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download shdg (linux-amd64)
+        uses: actions/download-artifact@v4
+        with:
+          name: shdg-linux-amd64
+          path: shdg-dist
+
+      - name: Install shdg
+        run: |
+          set -eu
+          tar -xzf shdg-dist/shdg-*-linux-amd64.tar.gz -C shdg-dist
+          chmod +x shdg-dist/shdg
+          echo "${PWD}/shdg-dist" >> "$GITHUB_PATH"
+          shdg-dist/shdg version
+
+      # SGW_TOKEN is the global super-token (`*` scope) — covers `scan:upload`.
+      # Each call writes a `super_token_used` audit row by design (CLAUDE.md
+      # security invariant #6); release-time entries are expected and traceable.
+      # Project label `shieldoo-gate` matches SGW_USER in docker/Dockerfile.
+      - name: Scan ${{ matrix.component.name }}
+        env:
+          SHIELDOO_URL:   ${{ vars.SHIELDOO_URL }}
+          SHIELDOO_TOKEN: ${{ secrets.SGW_TOKEN }}
+        run: |
+          shdg scan \
+            --project   shieldoo-gate \
+            --component ${{ matrix.component.name }} \
+            --dir       ${{ matrix.component.dir }} \
+            --ecosystem ${{ matrix.component.ecosystem }} \
+            --wait --fail-on critical --timeout 10m
+
   release:
     name: GitHub release
-    needs: [docker, shdg]
+    needs: [docker, shdg, vuln-scan]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

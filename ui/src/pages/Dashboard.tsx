@@ -230,7 +230,7 @@ export default function Dashboard() {
       </div>
 
       {/* How to section */}
-      <HowToSection urls={urlsQuery.data} />
+      <HowToSection urls={urlsQuery.data} vulnEnabled={vulnQuery.isSuccess && !!vulnQuery.data} />
 
       {statsQuery.isError && (
         <p className="text-sm text-red-500">Failed to load stats. Is the API server running?</p>
@@ -239,8 +239,9 @@ export default function Dashboard() {
   )
 }
 
-function HowToSection({ urls }: { urls?: PublicURLs }) {
+function HowToSection({ urls, vulnEnabled }: { urls?: PublicURLs; vulnEnabled: boolean }) {
   const [open, setOpen] = useState(true)
+  const adminBase = typeof window !== 'undefined' ? window.location.origin : 'https://<gate>'
 
   const pypi = urls?.pypi || 'http://<host>:5000'
   const npm = urls?.npm || '<host>:4873'
@@ -334,6 +335,41 @@ gem sources --add ${rubygems.replace(/^https?:\/\//, `${scheme}://\${PROJECT}:\$
               </pre>
             </div>
           </div>
+
+          {/* Vulnerability scanning (CI) — only shown when vuln_scan is enabled on the gate */}
+          {vulnEnabled && (
+            <div className="flex gap-3">
+              <Bug className="w-5 h-5 text-rose-500 mt-0.5 flex-shrink-0" />
+              <div className="min-w-0 flex-1">
+                <h3 className="text-sm font-semibold text-gray-900">Run a vulnerability scan from CI</h3>
+                <p className="text-sm text-gray-600 mt-1 mb-2">
+                  The proxy scans <em>artifacts you fetch</em>. To scan <em>your own
+                  project</em> for known CVEs, push a CycloneDX SBOM from CI using
+                  the <code className="px-1 bg-gray-100 rounded text-xs">shdg</code> CLI. It bundles a SHA-256-pinned Trivy,
+                  generates the SBOM, uploads it, and (with <code className="px-1 bg-gray-100 rounded text-xs">--wait --fail-on</code>) fails the build on new criticals.
+                  Issue a token with the <code className="px-1 bg-gray-100 rounded text-xs">scan:upload</code> scope in <strong>Profile → API Keys</strong>.
+                  Findings show up in <strong>Vulnerabilities</strong>.
+                </p>
+                <pre className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-xs font-mono text-gray-800 overflow-x-auto whitespace-pre">
+{`# 1. Install (cross-platform: linux/darwin amd64+arm64, windows/amd64)
+#    Download a release binary, or build from source: make build-shdg
+
+# 2. Run from your CI job (GitHub Actions, GitLab CI, …)
+export SHIELDOO_URL=${adminBase}
+export SHIELDOO_TOKEN=<token-with-scan:upload-scope>
+
+shdg scan \\
+  --project myteam \\           # same project label as your proxy auth
+  --component api \\            # logical component name (lazy-created)
+  --wait --fail-on critical \\  # gate the build on new criticals
+  --timeout 5m
+
+# Exit codes: 0 clean | 1 new findings hit threshold | 2 config error
+#             3 scan failed | 4 polling timed out`}
+                </pre>
+              </div>
+            </div>
+          )}
 
           {/* Troubleshooting */}
           <div className="flex gap-3">
