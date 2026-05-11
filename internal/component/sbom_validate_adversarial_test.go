@@ -11,6 +11,10 @@ import (
 // reasonably-large flood. We don't actually allocate a billion entries (that
 // would dominate the test wallclock); the limit gate must trip well before
 // that. The byte cap is a separate, earlier guard.
+//
+// We deliberately override limits.MaxComponents below the synthetic count
+// so the test pins the *cap behaviour*, not the default value. The default
+// (500k post-image-scan) is exercised by TestDefaultSBOMLimits_HasImageScanHeadroom.
 func TestValidateSBOMStructure_BillionComponents(t *testing.T) {
 	var buf bytes.Buffer
 	buf.WriteString(`{"bomFormat":"CycloneDX","components":[`)
@@ -25,6 +29,7 @@ func TestValidateSBOMStructure_BillionComponents(t *testing.T) {
 
 	limits := DefaultSBOMLimits()
 	limits.MaxBytes = int64(buf.Len() * 2) // not byte-bound; the components cap should catch us
+	limits.MaxComponents = N - 1           // force the cap below our synthetic count
 	_, err := ValidateSBOMStructure(buf.Bytes(), limits)
 	if !errors.Is(err, ErrInvalidSBOM) {
 		t.Fatalf("expected ErrInvalidSBOM (component cap), got %v", err)

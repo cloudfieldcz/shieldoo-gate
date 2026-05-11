@@ -72,7 +72,7 @@ func (s *Server) handleManualRescan(w http.ResponseWriter, r *http.Request) {
 			UserEmail:   byEmail,
 		})
 	}
-	go func() { _ = s.vulnDeps.ScanService.Run(s.detachedCtx(), run.ID) }()
+	s.runScanInBackground(run.ID)
 	writeJSON(w, http.StatusAccepted, map[string]any{"scan_run_id": run.ID})
 }
 

@@ -34,9 +34,10 @@ type Config struct {
 // VulnScanConfig controls the push-from-CI vulnerability scan feature.
 type VulnScanConfig struct {
 	Enabled                bool                  `mapstructure:"enabled"`
-	MaxSBOMBytes           int64                 `mapstructure:"max_sbom_bytes"`            // default 10 MiB
-	MaxComponents          int                   `mapstructure:"max_components"`            // default 10000
+	MaxSBOMBytes           int64                 `mapstructure:"max_sbom_bytes"`            // default 500 MiB
+	MaxComponents          int                   `mapstructure:"max_components"`            // default 500000
 	MaxComponentsPerProject int                  `mapstructure:"max_components_per_project"` // default 200
+	MaxConcurrentScans     int                   `mapstructure:"max_concurrent_scans"`      // default 4
 	StaleThreshold         string                `mapstructure:"stale_threshold"`           // default "30d"
 	Rescan                 VulnRescanConfig      `mapstructure:"rescan"`
 	Retention              VulnRetentionConfig   `mapstructure:"retention"`

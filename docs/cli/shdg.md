@@ -95,8 +95,9 @@ Generate (or re-use) a CycloneDX SBOM and upload it to the gate's
 | `--project` | string | — (required) | Project label as configured in the gate. |
 | `--component` | string | — (required) | Logical component name. Lazy-created on first upload. |
 | `--sbom` | path | (none — generate) | Skip Trivy and upload this file as-is. |
-| `--ecosystem` | enum | `auto` | `auto`, `pypi`, `npm`, `docker`, `go`, `multi`. |
-| `--dir` | path | `.` | Project directory to scan when generating. |
+| `--image` | string | (none) | Image reference (e.g. `myorg/api:1.4.2`). Runs `trivy image <ref>` instead of `trivy fs`. Mutually exclusive with `--sbom`/`--dir`. |
+| `--ecosystem` | enum | `auto` | `auto`, `pypi`, `npm`, `docker`, `go`, `multi`. With `--image` set, only `auto`, `docker`, and `multi` are allowed. |
+| `--dir` | path | `.` | Project directory to scan when generating. Ignored with `--image` (error if explicitly set). |
 | `--wait` | bool | `false` | Poll `GET /api/v1/vulnerabilities/scan-runs/{id}` until terminal status. |
 | `--fail-on` | enum | `none` | `critical`, `high`, `none`. Requires `--wait`. |
 | `--timeout` | duration | `10m` | Wait timeout (Go duration string, e.g. `5m`, `30s`). |
@@ -106,10 +107,51 @@ Generate (or re-use) a CycloneDX SBOM and upload it to the gate's
 `--fail-on=critical|high` without `--wait` is a usage error (exit 2): silently
 ignoring it would hide vulnerabilities and turn the CI gate into a no-op.
 
-The ecosystem auto-detector reads the project root for the first matching
-hint: `Dockerfile` → `docker`, `go.mod` → `go`, `package.json` → `npm`,
-`requirements.txt`/`pyproject.toml` → `pypi`. Multiple matches yield `multi`.
-Pass `--ecosystem` explicitly when the heuristic is wrong.
+#### Source selection (`--sbom` / `--image` / `--dir`)
+
+These three flags describe **what** to scan and are mutually exclusive:
+
+| Flag | What gets scanned | When to use |
+|------|-------------------|-------------|
+| `--sbom path.json` | The file you point at. | You already have a CycloneDX SBOM from Syft, cyclonedx-bom, etc. |
+| `--image REF` | A built container image (calls `trivy image REF`). | You ran `docker build`/`podman build` and want OS-layer coverage. |
+| `--dir PATH` (default `.`) | A project directory (calls `trivy fs PATH`). | Source-tree scan — `go.sum`, `package-lock.json`, `requirements.txt`, etc. |
+
+Passing two of them is an exit-2 usage error. Passing none defaults to `--dir .`.
+
+#### Ecosystem resolution (precedence)
+
+The `ecosystem` label is what the gate stores on the Component row and shows in the
+`/vulnerabilities` dashboard. Resolution order, highest priority first:
+
+1. **Explicit `--ecosystem X`** where X ∈ {`pypi`, `npm`, `docker`, `go`, `multi`} → use X. With `--image`, only `docker`/`multi` are accepted; `pypi`/`npm`/`go` are rejected because they would misrepresent the source shape.
+2. **`--image` set** with `--ecosystem auto` (or unset) → `docker`.
+3. **Filesystem markers in `--dir`**: `Dockerfile`/`Containerfile` → `docker`, `go.mod` → `go`, `package.json` → `npm`, `requirements.txt`/`pyproject.toml` → `pypi`.
+4. **Fallback** → `multi`.
+
+#### Scanning a built image
+
+Use `--image` after `docker build`/`podman build` to capture both OS-layer packages
+(deb/apk/rpm) **and** application dependencies. `--dir .` against a Dockerfile only
+sees the build context — base-image layers are invisible.
+
+```bash
+docker build -t myorg/api:1.4.2 .
+shdg scan \
+  --project myorg --component api-image \
+  --image myorg/api:1.4.2 \
+  --wait --fail-on critical
+```
+
+Recommended practice:
+
+- **Use a digest, not a tag, in production.** `myorg/api@sha256:...` is content-addressed and re-scans are reproducible. A floating tag (`:latest`, `:1.4.2` if you ever force-push) yields a different SBOM next month.
+- **Pin a platform when it matters.** `trivy image` defaults to the runner's arch. For multi-arch images, supply a platform-specific digest so the SBOM matches what runs in production.
+- **Distinct component names for source vs image.** Scanning the source tree and the built image of the same service into the same `--component` interleaves runs with very different shapes. Recommended: `api-source` (`--dir`) vs `api-image` (`--image`).
+- **Expect more findings than `--dir`.** Image scans surface OS-layer CVEs that filesystem scans never see. Many will be "won't-fix" or low-priority in the upstream distro. Pin a baseline (or use per-component ignores) before enabling `--fail-on critical` in a blocking CI gate.
+- **Private registries.** Trivy reads `~/.docker/config.json` automatically. Run `docker login` (or write the config file) before `shdg scan`. On shared / persistent CI runners, scope it per-job with `DOCKER_CONFIG=$(mktemp -d)` to avoid one job's credentials leaking to another.
+- **Network egress.** `--image REF` makes outbound HTTPS to the registry implied by `REF`. CI runners with restricted egress need to be whitelisted accordingly.
+- **First-run cost.** The bundled Trivy downloads its vulnerability DB (~30–50 MiB) into `~/.cache/trivy` on the first `--image` invocation. Cache this directory in CI (`actions/cache` on GitHub, equivalent on GitLab) to skip the cost on subsequent runs.
 
 ### `shdg version`
 

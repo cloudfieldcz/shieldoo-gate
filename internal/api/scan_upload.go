@@ -40,7 +40,13 @@ func (s *Server) handleScanUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// MaxBytesReader to enforce hard byte cap before any disk write.
-	r.Body = http.MaxBytesReader(w, r.Body, component.DefaultSBOMLimits().MaxBytes)
+	// Use the configured per-server cap (which defaults to
+	// component.DefaultSBOMLimits().MaxBytes when unset in VulnDeps).
+	maxBytes := s.vulnDeps.MaxSBOMBytes
+	if maxBytes <= 0 {
+		maxBytes = component.DefaultSBOMLimits().MaxBytes
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 	contentType := r.Header.Get("Content-Type")
 
 	// Resolve / lazy-create the component.
@@ -82,10 +88,9 @@ func (s *Server) handleScanUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Async scan invocation.
-	go func() {
-		_ = s.vulnDeps.ScanService.Run(s.detachedCtx(), run.ID)
-	}()
+	// Async scan invocation — capped by the scan-concurrency semaphore
+	// so an image-SBOM upload burst cannot fan out unbounded.
+	s.runScanInBackground(run.ID)
 
 	w.Header().Set("Location", "/api/v1/vulnerabilities/scan-runs/")
 	writeJSON(w, http.StatusAccepted, map[string]any{

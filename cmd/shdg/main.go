@@ -39,13 +39,22 @@ func usage(w *os.File) {
 	fmt.Fprintln(w, `shdg — Shieldoo Gate vulnerability-scan CLI
 
 USAGE:
-  shdg scan     --project <label> --component <name> [--sbom path.json] [--ecosystem auto|pypi|npm|docker|go|multi]
+  shdg scan     --project <label> --component <name>
+                [--sbom path.json | --image <ref> | --dir <path>]
+                [--ecosystem auto|pypi|npm|docker|go|multi]
+                [--wait [--fail-on critical|high|none] [--timeout 10m]]
   shdg version
   shdg help
+
+SOURCE FLAGS (mutually exclusive):
+  --sbom PATH      Upload a pre-built CycloneDX JSON SBOM (skips Trivy)
+  --image REF      Scan a built container image (runs 'trivy image REF')
+  --dir PATH       Scan a project directory (runs 'trivy fs PATH'); default '.'
 
 ENVIRONMENT:
   SHIELDOO_TOKEN   PAT with scan:upload scope (or global super-token)
   SHIELDOO_URL     Base URL of the gate (e.g. https://gate.example.com)
+  SHDG_CACHE_DIR   Override bundled-Trivy cache directory (default ~/.cache/shdg)
 
 See https://github.com/cloudfieldcz/shieldoo-gate/tree/main/docs`)
 }

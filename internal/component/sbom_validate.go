@@ -16,12 +16,20 @@ type SBOMLimits struct {
 	MaxStringLength  int   // reject any string longer than this (name, version, etc.)
 }
 
-// DefaultSBOMLimits returns the canonical defaults: 10 MiB, 10000 components,
-// depth 16, 1024-char strings.
+// DefaultSBOMLimits returns the canonical defaults: 500 MiB, 500000
+// components, depth 16, 1024-char strings.
+//
+// The 500 MiB / 500k component headroom is sized for `trivy image`-shaped
+// CycloneDX SBOMs: realistic enterprise app images land at 1.5–5 MiB
+// (well under the cap), but multi-language fat images, monorepo-based
+// containers, and SBOMs that include layer-aware component metadata can
+// push past the 10 MiB previously enforced. Deployments can tune both
+// caps downward via `vuln_scan.max_sbom_bytes` and `vuln_scan.max_components`
+// Viper keys.
 func DefaultSBOMLimits() SBOMLimits {
 	return SBOMLimits{
-		MaxBytes:        10 * 1024 * 1024,
-		MaxComponents:   10000,
+		MaxBytes:        500 * 1024 * 1024,
+		MaxComponents:   500000,
 		MaxDepth:        16,
 		MaxStringLength: 1024,
 	}

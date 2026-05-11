@@ -36,12 +36,19 @@ func detectEcosystem(dir string) (string, error) {
 
 // resolveEcosystem returns explicit when explicit != "auto", else falls back
 // to detection. Errors when explicit is set but invalid.
-func resolveEcosystem(explicit, dir string) (string, error) {
+//
+// When hasImage is true and explicit is empty/"auto", the function returns
+// "docker" without inspecting the filesystem — an image scan's source shape
+// is the image itself, not the surrounding directory.
+func resolveEcosystem(explicit, dir string, hasImage bool) (string, error) {
 	if explicit != "" && explicit != "auto" {
 		if !validEcosystems[explicit] {
 			return "", fmt.Errorf("unsupported ecosystem %q (allowed: pypi|npm|docker|go|multi|auto)", explicit)
 		}
 		return explicit, nil
+	}
+	if hasImage {
+		return "docker", nil
 	}
 	return detectEcosystem(dir)
 }

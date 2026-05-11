@@ -33,8 +33,14 @@ type OSVManifestScanner struct {
 	cacheTTL  time.Duration
 }
 
+// cacheEntry holds a hydrated /v1/vulns/{id} response for cacheTTL.
+// hydrate looks the entry up by vulnID and returns the cached vulnDetail
+// when present and unexpired; on miss it fetches and writes the entry
+// back under cacheMu. The per-package "fixed version" is recomputed
+// from the cached detail (cheap, depends on pkgName/ecosystem) instead
+// of being cached separately.
 type cacheEntry struct {
-	vulnIDs []string
+	detail  vulnDetail
 	expires time.Time
 }
 
@@ -310,13 +316,17 @@ func (s *OSVManifestScanner) queryBatch(ctx context.Context, qs []batchQuery) ([
 	return br.Results, nil
 }
 
-// hydrate fetches /v1/vulns/{id} and extracts severity + first fixed version for the
-// supplied package. Cached for cacheTTL.
+// hydrate fetches /v1/vulns/{id} and extracts severity + first fixed
+// version for the supplied package. Cached for cacheTTL — a per-vuln
+// cache is the dominant network-IO win on image SBOMs, which routinely
+// match the same CVE across dozens of OS-layer components (e.g. one
+// openssl CVE matched against ten language bindings).
 func (s *OSVManifestScanner) hydrate(ctx context.Context, vulnID, pkgName, ecosystem string) (vulnDetail, string) {
-	cacheKey := vulnID
 	s.cacheMu.Lock()
-	if e, ok := s.cache[cacheKey]; ok && time.Now().Before(e.expires) {
-		_ = e
+	if e, ok := s.cache[vulnID]; ok && time.Now().Before(e.expires) {
+		cached := e.detail
+		s.cacheMu.Unlock()
+		return cached, firstFixedVersion(cached, pkgName, ecosystem)
 	}
 	s.cacheMu.Unlock()
 
@@ -336,6 +346,9 @@ func (s *OSVManifestScanner) hydrate(ctx context.Context, vulnID, pkgName, ecosy
 	if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
 		return vulnDetail{ID: vulnID}, ""
 	}
+	s.cacheMu.Lock()
+	s.cache[vulnID] = cacheEntry{detail: d, expires: time.Now().Add(s.cacheTTL)}
+	s.cacheMu.Unlock()
 	fixed := firstFixedVersion(d, pkgName, ecosystem)
 	return d, fixed
 }

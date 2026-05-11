@@ -689,9 +689,10 @@ Key knobs (defaults in `config.example.yaml`):
 
 | Field | Default | Meaning |
 |---|---|---|
-| `max_sbom_bytes` | `10485760` (10 MiB) | Hard cap on SBOM upload body. Exceeding returns 413. |
-| `max_components` | `10000` | Max CycloneDX components per SBOM (structural validator). 422 on overflow. |
+| `max_sbom_bytes` | `524288000` (500 MiB) | Hard cap on SBOM upload body. Exceeding returns 413. Sized for `trivy image` SBOMs (multi-language fat images can exceed tens of MiB). Memory implication: at default burst=10 concurrent uploads the worst-case RSS budget is 5 GiB; the Phase 3 scan-concurrency semaphore caps how many of those uploads scan in parallel. Tune downwards on resource-constrained gates. |
+| `max_components` | `500000` | Max CycloneDX components per SBOM (structural validator). 422 on overflow. |
 | `max_components_per_project` | `200` | Per-project cap on `components` rows. 422 on creation when full. |
+| `max_concurrent_scans` | `4` | Cap on parallel `ScanService.Run` goroutines across upload + rescan paths. Excess invocations queue at the in-process semaphore (HTTP still returns 202 immediately). Sized for a single-instance gate; raise on resource-heavy deployments. Exposed as Prometheus gauge `shieldoo_gate_vuln_scan_in_flight`. |
 | `stale_threshold` | `720h` (30d) | Rows older than this render with the red-tint "stale" affordance. |
 | `rescan.interval` | `6h` | How often the scheduled rescan walks active components. |
 | `rescan.max_concurrent` | `4` | Semaphore on concurrent rescan jobs. |

@@ -11,6 +11,18 @@ import (
 	"time"
 )
 
+// Phase 2: image SBOMs are an order of magnitude larger than fs SBOMs.
+// A 1 Mbps CI uplink spends ~40s transmitting a 5 MiB body before the
+// server is even ready to validate it; the pre-feature 60s timeout was
+// too tight. The new floor is 5 minutes — well within reach of even a
+// slow CI uplink × the 500 MiB server-side cap.
+func TestUploadHTTPTimeout_HasImageScanHeadroom(t *testing.T) {
+	const minTimeout = 5 * time.Minute
+	if uploadHTTPTimeout < minTimeout {
+		t.Errorf("uploadHTTPTimeout = %v, want at least %v (image SBOMs need 5+ min headroom over slow CI uplinks)", uploadHTTPTimeout, minTimeout)
+	}
+}
+
 func TestUploadSBOM_HappyPath_Returns202(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {

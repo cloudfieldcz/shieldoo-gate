@@ -365,9 +365,10 @@ alerts:
 # uploads, plus the /vulnerabilities admin API and UI.
 vuln_scan:
   enabled: false
-  max_sbom_bytes: 10485760        # 10 MiB hard cap on SBOM upload size
-  max_components: 10000           # max CycloneDX components in one SBOM
+  max_sbom_bytes: 524288000       # 500 MiB hard cap on SBOM upload size (image SBOMs can be large)
+  max_components: 500000          # max CycloneDX components in one SBOM
   max_components_per_project: 200 # per-project cap on Component rows
+  max_concurrent_scans: 4         # cap on parallel ScanService.Run goroutines (uploads + rescans)
   stale_threshold: "720h"         # 30d — components older than this surface "stale"
   rescan:
     interval: "6h"

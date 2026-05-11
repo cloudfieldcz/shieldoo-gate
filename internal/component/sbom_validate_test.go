@@ -6,6 +6,44 @@ import (
 	"testing"
 )
 
+// Phase 2: default SBOM limits must be generous enough for realistic
+// `trivy image` SBOMs (1.5–5 MiB typical; >10 MiB on multi-language fat
+// images). Pre-feature defaults rejected those with 413.
+func TestDefaultSBOMLimits_HasImageScanHeadroom(t *testing.T) {
+	l := DefaultSBOMLimits()
+	const minBytes = int64(500 * 1024 * 1024)
+	const minComponents = 500000
+	if l.MaxBytes < minBytes {
+		t.Errorf("MaxBytes = %d, want at least %d (image SBOMs need 500+ MiB headroom)", l.MaxBytes, minBytes)
+	}
+	if l.MaxComponents < minComponents {
+		t.Errorf("MaxComponents = %d, want at least %d (image SBOMs need 500k+ headroom)", l.MaxComponents, minComponents)
+	}
+}
+
+// Regression guard: an 11 MiB body must NOT be rejected by the default
+// limits. The pre-feature 10 MiB cap rejected typical image SBOMs.
+// We synthesise the body to be just over 11 MiB to keep the test fast.
+func TestValidateSBOMStructure_11MiB_AcceptedByDefaults(t *testing.T) {
+	// Build a valid CycloneDX with a single component and padding in a
+	// string field so total size exceeds 11 MiB without inflating component
+	// count.
+	pad := strings.Repeat("x", 11*1024*1024)
+	body := []byte(`{"bomFormat":"CycloneDX","specVersion":"1.5","metadata":{"description":"` + pad + `"},"components":[{"name":"foo","version":"1.0"}]}`)
+	if int64(len(body)) < 11*1024*1024 {
+		t.Fatalf("test body only %d bytes, expected > 11 MiB", len(body))
+	}
+	// MaxStringLength of 1024 in the default limits would otherwise reject
+	// the padded description. Bypass it for this test by extending only
+	// MaxStringLength; the focus here is MaxBytes.
+	limits := DefaultSBOMLimits()
+	limits.MaxStringLength = len(pad) + 1024
+	_, err := ValidateSBOMStructure(body, limits)
+	if err != nil {
+		t.Fatalf("expected 11 MiB body to pass default size cap, got: %v", err)
+	}
+}
+
 func TestValidateContentType(t *testing.T) {
 	cases := []struct {
 		ct      string

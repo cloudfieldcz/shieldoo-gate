@@ -111,17 +111,31 @@ func setupVulnScan(ctx context.Context, cfg *config.Config, db *config.GateDB, b
 	if anomalyDetector != nil {
 		scanDeps.Anomaly = anomalyEvaluatorAdapter{detector: anomalyDetector}
 	}
-	scanSvc := component.NewScanService(component.ScanServiceConfig{}, scanDeps)
+	// Apply config-provided SBOM caps when set; otherwise withDefaults()
+	// inside NewScanService falls back to DefaultSBOMLimits().
+	scanCfg := component.ScanServiceConfig{}
+	if cfg.VulnScan.MaxSBOMBytes > 0 || cfg.VulnScan.MaxComponents > 0 {
+		scanCfg.SBOMLimits = component.DefaultSBOMLimits()
+		if cfg.VulnScan.MaxSBOMBytes > 0 {
+			scanCfg.SBOMLimits.MaxBytes = cfg.VulnScan.MaxSBOMBytes
+		}
+		if cfg.VulnScan.MaxComponents > 0 {
+			scanCfg.SBOMLimits.MaxComponents = cfg.VulnScan.MaxComponents
+		}
+	}
+	scanSvc := component.NewScanService(scanCfg, scanDeps)
 
 	ignoreSvc := component.NewIgnoreService(component.IgnoreServiceConfig{}, store, auditWriter)
 
 	apiServer.SetVulnDeps(api.VulnDeps{
-		Component:   componentSvc,
-		ScanService: scanSvc,
-		Ignore:      ignoreSvc,
-		Store:       store,
-		Audit:       auditWriter,
+		Component:    componentSvc,
+		ScanService:  scanSvc,
+		Ignore:       ignoreSvc,
+		Store:        store,
+		Audit:        auditWriter,
+		MaxSBOMBytes: scanCfg.SBOMLimits.MaxBytes,
 	})
+	apiServer.SetScanConcurrency(cfg.VulnScan.MaxConcurrentScans)
 
 	// Rate limiter (per-token, with per-dimension overrides). The default rate
 	// is the configured uploads/hour — most other endpoints get tighter buckets

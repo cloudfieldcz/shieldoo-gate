@@ -165,6 +165,7 @@ test_vuln_scan_log_redaction
 test_vuln_scan_super_token_audit
 test_vuln_scan_ai_ssrf
 test_vuln_scan_shdg
+test_vuln_scan_shdg_image
 
 # ---------------------------------------------------------------------------
 # Summary and exit code

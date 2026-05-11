@@ -45,6 +45,7 @@ type Server struct {
 	vulnDeps         VulnDeps
 	aiDeps           AIDeps
 	rateLimiter      *auth.RateLimiter
+	scanSched        *scanScheduler
 }
 
 // NewServer creates a new Server with the given dependencies.

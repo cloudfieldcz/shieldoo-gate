@@ -25,6 +25,46 @@ func TestDetectEcosystem_Dockerfile_ReturnsDocker(t *testing.T) {
 	}
 }
 
+// --image short-circuits filesystem-marker detection: even when the dir
+// contains a go.mod / package.json / etc., hasImage=true returns "docker".
+func TestResolveEcosystem_ImageDefaultsToDocker(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "go.mod") // misleading marker
+	got, err := resolveEcosystem("auto", dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "docker" {
+		t.Errorf("got %q, want docker (image short-circuits filesystem markers)", got)
+	}
+}
+
+// Empty explicit + hasImage also resolves to docker (defensive: shdg
+// internally passes "" sometimes).
+func TestResolveEcosystem_ImageEmptyExplicit_DefaultsToDocker(t *testing.T) {
+	dir := t.TempDir()
+	got, err := resolveEcosystem("", dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "docker" {
+		t.Errorf("got %q, want docker", got)
+	}
+}
+
+// Explicit ecosystem value beats the --image auto-default, so the user can
+// label an image scan as "multi" if they really want to.
+func TestResolveEcosystem_ImageExplicitOverride(t *testing.T) {
+	dir := t.TempDir()
+	got, err := resolveEcosystem("multi", dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "multi" {
+		t.Errorf("got %q, want multi (explicit overrides hasImage)", got)
+	}
+}
+
 func TestDetectEcosystem_GoMod_ReturnsGo(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "go.mod")
@@ -83,7 +123,7 @@ func TestDetectEcosystem_NothingRecognised_ReturnsMulti(t *testing.T) {
 func TestResolveEcosystem_ExplicitOverridesDetection(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "Dockerfile")
-	got, err := resolveEcosystem("npm", dir)
+	got, err := resolveEcosystem("npm", dir, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +133,7 @@ func TestResolveEcosystem_ExplicitOverridesDetection(t *testing.T) {
 }
 
 func TestResolveEcosystem_InvalidValue_Errors(t *testing.T) {
-	if _, err := resolveEcosystem("scala", "."); err == nil {
+	if _, err := resolveEcosystem("scala", ".", false); err == nil {
 		t.Errorf("expected error for unsupported ecosystem")
 	}
 }

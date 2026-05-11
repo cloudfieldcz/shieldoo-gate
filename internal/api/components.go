@@ -20,6 +20,10 @@ type VulnDeps struct {
 	Ignore      component.IgnoreService
 	Store       *component.Store
 	Audit       *auth.AuditWriter
+	// MaxSBOMBytes is the hard byte cap for uploaded SBOMs, used by the
+	// http.MaxBytesReader guard in handleScanUpload. Falls back to
+	// component.DefaultSBOMLimits().MaxBytes when zero.
+	MaxSBOMBytes int64
 }
 
 // SetVulnDeps wires the vuln-scan service implementations into the api.Server.

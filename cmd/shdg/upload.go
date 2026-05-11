@@ -25,6 +25,13 @@ type UploadResponse struct {
 // failing the build.
 const uploadMaxRetries429 = 3
 
+// uploadHTTPTimeout bounds the overall HTTP exchange (connect + body
+// transmission + server-side validation response). Sized for `trivy image`
+// SBOMs over slow CI uplinks: a 5 MiB body at 1 Mbps is ~40s of body
+// transmission alone, and the server-side 500 MiB cap means the body can
+// be much larger when image-scan workloads push the envelope.
+const uploadHTTPTimeout = 5 * time.Minute
+
 // uploadSBOM POSTs sbom to /api/v1/projects/{label}/components/{name}/scans?ecosystem=...
 // and returns the parsed 202 body. The body is buffered so the request can be
 // retried on HTTP 429 (rate-limited); the gate's Retry-After header is honoured
@@ -47,7 +54,7 @@ func uploadSBOM(baseURL, token, project, component, ecosystem string, sbom io.Re
 		return nil, fmt.Errorf("read sbom: %w", err)
 	}
 
-	c := &http.Client{Timeout: 60 * time.Second}
+	c := &http.Client{Timeout: uploadHTTPTimeout}
 	var lastStatus int
 	var lastBody string
 	for attempt := 0; attempt <= uploadMaxRetries429; attempt++ {
