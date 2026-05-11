@@ -93,7 +93,7 @@ Shieldoo Gate is built for teams that take software supply chain seriously:
 - **Admin UI** — browse artifacts, review verdicts, manage quarantine, override with justification, browse vulnerabilities & SBOMs per component
 - **Self-hostable** — single Docker Compose stack, Helm chart, air-gap friendly
 - **Open source, Apache 2.0** — no vendor lock-in, auditable code, community-driven
-- **`shdg` CLI** — cross-platform CI helper (linux/darwin amd64+arm64, windows/amd64) that bundles a SHA-256-pinned Trivy, generates the SBOM, uploads it, and exits non-zero on new criticals/highs — see [docs/cli/shdg.md](docs/cli/shdg.md)
+- **`shdg` CLI** — cross-platform CI helper (linux/darwin amd64+arm64, windows/amd64) that bundles a SHA-256-pinned Trivy, generates the SBOM from a project directory (`--dir`) or a built container image (`--image <ref>`, runs `trivy image` to capture OS-layer packages), uploads it, and exits non-zero on new criticals/highs — see [docs/cli/shdg.md](docs/cli/shdg.md)
 
 ## Scanners
 

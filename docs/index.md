@@ -104,7 +104,7 @@ Shieldoo Gate Protocol Adapter
 | — | Per-project, per-package overrides — whitelist or blacklist a single package within one project, with revoke (see [ADR-006](adr/ADR-006-per-project-package-overrides.md) and the [Policy Engine](policy.md#policy-overrides) doc) | Done |
 | — | Per-project license overrides — release a license-blocked artifact for one project only, without touching global policy (see [ADR-008](adr/ADR-008-license-overrides-per-project.md) and the [License-block releases live per-project](policy.md#policy-overrides) section) | Done |
 | — | [Vulnerability scan](features/vulnerability-scan.md) — push-from-CI CycloneDX SBOM scanning with OSV+Trivy, scheduled rescans, per-component CVE ignore lifecycle, optional AI surfaces (anomaly detection, ignore-reason drafting, fix-path insights) — see [ADR-007](adr/ADR-007-vulnerability-scan.md) | Done |
-| — | [`shdg` CLI](cli/shdg.md) — cross-platform CI helper that bundles a SHA-256-pinned Trivy, generates the CycloneDX SBOM, uploads it, and exits non-zero on new criticals/highs (linux/darwin amd64+arm64, windows/amd64) | Done |
+| — | [`shdg` CLI](cli/shdg.md) — cross-platform CI helper that bundles a SHA-256-pinned Trivy, generates the CycloneDX SBOM from a project directory or a built container image (`--image <ref>` runs `trivy image` to capture OS-layer packages), uploads it, and exits non-zero on new criticals/highs (linux/darwin amd64+arm64, windows/amd64) | Done |
 
 ## Client Authentication — How Basic Auth Maps to Projects (v1.2+)
 
