@@ -53,7 +53,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build -o /shieldoo-gate ./cmd/shieldoo-gate
 FROM aquasec/trivy:0.70.0 AS trivy
 
 # Stage 3: Runtime image
-FROM alpine:3.20.6 AS runtime
+FROM alpine:3.20.10 AS runtime
 
 RUN apk add --no-cache ca-certificates sqlite-libs
 
