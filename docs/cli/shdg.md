@@ -98,6 +98,7 @@ Generate (or re-use) a CycloneDX SBOM and upload it to the gate's
 | `--image` | string | (none) | Image reference (e.g. `myorg/api:1.4.2`). Runs `trivy image <ref>` instead of `trivy fs`. Mutually exclusive with `--sbom`/`--dir`. |
 | `--ecosystem` | enum | `auto` | `auto`, `pypi`, `npm`, `docker`, `go`, `multi`. With `--image` set, only `auto`, `docker`, and `multi` are allowed. |
 | `--dir` | path | `.` | Project directory to scan when generating. Ignored with `--image` (error if explicitly set). |
+| `--skip-dirs` | string | (none) | Comma-separated directories to skip during `trivy fs` (e.g. `examples,tests`). Forwarded as repeated `--skip-dirs` flags. No-op with `--image`/`--sbom`. |
 | `--wait` | bool | `false` | Poll `GET /api/v1/vulnerabilities/scan-runs/{id}` until terminal status. |
 | `--fail-on` | enum | `none` | `critical`, `high`, `none`. Requires `--wait`. |
 | `--timeout` | duration | `10m` | Wait timeout (Go duration string, e.g. `5m`, `30s`). |

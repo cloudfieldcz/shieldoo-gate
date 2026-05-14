@@ -471,9 +471,9 @@ grpcio-tools==1.68.1 \
     --hash=sha256:f0bdccb00709bf6180a80a353a99fa844cc0bb2d450cdf7fc6ab22c988bb6b4c \
     --hash=sha256:ff6ae5031a03ab90e9c508d12914438b73efd44b5eed9946bf8974c453d0ed57
     # via -r requirements.in
-guarddog==2.9.0 \
-    --hash=sha256:5d17ee5ecbc5f1af920384618fca4bcd8099d45bcf508ca62fcd2029ef15f57c \
-    --hash=sha256:744476af7095558b99a9b328918df3071535b356fe8e7156406800a263aea386
+guarddog==2.10.0 \
+    --hash=sha256:2ba7d92b31549235d28081d919e44cc69635b4162698c940617aaa7a5a73dd7b \
+    --hash=sha256:8c71cd172666bce446af7c0a8908950114cca8517696a1d380d2fda302069869
     # via -r requirements.in
 h11==0.16.0 \
     --hash=sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1 \

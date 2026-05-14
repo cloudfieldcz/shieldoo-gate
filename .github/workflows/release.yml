@@ -195,11 +195,15 @@ jobs:
           SHIELDOO_URL:   ${{ vars.SHIELDOO_URL }}
           SHIELDOO_TOKEN: ${{ secrets.SGW_TOKEN }}
         run: |
+          # --skip-dirs excludes example projects (intentionally pinned to old
+          # versions for demo/E2E) and tests/ from the gate (dir=.) scan so they
+          # do not pollute the shieldoo-gate component's dashboard.
           shdg scan \
             --project   shieldoo-gate \
             --component ${{ matrix.component.name }} \
             --dir       ${{ matrix.component.dir }} \
             --ecosystem ${{ matrix.component.ecosystem }} \
+            --skip-dirs examples,tests \
             --wait --fail-on critical --timeout 10m
 
   release:

@@ -470,12 +470,78 @@ func TestGenerateSBOM_EmptyOutput_ReturnsError(t *testing.T) {
 	if err := os.WriteFile(fakeTrivy, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, err := generateSBOM(fakeTrivy, tmp)
+	_, err := generateSBOM(fakeTrivy, tmp, "")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
 	if !strings.Contains(err.Error(), "empty SBOM") {
 		t.Errorf("error = %q, want substring 'empty SBOM'", err.Error())
+	}
+}
+
+// generateSBOM must forward --skip-dirs as repeated flags to trivy so the
+// scanner ignores e.g. example projects shipped in-tree. Uses a fake trivy
+// that records argv and writes a stub SBOM so the assertion is on the args.
+func TestGenerateSBOM_SkipDirs_ForwardsToTrivy(t *testing.T) {
+	tmp := t.TempDir()
+	argsFile := filepath.Join(tmp, "args.txt")
+	fakeTrivy := filepath.Join(tmp, "trivy")
+	// Record argv, then locate --output <path> and write a non-empty stub
+	// SBOM there so generateSBOM's empty-output guard does not fire.
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >'" + argsFile + "'\n" +
+		"next=0\nfor a in \"$@\"; do\n" +
+		"  if [ $next -eq 1 ]; then echo '{}' >\"$a\"; break; fi\n" +
+		"  if [ \"$a\" = \"--output\" ]; then next=1; fi\n" +
+		"done\n"
+	if err := os.WriteFile(fakeTrivy, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := generateSBOM(fakeTrivy, tmp, "examples, vendor ,, third_party"); err != nil {
+		t.Fatalf("generateSBOM: %v", err)
+	}
+	got, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv := strings.Split(strings.TrimRight(string(got), "\n"), "\n")
+	// Count --skip-dirs occurrences and capture their values.
+	var skipVals []string
+	for i, a := range argv {
+		if a == "--skip-dirs" && i+1 < len(argv) {
+			skipVals = append(skipVals, argv[i+1])
+		}
+	}
+	want := []string{"examples", "vendor", "third_party"}
+	if len(skipVals) != len(want) {
+		t.Fatalf("--skip-dirs count = %d, want %d (argv=%v)", len(skipVals), len(want), argv)
+	}
+	for i, w := range want {
+		if skipVals[i] != w {
+			t.Errorf("--skip-dirs[%d] = %q, want %q", i, skipVals[i], w)
+		}
+	}
+}
+
+// Empty --skip-dirs must not pass any --skip-dirs flag to trivy (a bare
+// "--skip-dirs" with no value would be a CLI error).
+func TestGenerateSBOM_NoSkipDirs_NoFlag(t *testing.T) {
+	tmp := t.TempDir()
+	argsFile := filepath.Join(tmp, "args.txt")
+	fakeTrivy := filepath.Join(tmp, "trivy")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >'" + argsFile + "'\n" +
+		"next=0\nfor a in \"$@\"; do\n" +
+		"  if [ $next -eq 1 ]; then echo '{}' >\"$a\"; break; fi\n" +
+		"  if [ \"$a\" = \"--output\" ]; then next=1; fi\n" +
+		"done\n"
+	if err := os.WriteFile(fakeTrivy, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := generateSBOM(fakeTrivy, tmp, ""); err != nil {
+		t.Fatalf("generateSBOM: %v", err)
+	}
+	got, _ := os.ReadFile(argsFile)
+	if strings.Contains(string(got), "--skip-dirs") {
+		t.Errorf("argv unexpectedly contains --skip-dirs: %s", got)
 	}
 }
 

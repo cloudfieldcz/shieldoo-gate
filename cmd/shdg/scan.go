@@ -20,6 +20,7 @@ type scanOpts struct {
 	ecosystem string
 	dir       string
 	image     string // image reference for `trivy image` scan; mutually exclusive with --sbom/--dir
+	skipDirs  string // comma-separated list of paths to skip; passed through to `trivy fs --skip-dirs`
 	verbose   bool
 
 	// Phase 2 additions:
@@ -55,6 +56,7 @@ func parseScanFlags(args []string, errW io.Writer) (scanOpts, error) {
 	fs.StringVar(&o.ecosystem, "ecosystem", "auto", "Ecosystem: auto|pypi|npm|docker|go|multi")
 	fs.StringVar(&o.dir, "dir", ".", "Project directory to scan (when --sbom and --image not given)")
 	fs.StringVar(&o.image, "image", "", "Image reference to scan (e.g. myorg/api:1.4.2); shells out to `trivy image`")
+	fs.StringVar(&o.skipDirs, "skip-dirs", "", "Comma-separated directories to skip (forwarded to `trivy fs --skip-dirs`). Ignored with --image/--sbom.")
 	fs.BoolVar(&o.verbose, "verbose", false, "Verbose log output to stderr")
 	fs.BoolVar(&o.wait, "wait", false, "Wait for scan to complete")
 	fs.StringVar(&o.failOn, "fail-on", "none", "Exit non-zero on new findings: critical|high|none (requires --wait)")
@@ -229,7 +231,7 @@ func executeScan(opts scanOpts, out, errW io.Writer) (int, error) {
 		if opts.verbose {
 			fmt.Fprintf(errW, "shdg: using trivy %s at %s\n", trivyVersion, bin)
 		}
-		sbomBytes, err := generateSBOM(bin, opts.dir)
+		sbomBytes, err := generateSBOM(bin, opts.dir, opts.skipDirs)
 		if err != nil {
 			return 1, fmt.Errorf("generate sbom: %w", err)
 		}
@@ -262,7 +264,7 @@ func executeScan(opts scanOpts, out, errW io.Writer) (int, error) {
 // tempfile and read it back. The empty-output check below also catches any
 // future quirk where Trivy succeeds (rc=0) but emits nothing — that would
 // have surfaced in the gate as `422: empty body`, which is a poor CI signal.
-func generateSBOM(trivyBin, dir string) ([]byte, error) {
+func generateSBOM(trivyBin, dir, skipDirs string) ([]byte, error) {
 	tmp, err := os.CreateTemp("", "shdg-sbom-*.json")
 	if err != nil {
 		return nil, fmt.Errorf("create tempfile: %w", err)
@@ -271,12 +273,19 @@ func generateSBOM(trivyBin, dir string) ([]byte, error) {
 	_ = tmp.Close()
 	defer os.Remove(tmpPath)
 
-	cmd := exec.Command(trivyBin, "fs",
+	args := []string{"fs",
 		"--format", "cyclonedx",
 		"--quiet",
 		"--output", tmpPath,
-		dir,
-	)
+	}
+	// Forward --skip-dirs as a repeated flag per entry. Trivy accepts both
+	// comma-joined and repeated forms, but repeating sidesteps a Trivy quirk
+	// where a single comma-joined value sometimes pattern-matches as one path.
+	for _, p := range splitSkipDirs(skipDirs) {
+		args = append(args, "--skip-dirs", p)
+	}
+	args = append(args, dir)
+	cmd := exec.Command(trivyBin, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -290,6 +299,21 @@ func generateSBOM(trivyBin, dir string) ([]byte, error) {
 		return nil, fmt.Errorf("trivy produced empty SBOM for dir=%s (stderr=%s)", dir, stderr.String())
 	}
 	return data, nil
+}
+
+// splitSkipDirs parses the comma-separated --skip-dirs value, trimming
+// whitespace and dropping empty entries so " a , ,b " yields ["a","b"].
+func splitSkipDirs(s string) []string {
+	if s == "" {
+		return nil
+	}
+	out := make([]string, 0, 4)
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // generateImageSBOM shells out to `trivy image <ref>` and returns the
