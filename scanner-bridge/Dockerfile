@@ -1,5 +1,5 @@
 # scanner-bridge/Dockerfile
-FROM python:3.12.11-slim
+FROM python:3.13.13-slim
 
 ARG SGW_TOKEN=""
 # Basic-auth username = project label on a self-hosted Shieldoo Gate. We use

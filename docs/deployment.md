@@ -51,7 +51,7 @@ The `docker/docker-compose.yml` defines two services:
 | Service | Image | Purpose |
 |---|---|---|
 | `shieldoo-gate` | Multi-stage build (Node + Go + Trivy + Alpine) | Main proxy, API, and UI. Includes built-in Trivy binary. |
-| `scanner-bridge` | Python 3.12-slim + GuardDog + gRPC | GuardDog behavioral scanner sidecar |
+| `scanner-bridge` | Python 3.13-slim + GuardDog + gRPC | GuardDog behavioral scanner sidecar |
 
 **Volumes:**
 
@@ -96,7 +96,7 @@ The scanner-bridge has its own Dockerfile (`scanner-bridge/Dockerfile`) that:
 
 - **Go 1.25+** — for building and running the core proxy
 - **Node.js 20+** — for building the admin UI
-- **Python 3.12+** with [uv](https://docs.astral.sh/uv/) — for the scanner bridge
+- **Python 3.13+** with [uv](https://docs.astral.sh/uv/) — for the scanner bridge
 - **protoc** (Protocol Buffers compiler) — for regenerating gRPC code
 - **Trivy** (optional) — install the trivy binary if you want the Trivy scanner
 
