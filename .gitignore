@@ -68,6 +68,7 @@ examples/python-requests/.venv/
 examples/npm-chalk/node_modules/
 examples/dotnet-json/bin/
 examples/dotnet-json/obj/
+*.lscache
 
 # Helm
 helm/charts/
