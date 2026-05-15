@@ -156,8 +156,8 @@ jobs:
   vuln-scan:
     # Dogfood: every release uploads a CycloneDX SBOM of each Shieldoo Gate
     # component to the production gate itself, gating the release on new
-    # criticals. Uses the freshly-built shdg from the `shdg` job (linux-amd64
-    # artifact) — no chicken-and-egg with previous releases.
+    # high-or-worse findings. Uses the freshly-built shdg from the `shdg` job
+    # (linux-amd64 artifact) — no chicken-and-egg with previous releases.
     name: Vuln-scan ${{ matrix.component.name }}
     needs: [docker, shdg]
     runs-on: ubuntu-latest
@@ -204,11 +204,67 @@ jobs:
             --dir       ${{ matrix.component.dir }} \
             --ecosystem ${{ matrix.component.ecosystem }} \
             --skip-dirs examples,tests \
-            --wait --fail-on critical --timeout 10m
+            --wait --fail-on high --timeout 10m
+
+  vuln-scan-image:
+    # Container-level dogfood: scan the freshly-built ghcr.io images via
+    # `shdg --image` (shells out to `trivy image`). Catches base-image OS
+    # CVEs (debian/alpine packages, openssl, etc.) that the source-tree
+    # vuln-scan above cannot see — those only surface inside the final
+    # container layers. Tracked as separate components `<image>-image`
+    # so source-level and image-level findings stay distinguishable in
+    # the dashboard.
+    name: Vuln-scan image ${{ matrix.image.name }}
+    needs: [docker, shdg]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - { name: gate-image,           ref: shieldoo-gate }
+          - { name: scanner-bridge-image, ref: scanner-bridge }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        # Trivy reads docker creds from ~/.docker/config.json to pull the
+        # ghcr.io image during scan; the docker/login-action writes that file.
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download shdg (linux-amd64)
+        uses: actions/download-artifact@v4
+        with:
+          name: shdg-linux-amd64
+          path: shdg-dist
+
+      - name: Install shdg
+        run: |
+          set -eu
+          tar -xzf shdg-dist/shdg-*-linux-amd64.tar.gz -C shdg-dist
+          chmod +x shdg-dist/shdg
+          echo "${PWD}/shdg-dist" >> "$GITHUB_PATH"
+          shdg-dist/shdg version
+
+      - name: Scan image ${{ matrix.image.ref }}:${{ needs.docker.outputs.version }}
+        env:
+          SHIELDOO_URL:   ${{ vars.SHIELDOO_URL }}
+          SHIELDOO_TOKEN: ${{ secrets.SGW_TOKEN }}
+        run: |
+          shdg scan \
+            --project   shieldoo-gate \
+            --component ${{ matrix.image.name }} \
+            --image     ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image.ref }}:${{ needs.docker.outputs.version }} \
+            --ecosystem docker \
+            --wait --fail-on high --timeout 15m
 
   release:
     name: GitHub release
-    needs: [docker, shdg, vuln-scan]
+    needs: [docker, shdg, vuln-scan, vuln-scan-image]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

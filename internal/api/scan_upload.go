@@ -75,7 +75,15 @@ func (s *Server) handleScanUpload(w http.ResponseWriter, r *http.Request) {
 
 	run, err := s.vulnDeps.ScanService.Submit(r.Context(), comp.ID, r.Body, r.ContentLength, contentType, component.TriggerUpload, byEmail)
 	if err != nil {
+		// MaxBytesReader (line above) returns *http.MaxBytesError on overflow.
+		// That error propagates up through ScanService.Submit → ReadAllLimited
+		// → io.ReadAll, so we map it to 413 alongside the service-level
+		// ErrSBOMTooLarge. Without this case a body over the handler cap
+		// would fall through to 500.
+		var maxBytesErr *http.MaxBytesError
 		switch {
+		case errors.As(err, &maxBytesErr):
+			writeError(w, http.StatusRequestEntityTooLarge, "sbom too large")
 		case errors.Is(err, component.ErrSBOMTooLarge):
 			writeError(w, http.StatusRequestEntityTooLarge, "sbom too large")
 		case errors.Is(err, component.ErrUnsupportedMedia):

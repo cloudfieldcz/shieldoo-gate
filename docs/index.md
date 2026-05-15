@@ -66,7 +66,7 @@ Shieldoo Gate Protocol Adapter
 
 - **Go 1.25+** — core proxy, API, built-in scanners
 - **TypeScript + React 18** — admin UI
-- **Python 3.12+** — GuardDog scanner bridge (gRPC sidecar)
+- **Python 3.13+** — GuardDog scanner bridge (gRPC sidecar)
 - **SQLite** (default single-node) / **PostgreSQL** (HA mode, v1.1)
 
 ## Implementation Status
@@ -156,7 +156,7 @@ curl http://localhost:8080/api/v1/health
 
 ### Local Development (without Docker)
 
-Prerequisites: Go 1.25+, Node.js 20+, Python 3.12+ with [uv](https://docs.astral.sh/uv/), `protoc` (Protocol Buffers compiler).
+Prerequisites: Go 1.25+, Node.js 20+, Python 3.13+ with [uv](https://docs.astral.sh/uv/), `protoc` (Protocol Buffers compiler).
 
 ```bash
 # Generate gRPC code (requires protoc + Go gRPC plugins)
