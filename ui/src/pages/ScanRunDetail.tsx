@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { vulnApi } from '../api/vulnerabilities'
-import SeverityChip from '../components/vuln/SeverityChip'
+import SeverityChip, { severityRank } from '../components/vuln/SeverityChip'
 import TriggerBadge from '../components/vuln/TriggerBadge'
 import SBOMJSONViewer from '../components/vuln/SBOMJSONViewer'
 
@@ -24,6 +24,14 @@ export default function ScanRunDetail() {
     queryFn: () => vulnApi.findings(runID),
     enabled: Number.isFinite(runID),
   })
+
+  // Severity first (most important), then artifact name, then version + CVE.
+  const sortedFindings = [...findings].sort((a, b) =>
+    severityRank[a.severity] - severityRank[b.severity] ||
+    a.package_name.localeCompare(b.package_name) ||
+    a.package_version.localeCompare(b.package_version) ||
+    a.cve_id.localeCompare(b.cve_id),
+  )
 
   const loadSBOM = async () => {
     const r = await fetch(vulnApi.sbomURL(runID))
@@ -78,7 +86,7 @@ export default function ScanRunDetail() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {findings.map((f) => (
+              {sortedFindings.map((f) => (
                 <tr key={f.id} className="hover:bg-gray-50">
                   <td className="px-4 py-3"><SeverityChip severity={f.severity} /></td>
                   <td className="px-4 py-3"><a href={`https://osv.dev/vulnerability/${encodeURIComponent(f.cve_id)}`} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline font-mono text-xs">{f.cve_id}</a></td>

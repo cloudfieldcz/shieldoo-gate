@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Pencil } from 'lucide-react'
 import { vulnApi, aiApi, type ScanFinding, type Ignore, type Component } from '../api/vulnerabilities'
-import SeverityChip from '../components/vuln/SeverityChip'
+import SeverityChip, { severityRank } from '../components/vuln/SeverityChip'
 import SeverityCounts from '../components/vuln/SeverityCounts'
 import TriggerBadge from '../components/vuln/TriggerBadge'
 import ScannerPill from '../components/vuln/ScannerPill'
@@ -225,6 +225,13 @@ function FindingTable({ findings, onIgnore }: { findings: ScanFinding[]; onIgnor
   if (findings.length === 0) {
     return <div className="rounded-lg bg-green-50 border border-green-200 p-4 text-sm text-green-700">All clear at last scan.</div>
   }
+  // Severity first (most important), then artifact name, then version + CVE for a stable order.
+  const sorted = [...findings].sort((a, b) =>
+    severityRank[a.severity] - severityRank[b.severity] ||
+    a.package_name.localeCompare(b.package_name) ||
+    a.package_version.localeCompare(b.package_version) ||
+    a.cve_id.localeCompare(b.cve_id),
+  )
   return (
     <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
       <table className="w-full text-sm">
@@ -239,7 +246,7 @@ function FindingTable({ findings, onIgnore }: { findings: ScanFinding[]; onIgnor
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-100">
-          {findings.map((f) => (
+          {sorted.map((f) => (
             <tr key={f.id} className="hover:bg-gray-50">
               <td className="px-4 py-3"><SeverityChip severity={f.severity} /></td>
               <td className="px-4 py-3">
