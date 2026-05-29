@@ -175,6 +175,15 @@ export const projectsApi = {
   listArtifacts: (id: number) =>
     api.get<ProjectArtifactsResponse>(`/projects/${id}/artifacts`).then((r) => r.data.artifacts ?? []),
 
+  /**
+   * Download URL for the project's CycloneDX 1.5 SBOM. Server sends
+   * Content-Disposition: attachment, so a plain <a href> or window.location
+   * assign triggers a browser download with a meaningful filename
+   * (sbom-<label>-YYYYMMDD.cdx.json). Generated fresh on every request —
+   * not cached — because the set of pulled artifacts changes continuously.
+   */
+  sbomURL: (id: number) => `/api/v1/projects/${id}/sbom`,
+
   getLicensePolicy: (id: number) =>
     api.get<ProjectLicensePolicyView>(`/projects/${id}/license-policy`).then((r) => r.data),
 

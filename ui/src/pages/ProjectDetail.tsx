@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, FolderTree, Package, ScrollText, RotateCcw, ShieldCheck, ShieldX, Undo2, Bug } from 'lucide-react'
+import { ArrowLeft, FolderTree, Package, ScrollText, RotateCcw, ShieldCheck, ShieldX, Undo2, Bug, Download } from 'lucide-react'
 import { projectsApi } from '../api/client'
 import { vulnApi } from '../api/vulnerabilities'
 import type {
@@ -48,24 +48,35 @@ export default function ProjectDetail() {
 
       {projectQ.data && (
         <>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-              <FolderTree className="w-6 h-6 text-blue-600" />
-              <span className="font-mono">{projectQ.data.label}</span>
-              {projectQ.data.display_name && (
-                <span className="text-lg text-gray-500 font-normal">
-                  — {projectQ.data.display_name}
-                </span>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+                <FolderTree className="w-6 h-6 text-blue-600" />
+                <span className="font-mono">{projectQ.data.label}</span>
+                {projectQ.data.display_name && (
+                  <span className="text-lg text-gray-500 font-normal">
+                    — {projectQ.data.display_name}
+                  </span>
+                )}
+              </h1>
+              <p className="text-xs text-gray-500 mt-1">
+                Created {formatDate(projectQ.data.created_at)} · via{' '}
+                <span className="font-mono">{projectQ.data.created_via}</span> ·{' '}
+                {projectQ.data.enabled ? 'enabled' : 'disabled'}
+              </p>
+              {projectQ.data.description && (
+                <p className="text-sm text-gray-700 mt-2">{projectQ.data.description}</p>
               )}
-            </h1>
-            <p className="text-xs text-gray-500 mt-1">
-              Created {formatDate(projectQ.data.created_at)} · via{' '}
-              <span className="font-mono">{projectQ.data.created_via}</span> ·{' '}
-              {projectQ.data.enabled ? 'enabled' : 'disabled'}
-            </p>
-            {projectQ.data.description && (
-              <p className="text-sm text-gray-700 mt-2">{projectQ.data.description}</p>
-            )}
+            </div>
+            <a
+              href={projectsApi.sbomURL(projectId)}
+              aria-label="Download SBOM"
+              title="Download a CycloneDX 1.5 SBOM of every artifact this project has pulled through the proxy. Generated fresh on each click."
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 shrink-0"
+            >
+              <Download className="w-4 h-4" />
+              Download SBOM
+            </a>
           </div>
 
           <div className="border-b border-gray-200 flex gap-4">
