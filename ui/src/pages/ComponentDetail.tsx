@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Pencil } from 'lucide-react'
 import { vulnApi, aiApi, type ScanFinding, type Ignore, type Component } from '../api/vulnerabilities'
 import SeverityChip from '../components/vuln/SeverityChip'
+import SeverityCounts from '../components/vuln/SeverityCounts'
 import TriggerBadge from '../components/vuln/TriggerBadge'
 import ScannerPill from '../components/vuln/ScannerPill'
 import IgnoreModal from '../components/vuln/IgnoreModal'
@@ -374,10 +375,8 @@ function ScanHistoryTable({ scans }: { scans: any[] }) {
               <td className="px-4 py-3 text-xs">
                 <span className={`font-mono ${s.status === 'failed' ? 'text-red-600' : 'text-gray-700'}`}>{s.status}</span>
               </td>
-              <td className="px-4 py-3 text-right text-xs">
-                <span className="text-red-700">{s.critical_count}C</span>
-                {' / '}<span className="text-amber-600">{s.high_count}H</span>
-                {' / '}<span className="text-gray-600">{s.medium_count}M</span>
+              <td className="px-4 py-3 text-right">
+                <SeverityCounts critical={s.critical_count} high={s.high_count} medium={s.medium_count} />
               </td>
               <td className="px-4 py-3 text-right">
                 <Link to={`/vulnerabilities/scan-runs/${s.id}`} className="text-xs text-blue-600 hover:underline">View findings</Link>

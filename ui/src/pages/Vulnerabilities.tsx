@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Bug, Terminal } from 'lucide-react'
 import { vulnApi, type ComponentRow } from '../api/vulnerabilities'
-import SeverityChip from '../components/vuln/SeverityChip'
+import { CountPill } from '../components/vuln/SeverityCounts'
 import TriggerBadge from '../components/vuln/TriggerBadge'
 import AIAnomalyBanner from '../components/vuln/AIAnomalyBanner'
 
@@ -207,12 +207,9 @@ function Row({ row }: { row: ComponentRow }) {
         {row.last_scan_at ? new Date(row.last_scan_at).toLocaleString() : '—'}
         {row.last_scan_trigger && <span className="ml-2"><TriggerBadge trigger={row.last_scan_trigger} /></span>}
       </td>
-      <td className="px-4 py-3 text-right tabular-nums">
-        {row.critical_count > 0 ? <SeverityChip severity="CRITICAL" /> : <span className="text-gray-300">—</span>}
-        {row.critical_count > 0 && <span className="ml-1.5 text-red-700 font-mono">{row.critical_count}</span>}
-      </td>
-      <td className="px-4 py-3 text-right tabular-nums">{row.high_count}</td>
-      <td className="px-4 py-3 text-right tabular-nums">{row.medium_count}</td>
+      <td className="px-4 py-3 text-right"><CountPill tone="critical" count={row.critical_count} /></td>
+      <td className="px-4 py-3 text-right"><CountPill tone="high" count={row.high_count} /></td>
+      <td className="px-4 py-3 text-right"><CountPill tone="medium" count={row.medium_count} /></td>
       <td className="px-4 py-3 text-right tabular-nums">
         {row.new_critical_count > 0 ? (
           <span className="text-red-700 font-medium">+{row.new_critical_count} critical</span>
