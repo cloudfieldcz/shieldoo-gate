@@ -13,6 +13,7 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
 - [Architecture](architecture.md) — component overview, request flow, startup sequence, concurrency model
 - [Data Model](data-model.md) — database schema, Go structs, table relationships, migrations
 - [Scanners](scanners.md) — scan engine, built-in and external scanners, aggregation, threat feed
+- [SBOM Export](sbom.md) — per-project CycloneDX 1.5 SBOM download (`GET /api/v1/projects/{id}/sbom`)
   - [Version-Diff Scanner](scanners/version-diff.md) — AI-driven cross-version semantic analysis (replaces v1.x heuristic, see [ADR-005](adr/ADR-005-ai-driven-version-diff.md))
 - [Protocol Adapters](adapters.md) — PyPI, npm, NuGet, Docker, Maven, RubyGems, Go Modules proxy implementations and routing
 - [Policy Engine](policy.md) — evaluation order, overrides, allowlists, aggregation rules, policy tiers (v1.2), AI triage
@@ -100,6 +101,7 @@ Shieldoo Gate Protocol Adapter
 | — | SHA256 integrity verification gate | Done |
 | — | Project registry (Basic-auth username → project) — see [Client Authentication](#client-authentication--how-basic-auth-maps-to-projects-v12) | Done (v1.2) |
 | — | SBOM generation (CycloneDX via Trivy single-run) — see [Scanners](scanners.md) | Done (v1.2) |
+| — | Per-project SBOM export (CycloneDX 1.5, on-demand) — see [SBOM Export](sbom.md) | Done |
 | — | License policy enforcement (SPDX, per-project overrides) — see [Policy Engine](policy.md) | Done (v1.2) |
 | — | Per-project, per-package overrides — whitelist or blacklist a single package within one project, with revoke (see [ADR-006](adr/ADR-006-per-project-package-overrides.md) and the [Policy Engine](policy.md#policy-overrides) doc) | Done |
 | — | Per-project license overrides — release a license-blocked artifact for one project only, without touching global policy (see [ADR-008](adr/ADR-008-license-overrides-per-project.md) and the [License-block releases live per-project](policy.md#policy-overrides) section) | Done |

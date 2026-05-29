@@ -303,6 +303,7 @@ PENDING_SCAN ──▶ CLEAN ──▶ QUARANTINED ───┘
 | `OVERRIDE_REVOKED` | Policy override revoked via API |
 | `TAG_MUTATED` | Upstream tag/version digest changed (tag mutability detection) |
 | `RESCAN_QUEUED` | Manual rescan triggered via API |
+| `SBOM_GENERATED` | Per-project CycloneDX 1.5 SBOM exported via `GET /api/v1/projects/{id}/sbom` (`metadata_json`: `project_label`, `size_bytes`, `format`) |
 
 **Go struct:** `model.AuditEntry` (`internal/model/audit.go`)
 
