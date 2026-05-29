@@ -20,9 +20,23 @@ GET /api/v1/projects/{id}/sbom
 ```
 
 The response is a complete CycloneDX 1.5 document describing every artifact
-the project has pulled at least once through the proxy (rows in
-`artifact_project_usage`). Quarantined and clean artifacts are both
-included; the `shieldoo:status` property carries the verdict.
+this project has **successfully pulled** at least once through the proxy —
+rows in `artifact_project_usage`, written on `EventServed`. Artifacts
+that were **blocked on first scan and never served** (malicious,
+license-blocked, integrity-violation, …) do NOT appear here; they have
+no usage row because the consumer never received them. Look in the
+audit log (`event_type` = `BLOCKED`, `LICENSE_BLOCKED`, `QUARANTINED`)
+for those.
+
+Artifacts that were served once and **later quarantined** (e.g. a rescan
+discovered a new threat) DO appear, with `shieldoo:status=QUARANTINED`
+in their `properties` — they were once part of this project's supply
+chain even if they're no longer servable.
+
+This matches industry SBOM semantics ("what's actually here") and
+intentionally diverges from the project Artifacts tab in the admin UI,
+which additionally surfaces blocked-attempt rows so operators can see
+"what was tried but refused."
 
 The SBOM is **not cached** — it is rebuilt on every request from the
 underlying tables, because the set of pulled artifacts changes with every
