@@ -27,6 +27,7 @@ ARG SGW_TOKEN=""
 # Same rationale as stage 1 — identify as project "shieldoo-gate" when
 # pulling Go modules through a self-hosted proxy.
 ARG SGW_USER=shieldoo-gate
+ARG APP_VERSION=dev
 
 # git is required for `go mod download` to fall back to direct VCS clones
 # (GOPROXY=...,direct) when an upstream module proxy 404/410s — common during
@@ -44,7 +45,9 @@ COPY . .
 # Copy built UI assets into the source tree so they are embedded if needed
 COPY --from=ui-builder /ui/dist ./ui/dist
 
-RUN CGO_ENABLED=1 GOOS=linux go build -o /shieldoo-gate ./cmd/shieldoo-gate
+RUN CGO_ENABLED=1 GOOS=linux go build \
+    -ldflags "-X main.Version=${APP_VERSION}" \
+    -o /shieldoo-gate ./cmd/shieldoo-gate
 
 # Trivy binary — pinned to match shdg CLI's bundled Trivy (cmd/shdg/trivy.go).
 # Trivy < 0.66 cannot decode CycloneDX 1.6 SBOMs; shdg generates 1.6 by default,

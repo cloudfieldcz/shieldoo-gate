@@ -13,11 +13,20 @@ endif
 
 build: build-gate build-shdg
 
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+
+# shieldoo-gate only reads Version (for SBOM stamping); shdg additionally
+# reads Commit (printed by `shdg version`). Keep these in sync with the
+# `var` declarations in cmd/shieldoo-gate/version.go and cmd/shdg/version.go.
+LDFLAGS_GATE := -X main.Version=$(VERSION)
+LDFLAGS_SHDG := -X main.Version=$(VERSION) -X main.Commit=$(COMMIT)
+
 build-gate:
-	go build -o bin/$(BINARY) $(CMD_DIR)
+	go build -ldflags "$(LDFLAGS_GATE)" -o bin/$(BINARY) $(CMD_DIR)
 
 build-shdg:
-	go build -ldflags "-X main.Version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev) -X main.Commit=$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)" -o bin/shdg ./cmd/shdg
+	go build -ldflags "$(LDFLAGS_SHDG)" -o bin/shdg ./cmd/shdg
 
 test:
 	go test -tags '!e2e' ./... -v -race

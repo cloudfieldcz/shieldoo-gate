@@ -5,6 +5,7 @@ services:
       dockerfile: docker/Dockerfile
       args:
         SGW_TOKEN: ${SGW_TOKEN:-}
+        APP_VERSION: ${APP_VERSION:-dev}
     platform: linux/amd64
     depends_on:
       scanner-bridge:
