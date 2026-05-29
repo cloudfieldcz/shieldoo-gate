@@ -568,6 +568,7 @@ func main() {
 		cachePrefix := cfg.Cache.Local.Path
 		sbomStore := sbom.NewStorage(db, blobStore, cachePrefix)
 		apiServer.SetSBOMStorage(sbomStore)
+		apiServer.SetSBOMGenerator(sbom.NewGenerator(db, Version))
 		adapter.SetSBOMWriter(sbomAdapterWriter{st: sbomStore})
 		adapter.SetLicenseMetadataWriter(sbomStore)
 		log.Info().Str("format", "cyclonedx-json").Msg("SBOM storage enabled")
