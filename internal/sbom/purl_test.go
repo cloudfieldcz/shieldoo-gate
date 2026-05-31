@@ -99,6 +99,16 @@ func TestBuildPURL(t *testing.T) {
 			want: "pkg:oci/alpine@sha256:abcdef1234567890?repository_url=registry-1.docker.io%2Flibrary%2Falpine&tag=3.20.10",
 		},
 		{
+			// OCI image-spec mandates [a-f0-9]{64} for sha256 digests; uppercase
+			// hex must be normalised to lowercase.
+			name:      "docker uppercase sha256 lowercased per OCI spec",
+			ecosystem: "docker", artifact: "registry_1_docker_io_library_alpine",
+			version: "3.20.10",
+			sha256:  "ABCDEF1234567890",
+			upstreamURL: "https://registry-1.docker.io/v2/library/alpine/manifests/3.20.10",
+			want: "pkg:oci/alpine@sha256:abcdef1234567890?repository_url=registry-1.docker.io%2Flibrary%2Falpine&tag=3.20.10",
+		},
+		{
 			name:      "docker pulled by digest (no tag qualifier)",
 			ecosystem: "docker", artifact: "registry_1_docker_io_library_alpine",
 			version: "sha256:abcdef1234567890",

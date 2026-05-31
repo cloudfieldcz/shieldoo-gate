@@ -43,6 +43,13 @@ underlying tables, because the set of pulled artifacts changes with every
 new request. Empty projects produce a valid SBOM with `components: []`
 rather than an error.
 
+> **Note on the SBOM SHA-256 integrity invariant** (CLAUDE.md #7):
+> that invariant applies to user-uploaded SBOMs in the vuln-scan flow
+> (pushed via `shdg` from CI), whose bytes are persisted and re-verified
+> on every read. Per-project SBOMs from this endpoint are regenerated
+> fresh on each request from DB rows — there's nothing persisted to
+> compare against, so no `sbom_integrity_violation` event applies here.
+
 ### Why no `dependencies` graph
 
 The proxy could parse declared dependencies from each artifact's metadata

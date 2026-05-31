@@ -177,7 +177,11 @@ func ociPURL(safeName, ref, sha256, upstreamURL string) string {
 	if imageName == "" {
 		return ""
 	}
-	out := "pkg:oci/" + segEscape(strings.ToLower(imageName)) + "@sha256:" + segEscape(strings.TrimPrefix(sha256, "sha256:"))
+	// OCI image-spec mandates [a-f0-9]{64} for sha256 digests; purl-spec OCI
+	// echoes "sha256:hex_encoded_lowercase_digest". crypto/sha256 already
+	// emits lowercase, but lowercase here is defense-in-depth.
+	digest := strings.ToLower(strings.TrimPrefix(sha256, "sha256:"))
+	out := "pkg:oci/" + segEscape(strings.ToLower(imageName)) + "@sha256:" + segEscape(digest)
 	qs := url.Values{}
 	if repoURL != "" {
 		qs.Set("repository_url", repoURL)
