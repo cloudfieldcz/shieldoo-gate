@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/project"
@@ -163,7 +164,11 @@ func rowToComponent(r rawRow) cdxOutComp {
 
 	if r.LicensesJSON.Valid && r.LicensesJSON.String != "" {
 		var ids []string
-		if err := json.Unmarshal([]byte(r.LicensesJSON.String), &ids); err == nil {
+		if err := json.Unmarshal([]byte(r.LicensesJSON.String), &ids); err != nil {
+			// Corrupt licenses_json row — log so it's traceable, emit component without licenses.
+			log.Warn().Err(err).Str("name", r.Name).Str("version", r.Version).
+				Msg("sbom: unmarshal licenses_json failed; component will have no licenses")
+		} else {
 			c.Licenses = licensesToCDX(ids)
 		}
 	}

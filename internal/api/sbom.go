@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -97,11 +98,12 @@ func (s *Server) handleGetProjectSBOM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Audit the export. SBOM aggregates every artifact this project has
-	// pulled — operators need to know "who exported what about us, when"
-	// for compliance and incident response. Failure to audit is logged but
-	// does not block the download (best-effort, mirrors the pattern used
-	// by override + license audit writes elsewhere in this package).
+	// Audit the export — best-effort, log on failure but don't block download.
+	metaJSON, _ := json.Marshal(map[string]any{
+		"project_label": p.Label,
+		"size_bytes":    len(blob),
+		"format":        "cyclonedx-1.5-json",
+	})
 	if err := adapter.WriteAuditLog(s.db, model.AuditEntry{
 		EventType:    model.EventSBOMGenerated,
 		ProjectID:    &id,
@@ -109,12 +111,16 @@ func (s *Server) handleGetProjectSBOM(w http.ResponseWriter, r *http.Request) {
 		ClientIP:     r.RemoteAddr,
 		UserAgent:    r.UserAgent(),
 		Reason:       fmt.Sprintf("project SBOM exported (%d bytes)", len(blob)),
-		MetadataJSON: fmt.Sprintf(`{"project_label":%q,"size_bytes":%d,"format":"cyclonedx-1.5-json"}`, p.Label, len(blob)),
+		MetadataJSON: string(metaJSON),
 	}); err != nil {
 		log.Warn().Err(err).Int64("project_id", id).Msg("api: failed to write SBOM audit entry")
 	}
 
-	filename := fmt.Sprintf("sbom-%s-%s.cdx.json", p.Label, time.Now().UTC().Format("20060102"))
+	// Strip CRLF/quote/backslash from label before putting it in the header —
+	// project.go regex already forbids them, but defence in depth: the safety
+	// lives in another module and this is a Header.Set call.
+	safeLabel := strings.NewReplacer("\"", "_", "\\", "_", "\r", "_", "\n", "_").Replace(p.Label)
+	filename := fmt.Sprintf("sbom-%s-%s.cdx.json", safeLabel, time.Now().UTC().Format("20060102"))
 	w.Header().Set("Content-Type", "application/vnd.cyclonedx+json; version=1.5")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	w.WriteHeader(http.StatusOK)
