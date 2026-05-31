@@ -81,6 +81,12 @@ func (s *Server) SetRateLimiter(rl *auth.RateLimiter) {
 	s.rateLimiter = rl
 }
 
+// RateLimiter returns the wired limiter so feature wiring can add its own
+// dimension overrides. Nil before SetRateLimiter has been called.
+func (s *Server) RateLimiter() *auth.RateLimiter {
+	return s.rateLimiter
+}
+
 // SetRescanNotifier sets a callback invoked when a manual rescan is queued,
 // allowing the rescan scheduler to wake up immediately.
 func (s *Server) SetRescanNotifier(fn func()) {

@@ -137,25 +137,14 @@ func setupVulnScan(ctx context.Context, cfg *config.Config, db *config.GateDB, b
 	})
 	apiServer.SetScanConcurrency(cfg.VulnScan.MaxConcurrentScans)
 
-	// Rate limiter (per-token, with per-dimension overrides). The default rate
-	// is the configured uploads/hour — most other endpoints get tighter buckets
-	// via WithDimensionLimit so a runaway client cannot saturate the admin API
-	// just by hammering one route.
+	// Vuln-scan rate-limit dimensions, added to the base limiter from main.go.
 	uploadsPerHour := rateOrDefault(cfg.VulnScan.RateLimit.UploadsPerHour, 60)
-	rl := auth.NewRateLimiter(uploadsPerHour, 10).
+	apiServer.RateLimiter().
 		WithDimensionLimit("scan-upload", uploadsPerHour, 10).
-		// 200/h global per token, 30/h per (token, component): generous for
-		// bulk-triage but bounded so a runaway script self-throttles.
 		WithDimensionLimit("ignore-create-token", 200.0/3600.0, 5).
 		WithDimensionLimit("ignore-create-comp", 30.0/3600.0, 3).
-		// Manual rescan & SBOM download are operator-driven — keep responsive
-		// for humans (10/min) but bounded.
 		WithDimensionLimit("rescan", 10.0/60.0, 3).
-		WithDimensionLimit("sbom-download", 30.0/60.0, 5).
-		// AI-draft is the most expensive path; daily budget already ceiling-caps
-		// total spend, but per-token rate-limit spreads the load.
 		WithDimensionLimit("ai-draft", 1.0/60.0, 1)
-	apiServer.SetRateLimiter(rl)
 
 	// Schedulers.
 	rescanCfg := scheduler.ManifestRescanConfig{

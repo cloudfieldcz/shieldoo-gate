@@ -619,6 +619,14 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Rate limiter — always constructed so endpoints outside the vuln-scan
+	// gate (project SBOM export) stay protected. Vuln-scan adds its own
+	// dimensions on top inside setupVulnScan.
+	defaultRate := rateOrDefault(cfg.VulnScan.RateLimit.UploadsPerHour, 60)
+	apiRateLimiter := auth.NewRateLimiter(defaultRate, 10).
+		WithDimensionLimit("sbom-download", 30.0/60.0, 5)
+	apiServer.SetRateLimiter(apiRateLimiter)
+
 	// Vulnerability-scan wiring MUST run before apiServer.Routes() — Routes()
 	// snapshots the route table at call time, and the vuln-scan + AI route
 	// groups are only registered when VulnEnabled()/AIEnabled() report true,
