@@ -18,9 +18,19 @@ func TestBuildPURL(t *testing.T) {
 			want: "pkg:pypi/requests@2.31.0",
 		},
 		{
-			name:      "pypi name with dot survives",
+			name:      "pypi PEP 503: dot becomes dash",
 			ecosystem: "pypi", artifact: "ruamel.yaml", version: "0.17.21",
-			want: "pkg:pypi/ruamel.yaml@0.17.21",
+			want: "pkg:pypi/ruamel-yaml@0.17.21",
+		},
+		{
+			name:      "pypi PEP 503: underscore becomes dash + lowercased",
+			ecosystem: "pypi", artifact: "Django_filter", version: "23.5",
+			want: "pkg:pypi/django-filter@23.5",
+		},
+		{
+			name:      "pypi PEP 503: runs of separators collapse to one dash",
+			ecosystem: "pypi", artifact: "Some.Mixed__Name", version: "1.0",
+			want: "pkg:pypi/some-mixed-name@1.0",
 		},
 		{
 			name:      "npm plain",
@@ -71,6 +81,14 @@ func TestBuildPURL(t *testing.T) {
 			name:      "go module four segments (subpackage)",
 			ecosystem: "go", artifact: "github.com/org/repo/sub/pkg", version: "v0.1.0",
 			want: "pkg:golang/github.com/org/repo/sub/pkg@v0.1.0",
+		},
+		{
+			// Per purl-spec golang: namespace + name MUST be lowercased.
+			// Matches Trivy's parseGolang (strings.ToLower) so the per-artifact
+			// SBOM and per-project SBOM emit the same PURL for the same module.
+			name:      "go module: mixed case lowercased per spec",
+			ecosystem: "go", artifact: "github.com/Sirupsen/Logrus", version: "v1.0.0",
+			want: "pkg:golang/github.com/sirupsen/logrus@v1.0.0",
 		},
 		{
 			name:      "docker with upstream url + sha256 + tag",

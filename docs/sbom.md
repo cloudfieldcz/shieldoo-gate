@@ -184,6 +184,18 @@ PURLs are omitted (rather than fabricated) when essential inputs are
 missing: empty name, unknown ecosystem, docker without a SHA-256, or maven
 where `name` lacks a `:` separating `groupId` from `artifactId`.
 
+**Per-ecosystem normalisation:**
+
+- **pypi** — lowercase + runs of `.`, `-`, `_` collapsed to `-` (per
+  [PEP 503](https://peps.python.org/pep-0503/#normalized-names)).
+  So `Django_filter` → `pkg:pypi/django-filter@…`.
+- **go** — namespace and name lowercased (per
+  [purl-spec golang](https://github.com/package-url/purl-spec/blob/main/types-doc/golang-definition.md)).
+  Matches Trivy. Lossy for rare mixed-case module paths.
+
+Without these, scanners like Dependency-Track see `Django_filter` and
+`django-filter` as two different components and can't match CVEs.
+
 ## Conformance Notes
 
 - `metadata.tools` uses the **1.5 object form** (`{components: [...]}`),

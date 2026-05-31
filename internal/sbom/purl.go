@@ -29,7 +29,7 @@ func BuildPURL(ecosystem, name, version, sha256, upstreamURL string) string {
 	}
 	switch ecosystem {
 	case "pypi":
-		return "pkg:pypi/" + segEscape(name) + atVersion(version)
+		return "pkg:pypi/" + segEscape(pep503Normalize(name)) + atVersion(version)
 	case "npm":
 		return npmPURL(name, version)
 	case "maven":
@@ -53,6 +53,36 @@ func atVersion(v string) string {
 		return ""
 	}
 	return "@" + segEscape(v)
+}
+
+// pep503Normalize canonicalises a PyPI project name per PEP 503: lowercase
+// the entire string and collapse any run of '.', '-', or '_' into a single
+// '-'. The purl-spec for pypi MANDATES this normalisation, otherwise tools
+// like Dependency-Track or Grype see "Django_package" and
+// "django-package" as two different components and cannot reconcile them.
+//
+// Defence-in-depth: data migration 024 already canonicalises artifacts.name
+// rows in the database, but BuildPURL is a public helper that may be called
+// from tests, future code paths, or with hand-constructed inputs — applying
+// the normalisation here makes the function correct on its own merits
+// rather than dependent on the caller.
+func pep503Normalize(name string) string {
+	name = strings.ToLower(name)
+	var b strings.Builder
+	b.Grow(len(name))
+	prevDash := false
+	for _, r := range name {
+		if r == '.' || r == '_' || r == '-' {
+			if !prevDash {
+				b.WriteByte('-')
+				prevDash = true
+			}
+			continue
+		}
+		b.WriteRune(r)
+		prevDash = false
+	}
+	return b.String()
 }
 
 // segEscape percent-encodes a single PURL path segment.
@@ -102,7 +132,18 @@ func mavenPURL(name, version string) string {
 // golangPURL splits a Go module path on the last '/' to derive namespace+name.
 // A single-segment module path (rare, e.g. a non-domain root) becomes a name
 // with no namespace.
+//
+// Per purl-spec (https://github.com/package-url/purl-spec/blob/main/types-doc/golang-definition.md):
+// "The namespace must be lowercased" and "The name must be lowercased."
+// This is lossy for legacy mixed-case module paths (e.g. the historical
+// Sirupsen/logrus → sirupsen/logrus rename), but spec compliance wins.
+// It also matches Trivy's pkg/purl/purl.go:parseGolang which lowercases the
+// same way — keeping the per-artifact SBOM (Trivy) and per-project SBOM
+// (this generator) emitting identical PURLs for the same module so
+// downstream tools (Dependency-Track, Grype) reconcile components
+// correctly.
 func golangPURL(modulePath, version string) string {
+	modulePath = strings.ToLower(modulePath)
 	idx := strings.LastIndexByte(modulePath, '/')
 	if idx <= 0 {
 		return "pkg:golang/" + segEscape(modulePath) + atVersion(version)
