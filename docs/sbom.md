@@ -191,6 +191,11 @@ PURLs are omitted (rather than fabricated) when essential inputs are
 missing: empty name, unknown ecosystem, docker without a SHA-256, or maven
 where `name` lacks a `:` separating `groupId` from `artifactId`.
 
+> The `docker` ecosystem maps to `pkg:oci/` rather than `pkg:docker/`
+> because the purl-spec uses `oci` as the canonical type for container
+> images (it covers Docker Hub, ghcr.io, Quay, ECR, and any other OCI
+> distribution registry). The original `pkg:docker/` is legacy.
+
 **Per-ecosystem normalisation:**
 
 - **pypi** — lowercase + runs of `.`, `-`, `_` collapsed to `-` (per

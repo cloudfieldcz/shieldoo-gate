@@ -126,7 +126,9 @@ func (g *Generator) loadComponents(ctx context.Context, projectID int64) ([]cdxO
 	}
 	defer rows.Close()
 
-	out := make([]cdxOutComp, 0, 64)
+	// Explicit empty slice (not nil) so empty projects serialize as
+	// `"components": []`, matching the documented contract.
+	out := make([]cdxOutComp, 0)
 	for rows.Next() {
 		var r rawRow
 		if err := rows.StructScan(&r); err != nil {
@@ -177,7 +179,7 @@ func rowToComponent(r rawRow) cdxOutComp {
 		c.ExternalReferences = []cdxExtRef{{Type: "distribution", URL: r.UpstreamURL}}
 	}
 
-	props := []cdxProperty{}
+	var props []cdxProperty
 	if r.Status.Valid && r.Status.String != "" {
 		props = append(props, cdxProperty{Name: "shieldoo:status", Value: r.Status.String})
 	}
