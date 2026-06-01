@@ -244,26 +244,51 @@ func TestRowToComponent_LicenseURLsSkipped(t *testing.T) {
 }
 
 func TestRowToComponent_FreeTextLicense_GoesToName(t *testing.T) {
-	// Tokens that don't match the SPDX id charset (space, free-text) must
-	// land in license.name rather than license.id — schema strict validators
-	// (Dependency-Track, cyclonedx-cli) reject non-enum values in id.
+	// Tokens that don't match a known alias AND don't pass the SPDX charset
+	// heuristic must land in license.name rather than license.id — schema
+	// strict validators (Dependency-Track, cyclonedx-cli) reject non-enum
+	// values in id.
 	r := rawRow{
 		Ecosystem: "pypi", Name: "x", Version: "1.0", SHA256: "abc",
-		LicensesJSON: nullString(`["MIT","Apache 2.0","Custom Proprietary License","ZPL-2.1"]`),
+		LicensesJSON: nullString(`["MIT","Custom Proprietary License","ZPL-2.1","Foo Bar License v1"]`),
 	}
 	c := rowToComponent(r)
 	require.Len(t, c.Licenses, 4)
-	// SPDX-shaped → id
+	// SPDX-shaped, no alias match needed → id
 	assert.Equal(t, "MIT", c.Licenses[0].License.ID)
 	assert.Empty(t, c.Licenses[0].License.Name)
-	// Free text (space) → name
+	// No alias, fails SPDX charset → name
 	assert.Empty(t, c.Licenses[1].License.ID)
-	assert.Equal(t, "Apache 2.0", c.Licenses[1].License.Name)
-	// Free text (multiple words) → name
-	assert.Empty(t, c.Licenses[2].License.ID)
-	assert.Equal(t, "Custom Proprietary License", c.Licenses[2].License.Name)
-	// SPDX-shaped → id
-	assert.Equal(t, "ZPL-2.1", c.Licenses[3].License.ID)
+	assert.Equal(t, "Custom Proprietary License", c.Licenses[1].License.Name)
+	// SPDX-shaped, no alias match needed → id
+	assert.Equal(t, "ZPL-2.1", c.Licenses[2].License.ID)
+	assert.Empty(t, c.Licenses[2].License.Name)
+	// No alias, fails SPDX charset → name
+	assert.Empty(t, c.Licenses[3].License.ID)
+	assert.Equal(t, "Foo Bar License v1", c.Licenses[3].License.Name)
+}
+
+func TestRowToComponent_LooseFormLicensesNormalised(t *testing.T) {
+	// Real-world PyPI/Go packages often emit loose-form licenses ("BSD",
+	// "LGPLv3", "The MIT License") that aren't in the SPDX enum verbatim.
+	// licensesToCDX must run them through the alias normaliser before
+	// deciding id-vs-name, otherwise strict validators (cyclonedx-cli)
+	// reject the SBOM.
+	r := rawRow{
+		Ecosystem: "pypi", Name: "x", Version: "1.0", SHA256: "abc",
+		LicensesJSON: nullString(`["BSD","LGPLv3","The MIT License","Apache-2.0"]`),
+	}
+	c := rowToComponent(r)
+	require.Len(t, c.Licenses, 4)
+	assert.Equal(t, "BSD-3-Clause", c.Licenses[0].License.ID)     // loose "BSD" → BSD-3-Clause
+	assert.Equal(t, "LGPL-3.0-only", c.Licenses[1].License.ID)    // legacy "LGPLv3" → LGPL-3.0-only
+	assert.Equal(t, "MIT", c.Licenses[2].License.ID)              // free-text "The MIT License" → MIT
+	assert.Equal(t, "Apache-2.0", c.Licenses[3].License.ID)       // already canonical, unchanged
+	// All four must be in `id`, not `name` — alias normalisation should
+	// have promoted them into the SPDX enum slot.
+	for i, lc := range c.Licenses {
+		assert.Empty(t, lc.License.Name, "license %d should not be in .name", i)
+	}
 }
 
 func TestRowToComponent_NoPURL_WhenUnknownEcosystem(t *testing.T) {

@@ -236,10 +236,21 @@ func bomRefOrPURL(purl, eco, name, version string) string {
 }
 
 // licensesToCDX maps the SPDX ID list stored in sbom_metadata.licenses_json
-// into the CycloneDX license-choice array. A token containing whitespace or
-// SPDX operators (AND/OR/WITH) is treated as a license expression; otherwise
-// we emit `{license: {id: ...}}`. The 1.6-only `acknowledgement` field is
-// intentionally omitted (would fail 1.5 schema validation).
+// into the CycloneDX license-choice array. Processing order per token:
+//
+//  1. URLs (Trivy occasionally emits them alongside the canonical ID) — skipped.
+//  2. SPDX expressions (containing AND/OR/WITH or parentheses) — emitted as
+//     `expression` verbatim; operands inside are NOT alias-normalised.
+//  3. Alias normalisation via parser.go:NameAliasToID — loose upstream forms
+//     ("BSD", "LGPLv3", "The MIT License", …) land in the SPDX `id` slot in
+//     their canonical form so strict validators (cyclonedx-cli) accept them
+//     and so license-policy enforcement matches against canonical IDs.
+//  4. Remaining tokens that pass the SPDX charset heuristic → `license.id`;
+//     anything else (vendor strings like "Custom Proprietary License") →
+//     `license.name` free-text fallback.
+//
+// The 1.6-only `acknowledgement` field is intentionally omitted (would fail
+// 1.5 schema validation).
 func licensesToCDX(ids []string) []cdxLicenseChoice {
 	out := make([]cdxLicenseChoice, 0, len(ids))
 	for _, id := range ids {
@@ -256,10 +267,17 @@ func licensesToCDX(ids []string) []cdxLicenseChoice {
 			out = append(out, cdxLicenseChoice{Expression: id})
 			continue
 		}
+		// Normalise common loose forms first ("BSD" → "BSD-3-Clause",
+		// "lgplv3" → "LGPL-3.0-only", "the mit license" → "MIT", …) so they
+		// land in the SPDX `id` slot in their canonical form instead of
+		// failing strict schema validators on the raw upstream string.
+		if canon, ok := NameAliasToID(id); ok {
+			id = canon
+		}
 		// SPDX ids match a narrow charset. Anything with a space or other
-		// punctuation (vendor strings like "Apache 2.0", "Custom Proprietary
-		// License") goes to license.name (free-form) instead of license.id
-		// (SPDX enum) to avoid schema rejection by strict validators.
+		// punctuation (vendor strings like "Custom Proprietary License")
+		// goes to license.name (free-form) instead of license.id (SPDX enum)
+		// to avoid schema rejection.
 		if looksLikeSPDXID(id) {
 			out = append(out, cdxLicenseChoice{License: &cdxLicenseRef{ID: id}})
 		} else {
