@@ -243,6 +243,29 @@ func TestRowToComponent_LicenseURLsSkipped(t *testing.T) {
 	assert.Equal(t, "MIT", c.Licenses[0].License.ID)
 }
 
+func TestRowToComponent_FreeTextLicense_GoesToName(t *testing.T) {
+	// Tokens that don't match the SPDX id charset (space, free-text) must
+	// land in license.name rather than license.id — schema strict validators
+	// (Dependency-Track, cyclonedx-cli) reject non-enum values in id.
+	r := rawRow{
+		Ecosystem: "pypi", Name: "x", Version: "1.0", SHA256: "abc",
+		LicensesJSON: nullString(`["MIT","Apache 2.0","Custom Proprietary License","ZPL-2.1"]`),
+	}
+	c := rowToComponent(r)
+	require.Len(t, c.Licenses, 4)
+	// SPDX-shaped → id
+	assert.Equal(t, "MIT", c.Licenses[0].License.ID)
+	assert.Empty(t, c.Licenses[0].License.Name)
+	// Free text (space) → name
+	assert.Empty(t, c.Licenses[1].License.ID)
+	assert.Equal(t, "Apache 2.0", c.Licenses[1].License.Name)
+	// Free text (multiple words) → name
+	assert.Empty(t, c.Licenses[2].License.ID)
+	assert.Equal(t, "Custom Proprietary License", c.Licenses[2].License.Name)
+	// SPDX-shaped → id
+	assert.Equal(t, "ZPL-2.1", c.Licenses[3].License.ID)
+}
+
 func TestRowToComponent_NoPURL_WhenUnknownEcosystem(t *testing.T) {
 	r := rawRow{Ecosystem: "rust", Name: "serde", Version: "1.0"}
 	c := rowToComponent(r)

@@ -1049,8 +1049,24 @@ paths:
               schema:
                 type: object
                 description: CycloneDX 1.5 JSON document — see https://cyclonedx.org/docs/1.5/json/
+        "400":
+          description: Invalid project id (non-numeric path segment)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Project not found
+        "429":
+          description: Rate limit exceeded (per-token `sbom-download` bucket — 30/min, burst 5)
+          headers:
+            Retry-After:
+              schema: { type: integer }
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "501":
           description: SBOM disabled in config (`sbom.enabled: false`)
 

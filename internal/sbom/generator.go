@@ -256,9 +256,39 @@ func licensesToCDX(ids []string) []cdxLicenseChoice {
 			out = append(out, cdxLicenseChoice{Expression: id})
 			continue
 		}
-		out = append(out, cdxLicenseChoice{License: &cdxLicenseRef{ID: id}})
+		// SPDX ids match a narrow charset. Anything with a space or other
+		// punctuation (vendor strings like "Apache 2.0", "Custom Proprietary
+		// License") goes to license.name (free-form) instead of license.id
+		// (SPDX enum) to avoid schema rejection by strict validators.
+		if looksLikeSPDXID(id) {
+			out = append(out, cdxLicenseChoice{License: &cdxLicenseRef{ID: id}})
+		} else {
+			out = append(out, cdxLicenseChoice{License: &cdxLicenseRef{Name: id}})
+		}
 	}
 	return out
+}
+
+// looksLikeSPDXID returns true for strings restricted to the SPDX id
+// charset (alphanumeric, dot, plus, dash). Not a full enum check — just a
+// cheap heuristic that catches free-text license names (with spaces or
+// other punctuation) before they hit the schema-validated `id` slot.
+func looksLikeSPDXID(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'A' && r <= 'Z',
+			r >= 'a' && r <= 'z',
+			r >= '0' && r <= '9',
+			r == '.', r == '+', r == '-':
+			// ok
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // isLicenseExpression returns true for strings that look like an SPDX
