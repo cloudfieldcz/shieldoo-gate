@@ -19,7 +19,7 @@ import (
 const (
 	// trivyVersion is the pinned Trivy release shdg downloads at first run.
 	// Bumping requires updating expectedChecksums below.
-	trivyVersion = "0.70.0"
+	trivyVersion = "0.71.0"
 
 	// defaultTrivyBaseURL is the GitHub releases host. Override via the second
 	// arg to ensureTrivy in tests.
@@ -34,16 +34,16 @@ const (
 //
 // IMPLEMENTER: replace the placeholders below with real values from
 //
-//	curl -L https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_checksums.txt
+//	curl -L https://github.com/aquasecurity/trivy/releases/download/v0.71.0/trivy_0.71.0_checksums.txt
 //
 // A unit test (TestExpectedChecksums_AllPinned) FAILS the build if any value
 // is missing or still starts with the placeholder, so the placeholder cannot
 // ship to production.
 var expectedChecksums = map[string]string{
-	"trivy_0.70.0_Linux-64bit.tar.gz": "8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9",
-	"trivy_0.70.0_Linux-ARM64.tar.gz": "2f6bb988b553a1bbac6bdd1ce890f5e412439564e17522b88a4541b4f364fc8d",
-	"trivy_0.70.0_macOS-64bit.tar.gz": "52d531452b19e7593da29366007d02a810e1e0080d02f9cf6a1afb46c35aaa93",
-	"trivy_0.70.0_macOS-ARM64.tar.gz": "68e543c51dcc96e1c344053a4fde9660cf602c25565d9f09dc17dd41e13b838a",
+	"trivy_0.71.0_Linux-64bit.tar.gz": "30a3d22b23f88c233f1658f562fb477cae3b3e8b4761109d515b7698daf85814",
+	"trivy_0.71.0_Linux-ARM64.tar.gz": "2561be394a3199c911f82fced606cbc05e1cb23eb6ce1da6935540adb76f4252",
+	"trivy_0.71.0_macOS-64bit.tar.gz": "4558afb13d017615ca85011901caab78b4f09196e320b05a56c9fdc5615a1428",
+	"trivy_0.71.0_macOS-ARM64.tar.gz": "95d4e896b120816edd0995a2df8adca26a8621b7bf62036a89b1d54a7b718a74",
 }
 
 // ErrUnsupportedPlatform is returned when shdg runs on a (GOOS, GOARCH) for

@@ -668,7 +668,7 @@ gate it talks to has its own server-side `vuln_scan` config block (see below).
 |-----|---------|-------|
 | `SHIELDOO_TOKEN` | — | PAT with the `scan:upload` scope, or the global super-token from `proxy_auth.global_token_env`. Required by `shdg scan`. |
 | `SHIELDOO_URL` | — | Base URL of the gate (e.g. `https://gate.example.com`). Required by `shdg scan`. |
-| `SHDG_CACHE_DIR` | `~/.cache/shdg` | Where the bundled Trivy v0.70.0 binary is cached after first download. The binary lives at `<dir>/trivy-0.70.0/trivy`. |
+| `SHDG_CACHE_DIR` | `~/.cache/shdg` | Where the bundled Trivy v0.71.0 binary is cached after first download. The binary lives at `<dir>/trivy-0.71.0/trivy`. |
 
 `SHIELDOO_TOKEN` is sent verbatim as `Authorization: Bearer ...` to both the
 upload and polling endpoints. The CLI never persists it to disk.
