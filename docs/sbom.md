@@ -33,6 +33,14 @@ discovered a new threat) DO appear, with `shieldoo:status=QUARANTINED`
 in their `properties` — they were once part of this project's supply
 chain even if they're no longer servable.
 
+Artifacts that were **quarantined and then admin-released** (a manual
+override via `POST /api/v1/artifacts/{id}/release`) carry both
+`shieldoo:status=CLEAN` and a non-empty `shieldoo:released_at` timestamp.
+Consumers should treat the presence of `shieldoo:released_at` as the
+signal that this component's CLEAN status is admin-overridden rather
+than scanner-native — a weaker supply-chain guarantee. The full reason
+and operator identity live in the audit log (`event_type=RELEASED`).
+
 This matches industry SBOM semantics ("what's actually here") and
 intentionally diverges from the project Artifacts tab in the admin UI,
 which additionally surfaces blocked-attempt rows so operators can see
@@ -152,7 +160,7 @@ Per-component fields:
 | `hashes[].content`     | The actual hash value.                                                                   | `artifacts.sha256` (with any `sha256:` prefix stripped).                 |
 | `licenses[]`           | What licenses the package is distributed under. Consumed by license-compliance tooling.  | `sbom_metadata.licenses_json` — list of SPDX IDs (or SPDX expressions like `MIT OR Apache-2.0`). |
 | `externalReferences[]` | Pointers off-doc: where to download, source repo, homepage, etc. We only emit the download URL. | `{type: "distribution", url: artifacts.upstream_url}`                    |
-| `properties[]`         | Vendor-specific extras — namespaced key/value pairs CycloneDX doesn't standardize. Tools that don't recognize the namespace simply ignore them. | `shieldoo:status` (CLEAN/QUARANTINED/…), `shieldoo:size_bytes`, `shieldoo:cached_at`. |
+| `properties[]`         | Vendor-specific extras — namespaced key/value pairs CycloneDX doesn't standardize. Tools that don't recognize the namespace simply ignore them. | `shieldoo:status` (CLEAN/QUARANTINED/…), `shieldoo:size_bytes`, `shieldoo:cached_at`, `shieldoo:released_at` (only when the artifact was once quarantined and then admin-released). |
 
 Top-level / metadata fields:
 

@@ -1019,7 +1019,7 @@ paths:
         | `hashes[SHA-256]`     | `artifacts.sha256`                                  |
         | `licenses[]`          | `sbom_metadata.licenses_json` (SPDX IDs/expressions)|
         | `externalReferences`  | `artifacts.upstream_url` (type=distribution)        |
-        | `properties[]`        | `shieldoo:status`, `shieldoo:size_bytes`, `shieldoo:cached_at` |
+        | `properties[]`        | `shieldoo:status`, `shieldoo:size_bytes`, `shieldoo:cached_at`, `shieldoo:released_at` (only when admin-released after a quarantine) |
 
         **PURL mapping per ecosystem:**
 

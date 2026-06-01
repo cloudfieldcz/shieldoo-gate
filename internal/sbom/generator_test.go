@@ -90,17 +90,24 @@ func TestGenerator_ProjectWithArtifacts_FullSBOM(t *testing.T) {
 	require.NoError(t, err)
 	pid, _ := res.LastInsertId()
 
-	// Artifacts (one pypi with licenses, one docker, one with no upstream).
+	// Artifacts (one pypi with licenses, one docker, one with no upstream,
+	// and one pypi that was once quarantined and then admin-released).
 	_, err = db.Exec(`INSERT INTO artifacts (id, ecosystem, name, version, upstream_url, sha256, size_bytes, cached_at, last_accessed_at, storage_path) VALUES
 		('pypi:requests:2.31.0','pypi','requests','2.31.0','https://files.pythonhosted.org/packages/requests-2.31.0.tar.gz','aaa111',12345,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,'/tmp/a'),
 		('docker:r1_docker_io_library_alpine:3.20','docker','r1_docker_io_library_alpine','3.20','https://registry-1.docker.io/v2/library/alpine/manifests/3.20','bbb222',6789,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,'/tmp/b'),
-		('npm:lodash:4.17.21','npm','lodash','4.17.21','https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz','ccc333',5555,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,'/tmp/c')`)
+		('npm:lodash:4.17.21','npm','lodash','4.17.21','https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz','ccc333',5555,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,'/tmp/c'),
+		('pypi:once-evil:1.0.0','pypi','once-evil','1.0.0','https://files.pythonhosted.org/packages/once-evil-1.0.0.tar.gz','ddd444',2222,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,'/tmp/d')`)
 	require.NoError(t, err)
 
-	// artifact_status: pypi CLEAN, docker QUARANTINED, npm no row.
-	_, err = db.Exec(`INSERT INTO artifact_status (artifact_id, status) VALUES
-		('pypi:requests:2.31.0','CLEAN'),
-		('docker:r1_docker_io_library_alpine:3.20','QUARANTINED')`)
+	// artifact_status: pypi CLEAN, docker QUARANTINED, npm no row,
+	// once-evil CLEAN-by-release (status flipped back, released_at non-NULL).
+	// Literal value uses go-sqlite3's accepted format ('YYYY-MM-DD HH:MM:SS',
+	// no 'T' separator, no 'Z' suffix — see SQLiteTimestampFormats); we then
+	// assert the RFC3339 form the generator emits.
+	_, err = db.Exec(`INSERT INTO artifact_status (artifact_id, status, released_at) VALUES
+		('pypi:requests:2.31.0','CLEAN', NULL),
+		('docker:r1_docker_io_library_alpine:3.20','QUARANTINED', NULL),
+		('pypi:once-evil:1.0.0','CLEAN','2026-05-29 10:00:00')`)
 	require.NoError(t, err)
 
 	// sbom_metadata: licenses for pypi only.
@@ -112,7 +119,8 @@ func TestGenerator_ProjectWithArtifacts_FullSBOM(t *testing.T) {
 	_, err = db.Exec(`INSERT INTO artifact_project_usage (artifact_id, project_id, first_used_at, last_used_at, use_count) VALUES
 		('pypi:requests:2.31.0',?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,3),
 		('docker:r1_docker_io_library_alpine:3.20',?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,1),
-		('npm:lodash:4.17.21',?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,1)`, pid, pid, pid)
+		('npm:lodash:4.17.21',?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,1),
+		('pypi:once-evil:1.0.0',?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,1)`, pid, pid, pid, pid)
 	require.NoError(t, err)
 
 	gen := stamped(NewGenerator(db, "1.2.0"))
@@ -121,7 +129,7 @@ func TestGenerator_ProjectWithArtifacts_FullSBOM(t *testing.T) {
 
 	var got cdxBOM
 	require.NoError(t, json.Unmarshal(out, &got))
-	require.Len(t, got.Components, 3, "all 3 pulled artifacts must appear")
+	require.Len(t, got.Components, 4, "all 4 pulled artifacts must appear")
 
 	// Index by name for easier lookup; ORDER BY in the query is
 	// (ecosystem, name, version) — docker, npm, pypi alphabetically.
@@ -149,6 +157,8 @@ func TestGenerator_ProjectWithArtifacts_FullSBOM(t *testing.T) {
 	// Status property present.
 	assertProp(t, pp, "shieldoo:status", "CLEAN")
 	assertProp(t, pp, "shieldoo:size_bytes", "12345")
+	// Scanner-clean from day one → no released_at marker.
+	assertPropAbsent(t, pp, "shieldoo:released_at")
 
 	// Docker assertions: container type, OCI purl, QUARANTINED status.
 	dk, ok := byName["r1_docker_io_library_alpine"]
@@ -158,6 +168,8 @@ func TestGenerator_ProjectWithArtifacts_FullSBOM(t *testing.T) {
 	assert.Contains(t, dk.PURL, "repository_url=registry-1.docker.io%2Flibrary%2Falpine")
 	assert.Contains(t, dk.PURL, "tag=3.20")
 	assertProp(t, dk, "shieldoo:status", "QUARANTINED")
+	// Quarantined (not released) → no released_at marker.
+	assertPropAbsent(t, dk, "shieldoo:released_at")
 
 	// npm has no status row → no shieldoo:status property.
 	np, ok := byName["lodash"]
@@ -166,7 +178,17 @@ func TestGenerator_ProjectWithArtifacts_FullSBOM(t *testing.T) {
 	assert.Nil(t, np.Licenses, "no SBOM row → no licenses")
 	for _, p := range np.Properties {
 		assert.NotEqual(t, "shieldoo:status", p.Name, "no status row → no status property")
+		assert.NotEqual(t, "shieldoo:released_at", p.Name, "no status row → no released_at property")
 	}
+
+	// once-evil: was QUARANTINED, admin released → status CLEAN + released_at marker.
+	// This is the audit-relevant case: scanners would NOT have produced CLEAN
+	// on their own; an admin overrode the verdict. Consumers must be able to
+	// tell that apart from a scanner-native CLEAN.
+	oe, ok := byName["once-evil"]
+	require.True(t, ok)
+	assertProp(t, oe, "shieldoo:status", "CLEAN")
+	assertProp(t, oe, "shieldoo:released_at", "2026-05-29T10:00:00Z")
 }
 
 func TestGenerator_NilProject_Errors(t *testing.T) {
@@ -242,6 +264,15 @@ func assertProp(t *testing.T, c cdxOutComp, name, want string) {
 		}
 	}
 	t.Fatalf("property %q not found on component %q", name, c.Name)
+}
+
+func assertPropAbsent(t *testing.T, c cdxOutComp, name string) {
+	t.Helper()
+	for _, p := range c.Properties {
+		if p.Name == name {
+			t.Fatalf("property %q unexpectedly present on component %q (value=%q)", name, c.Name, p.Value)
+		}
+	}
 }
 
 func nullString(s string) sql.NullString {

@@ -106,6 +106,12 @@ type rawRow struct {
 	CachedAt     time.Time      `db:"cached_at"`
 	LicensesJSON sql.NullString `db:"licenses_json"`
 	Status       sql.NullString `db:"status"`
+	// ReleasedAt is non-NULL when an admin manually released a previously
+	// quarantined artifact (handleReleaseArtifact UPSERTs released_at + flips
+	// status back to CLEAN). Surfaced in the SBOM as `shieldoo:released_at`
+	// so downstream consumers can tell "scanner-clean from day one" apart
+	// from "admin-overridden CLEAN".
+	ReleasedAt sql.NullTime `db:"released_at"`
 }
 
 func (g *Generator) loadComponents(ctx context.Context, projectID int64) ([]cdxOutComp, error) {
@@ -113,7 +119,8 @@ func (g *Generator) loadComponents(ctx context.Context, projectID int64) ([]cdxO
 		`SELECT a.ecosystem, a.name, a.version, a.sha256, a.size_bytes, a.upstream_url,
 		        a.cached_at,
 		        sm.licenses_json AS licenses_json,
-		        ast.status       AS status
+		        ast.status       AS status,
+		        ast.released_at  AS released_at
 		   FROM artifact_project_usage apu
 		   JOIN artifacts a              ON a.id = apu.artifact_id
 		   LEFT JOIN sbom_metadata sm    ON sm.artifact_id = a.id
@@ -188,6 +195,12 @@ func rowToComponent(r rawRow) cdxOutComp {
 	}
 	if !r.CachedAt.IsZero() {
 		props = append(props, cdxProperty{Name: "shieldoo:cached_at", Value: r.CachedAt.UTC().Format(time.RFC3339)})
+	}
+	// `released_at` is only set when an admin manually released a previously
+	// quarantined artifact. Its presence is the SBOM-visible marker that this
+	// component's CLEAN status is admin-overridden rather than scanner-native.
+	if r.ReleasedAt.Valid {
+		props = append(props, cdxProperty{Name: "shieldoo:released_at", Value: r.ReleasedAt.Time.UTC().Format(time.RFC3339)})
 	}
 	if len(props) > 0 {
 		c.Properties = props
