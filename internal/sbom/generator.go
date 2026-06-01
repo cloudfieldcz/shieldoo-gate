@@ -233,6 +233,12 @@ func licensesToCDX(ids []string) []cdxLicenseChoice {
 		if id == "" {
 			continue
 		}
+		// Trivy sometimes emits a license URL (e.g. https://licenses.nuget.org/MIT)
+		// alongside the canonical SPDX id. URLs aren't valid SPDX enum values, so
+		// schema validation rejects them. Skip — the SPDX id is already present.
+		if strings.HasPrefix(id, "http://") || strings.HasPrefix(id, "https://") {
+			continue
+		}
 		if isLicenseExpression(id) {
 			out = append(out, cdxLicenseChoice{Expression: id})
 			continue

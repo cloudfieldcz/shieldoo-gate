@@ -208,6 +208,19 @@ func TestRowToComponent_LicenseExpression(t *testing.T) {
 	assert.Nil(t, c.Licenses[0].License)
 }
 
+func TestRowToComponent_LicenseURLsSkipped(t *testing.T) {
+	// Trivy emits both the SPDX id and a license URL for some ecosystems
+	// (NuGet's https://licenses.nuget.org/MIT). URLs aren't valid SPDX
+	// enum values, so we must skip them — the SPDX id stays.
+	r := rawRow{
+		Ecosystem: "nuget", Name: "Newtonsoft.Json", Version: "13.0.3", SHA256: "abc",
+		LicensesJSON: nullString(`["MIT","https://licenses.nuget.org/MIT"]`),
+	}
+	c := rowToComponent(r)
+	require.Len(t, c.Licenses, 1, "URL license should have been filtered out")
+	assert.Equal(t, "MIT", c.Licenses[0].License.ID)
+}
+
 func TestRowToComponent_NoPURL_WhenUnknownEcosystem(t *testing.T) {
 	r := rawRow{Ecosystem: "rust", Name: "serde", Version: "1.0"}
 	c := rowToComponent(r)
