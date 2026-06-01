@@ -41,6 +41,18 @@ signal that this component's CLEAN status is admin-overridden rather
 than scanner-native — a weaker supply-chain guarantee. The full reason
 and operator identity live in the audit log (`event_type=RELEASED`).
 
+Artifacts that this project has previously pulled but which now sit
+behind a **per-project blacklist** (`project_overrides.kind='deny'`,
+created via `POST /api/v1/projects/{id}/overrides`) still appear with
+`shieldoo:status=CLEAN` — the artifact-level scanner verdict is
+unchanged, and the blacklist only affects *future* pull attempts.
+Historic usage is preserved as-is. The SBOM therefore does **not**
+reflect per-project blacklists; query
+`GET /api/v1/projects/{id}/overrides?kind=deny` for the active set.
+This is a known gap: a follow-up may add a `shieldoo:project_blacklisted`
+property so consumers can see the effective serve-time state without
+a second API call.
+
 This matches industry SBOM semantics ("what's actually here") and
 intentionally diverges from the project Artifacts tab in the admin UI,
 which additionally surfaces blocked-attempt rows so operators can see
