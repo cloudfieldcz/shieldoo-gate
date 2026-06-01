@@ -276,15 +276,17 @@ func TestRowToComponent_LooseFormLicensesNormalised(t *testing.T) {
 	// reject the SBOM.
 	r := rawRow{
 		Ecosystem: "pypi", Name: "x", Version: "1.0", SHA256: "abc",
-		LicensesJSON: nullString(`["BSD","LGPLv3","The MIT License","Apache-2.0"]`),
+		LicensesJSON: nullString(`["BSD","LGPLv3","The MIT License","Apache-2.0","PSF","Public-Domain"]`),
 	}
 	c := rowToComponent(r)
-	require.Len(t, c.Licenses, 4)
+	require.Len(t, c.Licenses, 6)
 	assert.Equal(t, "BSD-3-Clause", c.Licenses[0].License.ID)     // loose "BSD" → BSD-3-Clause
 	assert.Equal(t, "LGPL-3.0-only", c.Licenses[1].License.ID)    // legacy "LGPLv3" → LGPL-3.0-only
 	assert.Equal(t, "MIT", c.Licenses[2].License.ID)              // free-text "The MIT License" → MIT
 	assert.Equal(t, "Apache-2.0", c.Licenses[3].License.ID)       // already canonical, unchanged
-	// All four must be in `id`, not `name` — alias normalisation should
+	assert.Equal(t, "PSF-2.0", c.Licenses[4].License.ID)          // "PSF" → PSF-2.0 (only SPDX PSF entry)
+	assert.Equal(t, "Unlicense", c.Licenses[5].License.ID)        // hyphenated "Public-Domain" → Unlicense
+	// All must be in `id`, not `name` — alias normalisation should
 	// have promoted them into the SPDX enum slot.
 	for i, lc := range c.Licenses {
 		assert.Empty(t, lc.License.Name, "license %d should not be in .name", i)

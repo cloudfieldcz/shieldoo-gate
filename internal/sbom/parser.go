@@ -235,7 +235,9 @@ var licenseAliasEntries = []aliasEntry{
 	{"mit-0", "MIT-0"},
 	{"mozilla public license 2.0", "MPL-2.0"},
 	{"mpl-2.0", "MPL-2.0"},
+	{"psf", "PSF-2.0"}, // Python Software Foundation License — SPDX only has PSF-2.0
 	{"public domain", "Unlicense"},
+	{"public-domain", "Unlicense"}, // hyphenated variant seen in npm package metadata
 	// MySQL Connector/J ships GPLv2 with the FOSS exception. Trivy / our
 	// extractor see the literal pom.xml `<name>` field — normalize so it
 	// matches a `blocked: ["GPL-2.0-only"]` policy line. Two phrasings exist:
