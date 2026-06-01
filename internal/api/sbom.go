@@ -4,10 +4,17 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog/log"
 
+	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/sbom"
 )
 
@@ -15,6 +22,13 @@ import (
 // are active.
 func (s *Server) SetSBOMStorage(st sbom.Storage) {
 	s.sbomStore = st
+}
+
+// SetSBOMGenerator wires the on-demand CycloneDX 1.5 generator used by the
+// per-project SBOM export endpoint. Wired only when SBOM is enabled in config;
+// when nil the route is not registered.
+func (s *Server) SetSBOMGenerator(g *sbom.Generator) {
+	s.sbomGenerator = g
 }
 
 // handleGetArtifactSBOM returns the raw CycloneDX SBOM for an artifact.
@@ -40,6 +54,75 @@ func (s *Server) handleGetArtifactSBOM(w http.ResponseWriter, r *http.Request) {
 	} else {
 		w.Header().Set("Content-Type", "application/json")
 	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(blob)
+}
+
+// handleGetProjectSBOM streams a freshly-generated CycloneDX 1.5 SBOM that
+// enumerates every artifact the project has pulled through the proxy.
+//
+// Output is generated on every call (never cached) — the set of artifacts the
+// project has used changes with each pull, and a cached SBOM would lie about
+// coverage. Empty projects still produce a valid SBOM with `components: []`.
+//
+// Filename header pattern: sbom-<label>-YYYYMMDD.cdx.json so the browser
+// "Save As" dialog suggests a meaningful name.
+func (s *Server) handleGetProjectSBOM(w http.ResponseWriter, r *http.Request) {
+	// projectSvc is guaranteed non-nil here — the route is only registered
+	// inside the `if s.projectSvc != nil` block in Server.Routes(). Only the
+	// SBOM-disabled-in-config case (sbomGenerator == nil) needs to be handled.
+	if s.sbomGenerator == nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "sbom disabled"})
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid project id"})
+		return
+	}
+	p, err := s.projectSvc.GetByID(id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "project not found"})
+			return
+		}
+		log.Error().Err(err).Int64("project_id", id).Msg("api: project SBOM lookup failed")
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "lookup failed"})
+		return
+	}
+
+	blob, err := s.sbomGenerator.ForProject(r.Context(), p)
+	if err != nil {
+		log.Error().Err(err).Int64("project_id", id).Msg("api: project SBOM generation failed")
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "sbom generation failed"})
+		return
+	}
+
+	// Audit the export — best-effort, log on failure but don't block download.
+	metaJSON, _ := json.Marshal(map[string]any{
+		"project_label": p.Label,
+		"size_bytes":    len(blob),
+		"format":        "cyclonedx-1.5-json",
+	})
+	if err := adapter.WriteAuditLog(s.db, model.AuditEntry{
+		EventType:    model.EventSBOMGenerated,
+		ProjectID:    &id,
+		UserEmail:    userEmailFromRequest(r),
+		ClientIP:     r.RemoteAddr,
+		UserAgent:    r.UserAgent(),
+		Reason:       fmt.Sprintf("project SBOM exported (%d bytes)", len(blob)),
+		MetadataJSON: string(metaJSON),
+	}); err != nil {
+		log.Warn().Err(err).Int64("project_id", id).Msg("api: failed to write SBOM audit entry")
+	}
+
+	// Strip CRLF/quote/backslash from label before putting it in the header —
+	// project.go regex already forbids them, but defence in depth: the safety
+	// lives in another module and this is a Header.Set call.
+	safeLabel := strings.NewReplacer("\"", "_", "\\", "_", "\r", "_", "\n", "_").Replace(p.Label)
+	filename := fmt.Sprintf("sbom-%s-%s.cdx.json", safeLabel, time.Now().UTC().Format("20060102"))
+	w.Header().Set("Content-Type", "application/vnd.cyclonedx+json; version=1.5")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(blob)
 }

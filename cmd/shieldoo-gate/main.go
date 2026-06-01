@@ -568,6 +568,7 @@ func main() {
 		cachePrefix := cfg.Cache.Local.Path
 		sbomStore := sbom.NewStorage(db, blobStore, cachePrefix)
 		apiServer.SetSBOMStorage(sbomStore)
+		apiServer.SetSBOMGenerator(sbom.NewGenerator(db, Version))
 		adapter.SetSBOMWriter(sbomAdapterWriter{st: sbomStore})
 		adapter.SetLicenseMetadataWriter(sbomStore)
 		log.Info().Str("format", "cyclonedx-json").Msg("SBOM storage enabled")
@@ -617,6 +618,14 @@ func main() {
 	// schedulers can latch on to it for cancellation.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Rate limiter — always constructed so endpoints outside the vuln-scan
+	// gate (project SBOM export) stay protected. Vuln-scan adds its own
+	// dimensions on top inside setupVulnScan.
+	defaultRate := rateOrDefault(cfg.VulnScan.RateLimit.UploadsPerHour, 60)
+	apiRateLimiter := auth.NewRateLimiter(defaultRate, 10).
+		WithDimensionLimit("sbom-download", 30.0/60.0, 5)
+	apiServer.SetRateLimiter(apiRateLimiter)
 
 	// Vulnerability-scan wiring MUST run before apiServer.Routes() — Routes()
 	// snapshots the route table at call time, and the vuln-scan + AI route

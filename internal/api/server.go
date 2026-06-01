@@ -41,6 +41,7 @@ type Server struct {
 	onRescanQueued   func()
 	projectSvc       project.Service
 	sbomStore        sbom.Storage
+	sbomGenerator    *sbom.Generator
 	licenseResolver  *license.Resolver
 	vulnDeps         VulnDeps
 	aiDeps           AIDeps
@@ -78,6 +79,12 @@ func (s *Server) SetAdminAuthChain(chain *auth.AdminAuthChain, pat *auth.PATBear
 // AI-draft, and SBOM download endpoints.
 func (s *Server) SetRateLimiter(rl *auth.RateLimiter) {
 	s.rateLimiter = rl
+}
+
+// RateLimiter returns the wired limiter so feature wiring can add its own
+// dimension overrides. Nil before SetRateLimiter has been called.
+func (s *Server) RateLimiter() *auth.RateLimiter {
+	return s.rateLimiter
 }
 
 // SetRescanNotifier sets a callback invoked when a manual rescan is queued,
@@ -216,6 +223,18 @@ func (s *Server) Routes() chi.Router {
 				r.Patch("/projects/{id}", s.handleUpdateProject)
 				r.Delete("/projects/{id}", s.handleDisableProject)
 				r.Get("/projects/{id}/artifacts", s.handleListProjectArtifacts)
+				// SBOM export route is always registered when the project
+				// registry is up — the handler itself returns 501 when SBOM
+				// is disabled in config (s.sbomGenerator == nil). This way the
+				// API matches the OpenAPI spec (501 = feature off) instead of
+				// returning chi's generic 404, and clients can distinguish
+				// "SBOM disabled" from "project not found".
+				r.Group(func(r chi.Router) {
+					if s.rateLimiter != nil {
+						r.Use(s.rateLimiter.Middleware("sbom-download"))
+					}
+					r.Get("/projects/{id}/sbom", s.handleGetProjectSBOM)
+				})
 				r.Get("/projects/{id}/license-policy", s.handleGetProjectLicensePolicy)
 				r.Put("/projects/{id}/license-policy", s.handlePutProjectLicensePolicy)
 				r.Delete("/projects/{id}/license-policy", s.handleDeleteProjectLicensePolicy)

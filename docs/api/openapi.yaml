@@ -986,6 +986,90 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/ProjectArtifactRow" }
 
+  /api/v1/projects/{id}/sbom:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer, format: int64 }
+    get:
+      summary: Download a CycloneDX 1.5 SBOM of every artifact the project has pulled
+      operationId: getProjectSBOM
+      tags: [projects, sbom]
+      description: |
+        Returns a freshly generated CycloneDX 1.5 JSON SBOM aggregating every
+        artifact this project has pulled through the proxy. The SBOM is
+        rebuilt on every request — there is no cache, because the set of
+        artifacts the project has used changes with every pull.
+
+        Source tables joined to build the components list:
+
+        - `artifact_project_usage` — the (artifact_id, project_id) link
+        - `artifacts`              — name, version, sha256, upstream_url
+        - `sbom_metadata`          — extracted SPDX licenses (when present)
+        - `artifact_status`        — quarantine status surfaced as a property
+
+        Per-component fields populated:
+
+        | CycloneDX field       | Source                                              |
+        |-----------------------|-----------------------------------------------------|
+        | `type`                | `container` for docker, `library` otherwise         |
+        | `name`, `version`     | `artifacts.name`, `artifacts.version`               |
+        | `purl`                | derived from ecosystem (see PURL mapping below)     |
+        | `hashes[SHA-256]`     | `artifacts.sha256`                                  |
+        | `licenses[]`          | `sbom_metadata.licenses_json` (SPDX IDs/expressions)|
+        | `externalReferences`  | `artifacts.upstream_url` (type=distribution)        |
+        | `properties[]`        | `shieldoo:status`, `shieldoo:size_bytes`, `shieldoo:cached_at`, `shieldoo:released_at` (only when admin-released after a quarantine) |
+
+        **PURL mapping per ecosystem:**
+
+        - pypi   → `pkg:pypi/<name>@<version>`
+        - npm    → `pkg:npm/<name>@<version>` (or `.../%40scope/name@...` for scoped)
+        - maven  → `pkg:maven/<groupId>/<artifactId>@<version>`
+        - nuget  → `pkg:nuget/<name>@<version>`
+        - rubygems → `pkg:gem/<name>@<version>`
+        - go     → `pkg:golang/<namespace>/<name>@<version>`
+        - docker → `pkg:oci/<lastpath>@sha256:<digest>?repository_url=<host/path>&tag=<tag>`
+
+        The `dependencies` field is intentionally omitted — the proxy only
+        observes pull events, never resolved dependency trees, so any graph
+        it invented would be misleading. Rate-limited by the `sbom-download`
+        bucket (per-token).
+      responses:
+        "200":
+          description: CycloneDX 1.5 JSON document
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+              description: |
+                `attachment; filename="sbom-<label>-YYYYMMDD.cdx.json"` so
+                browsers suggest a meaningful name in the Save As dialog.
+          content:
+            application/vnd.cyclonedx+json; version=1.5:
+              schema:
+                type: object
+                description: CycloneDX 1.5 JSON document — see https://cyclonedx.org/docs/1.5/json/
+        "400":
+          description: Invalid project id (non-numeric path segment)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Project not found
+        "429":
+          description: Rate limit exceeded (per-token `sbom-download` bucket — 30/min, burst 5)
+          headers:
+            Retry-After:
+              schema: { type: integer }
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "501":
+          description: SBOM disabled in config (`sbom.enabled: false`)
+
   /api/v1/projects/{id}/license-policy:
     parameters:
       - in: path
