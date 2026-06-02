@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/github/go-spdx/v2/spdxexp"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
@@ -240,21 +241,26 @@ func bomRefOrPURL(purl, eco, name, version string) string {
 //
 //  1. URLs (Trivy occasionally emits them alongside the canonical ID) — skipped.
 //  2. SPDX expressions (containing AND/OR/WITH or parentheses) — emitted as
-//     `expression` verbatim; operands inside are NOT alias-normalised.
-//  3. Alias normalisation via parser.go:NameAliasToID — loose upstream forms
-//     ("BSD", "LGPLv3", "The MIT License", …) land in the SPDX `id` slot in
-//     their canonical form so strict validators (cyclonedx-cli) accept them
-//     and so license-policy enforcement matches against canonical IDs.
-//  4. Remaining tokens that pass the SPDX charset heuristic → `license.id`;
-//     anything else (vendor strings like "Custom Proprietary License") →
-//     `license.name` free-text fallback.
+//     `expression` verbatim.
+//  3. Single tokens that the SPDX license list recognises (via go-spdx) →
+//     `license.id`, case-folded to the canonical form (e.g. "apache-2.0" →
+//     "Apache-2.0"). Strict validators (cyclonedx-cli, Dependency-Track)
+//     accept these.
+//  4. Anything the SPDX list does not know — loose author free-text ("BSD",
+//     "The MIT License", "Custom Proprietary License") — goes to
+//     `license.name` verbatim. We deliberately do NOT guess the author's
+//     intent: an unrecognised string is stored as-is rather than
+//     reinterpreted as a canonical ID. Policy matching against loose forms is
+//     the consumer's normalisation problem, not the SBOM's to invent.
 //
 // The 1.6-only `acknowledgement` field is intentionally omitted (would fail
 // 1.5 schema validation).
 func licensesToCDX(ids []string) []cdxLicenseChoice {
 	out := make([]cdxLicenseChoice, 0, len(ids))
 	for _, id := range ids {
-		if id == "" {
+		// Skip empty / whitespace-only tokens: they carry no license info and
+		// would otherwise land in license.name as blank/space noise.
+		if strings.TrimSpace(id) == "" {
 			continue
 		}
 		// Trivy sometimes emits a license URL (e.g. https://licenses.nuget.org/MIT)
@@ -267,19 +273,11 @@ func licensesToCDX(ids []string) []cdxLicenseChoice {
 			out = append(out, cdxLicenseChoice{Expression: id})
 			continue
 		}
-		// Normalise common loose forms first ("BSD" → "BSD-3-Clause",
-		// "lgplv3" → "LGPL-3.0-only", "the mit license" → "MIT", …) so they
-		// land in the SPDX `id` slot in their canonical form instead of
-		// failing strict schema validators on the raw upstream string.
-		if canon, ok := NameAliasToID(id); ok {
-			id = canon
-		}
-		// SPDX ids match a narrow charset. Anything with a space or other
-		// punctuation (vendor strings like "Custom Proprietary License")
-		// goes to license.name (free-form) instead of license.id (SPDX enum)
-		// to avoid schema rejection.
-		if looksLikeSPDXID(id) {
-			out = append(out, cdxLicenseChoice{License: &cdxLicenseRef{ID: id}})
+		// Authoritative SPDX check + case-fold. A recognised id lands in the
+		// schema-validated `license.id` slot in its canonical casing;
+		// everything else stays as free-text `license.name`.
+		if norm, ok := spdxCanonicalID(id); ok {
+			out = append(out, cdxLicenseChoice{License: &cdxLicenseRef{ID: norm}})
 		} else {
 			out = append(out, cdxLicenseChoice{License: &cdxLicenseRef{Name: id}})
 		}
@@ -287,26 +285,38 @@ func licensesToCDX(ids []string) []cdxLicenseChoice {
 	return out
 }
 
-// looksLikeSPDXID returns true for strings restricted to the SPDX id
-// charset (alphanumeric, dot, plus, dash). Not a full enum check — just a
-// cheap heuristic that catches free-text license names (with spaces or
-// other punctuation) before they hit the schema-validated `id` slot.
-func looksLikeSPDXID(s string) bool {
-	if s == "" {
-		return false
+// spdxCanonicalID validates a single license token against the SPDX license
+// list and returns its canonical-cased form. Returns ("", false) for anything
+// that isn't a current, canonical SPDX id, so the caller routes it to the
+// free-text license.name slot. Rejected:
+//
+//   - loose forms / vendor strings ("BSD", "Custom Proprietary License") — not
+//     in the SPDX list at all;
+//   - deprecated ids (e.g. "GPL-2.0", superseded by "GPL-2.0-only") — go-spdx
+//     case-folds but does NOT migrate deprecated→current, so emitting them as
+//     license.id would put a non-canonical value in the SPDX-enum slot and
+//     disagree with the policy/intake path (parser.go), which stores the
+//     canonical form (FailDeprecatedLicenses);
+//   - LicenseRef-* / DocumentRef-* — valid in SPDX *expressions* but NOT
+//     permitted in the CycloneDX license.id enum, so a strict validator would
+//     reject the SBOM; free-text name is the safe slot (FailAll*Refs).
+//
+// Expressions are handled by the caller, so this only sees single tokens:
+// exactly one normalised value is expected (FailComplexExpressions).
+func spdxCanonicalID(id string) (string, bool) {
+	norm, invalid := spdxexp.ValidateAndNormalizeLicensesWithOptions(
+		[]string{id},
+		spdxexp.ValidateLicensesOptions{
+			FailComplexExpressions: true,
+			FailDeprecatedLicenses: true,
+			FailAllLicenseRefs:     true,
+			FailAllDocumentRefs:    true,
+		},
+	)
+	if len(invalid) > 0 || len(norm) != 1 {
+		return "", false
 	}
-	for _, r := range s {
-		switch {
-		case r >= 'A' && r <= 'Z',
-			r >= 'a' && r <= 'z',
-			r >= '0' && r <= '9',
-			r == '.', r == '+', r == '-':
-			// ok
-		default:
-			return false
-		}
-	}
-	return true
+	return norm[0], true
 }
 
 // isLicenseExpression returns true for strings that look like an SPDX
