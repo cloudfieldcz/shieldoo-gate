@@ -143,8 +143,10 @@ func TestGenerator_ProjectWithArtifacts_FullSBOM(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "library", pp.Type)
 	assert.Equal(t, "pkg:pypi/requests@2.31.0", pp.PURL)
-	// bom-ref ≡ purl (idiomatic CycloneDX — most dep-graph tooling expects this).
-	assert.Equal(t, pp.PURL, pp.BOMRef)
+	// purl field stays bare (package-version coordinate for scanner reconciliation),
+	// while bom-ref is disambiguated by the artifact's content digest so multi-file
+	// releases (wheels + sdist sharing one purl) get unique refs. See bomRef().
+	assert.Equal(t, "pkg:pypi/requests@2.31.0?checksum=sha256:aaa111", pp.BOMRef)
 	require.Len(t, pp.Hashes, 1)
 	assert.Equal(t, "SHA-256", pp.Hashes[0].Alg)
 	assert.Equal(t, "aaa111", pp.Hashes[0].Content)
@@ -371,6 +373,33 @@ func TestRowToComponent_WithExceptionExpression(t *testing.T) {
 	assert.Nil(t, c.Licenses[0].License)
 }
 
+func TestRowToComponent_ExpressionMixedWithLicenses_GoesToName(t *testing.T) {
+	// CycloneDX `licenseChoice` is a oneOf: an array of `license` objects OR a
+	// single `expression` — never mixed (cyclonedx-cli rejects a mixed array,
+	// and the `expression` form is capped at one element). When an expression
+	// shares the list with other tokens it must NOT be emitted as `expression`;
+	// it is routed verbatim to free-text `license.name` so the whole array is a
+	// valid list of `license` objects.
+	r := rawRow{
+		Ecosystem: "pypi", Name: "x", Version: "1.0", SHA256: "abc",
+		LicensesJSON: nullString(`["MIT","Apache-2.0","Apache-2.0 OR BSD-2-Clause","LGPLv3"]`),
+	}
+	c := rowToComponent(r)
+	require.Len(t, c.Licenses, 4)
+	// No entry may use the expression slot when mixed.
+	for i, lc := range c.Licenses {
+		assert.Empty(t, lc.Expression, "entry %d must not be an expression in a mixed array", i)
+		require.NotNil(t, lc.License, "entry %d must be a license object", i)
+	}
+	assert.Equal(t, "MIT", c.Licenses[0].License.ID)
+	assert.Equal(t, "Apache-2.0", c.Licenses[1].License.ID)
+	// The compound expression lands in name verbatim, not in id and not as expression.
+	assert.Equal(t, "Apache-2.0 OR BSD-2-Clause", c.Licenses[2].License.Name)
+	assert.Empty(t, c.Licenses[2].License.ID)
+	// Free-text loose form stays in name.
+	assert.Equal(t, "LGPLv3", c.Licenses[3].License.Name)
+}
+
 func TestRowToComponent_WhitespaceOnlyLicense_Skipped(t *testing.T) {
 	// Blank / whitespace-only tokens carry no license info and must be dropped
 	// entirely — not emitted as a blank license.name entry. The real "MIT"
@@ -392,6 +421,84 @@ func TestRowToComponent_NoPURL_WhenUnknownEcosystem(t *testing.T) {
 	// bom-ref must still be set for an unknown ecosystem — falls back to
 	// "<eco>:<name>@<version>" so the BOM-level reference contract holds.
 	assert.Equal(t, "rust:serde@1.0", c.BOMRef)
+}
+
+func TestRowToComponent_NoPURL_WithDigest_AppendsSha(t *testing.T) {
+	// Fallback ref for an unknown ecosystem still gets the content digest so two
+	// distinct files can't collide on the same bom-ref.
+	r := rawRow{Ecosystem: "rust", Name: "serde", Version: "1.0", SHA256: "sha256:deadbeef"}
+	c := rowToComponent(r)
+	assert.Empty(t, c.PURL)
+	assert.Equal(t, "rust:serde@1.0@sha256:deadbeef", c.BOMRef)
+}
+
+func TestRowToComponent_MultiFileRelease_UniqueBOMRefs(t *testing.T) {
+	// PyPI ships many distribution files per release (per-platform wheels +
+	// sdist) that all share ONE purl. CycloneDX requires bom-ref to be unique,
+	// so the digest disambiguates while the purl field stays bare for scanner
+	// reconciliation.
+	wheel := rowToComponent(rawRow{Ecosystem: "pypi", Name: "rpds-py", Version: "0.30.0", SHA256: "aaa"})
+	sdist := rowToComponent(rawRow{Ecosystem: "pypi", Name: "rpds-py", Version: "0.30.0", SHA256: "bbb"})
+
+	assert.Equal(t, "pkg:pypi/rpds-py@0.30.0", wheel.PURL)
+	assert.Equal(t, wheel.PURL, sdist.PURL, "same package version → same bare purl")
+	assert.Equal(t, "pkg:pypi/rpds-py@0.30.0?checksum=sha256:aaa", wheel.BOMRef)
+	assert.Equal(t, "pkg:pypi/rpds-py@0.30.0?checksum=sha256:bbb", sdist.BOMRef)
+	assert.NotEqual(t, wheel.BOMRef, sdist.BOMRef, "distinct files must get distinct bom-refs")
+}
+
+func TestRowToComponent_DockerBOMRef_NoDoubleDigest(t *testing.T) {
+	// OCI purls already carry the digest as the version — bomRef must NOT append
+	// a second checksum qualifier.
+	r := rawRow{
+		Ecosystem:   "docker",
+		Name:        "r1_docker_io_library_alpine",
+		Version:     "3.20",
+		SHA256:      "bbb222",
+		UpstreamURL: "https://registry-1.docker.io/v2/library/alpine/manifests/3.20",
+	}
+	c := rowToComponent(r)
+	assert.Equal(t, c.PURL, c.BOMRef, "docker bom-ref is the already-unique OCI purl")
+	assert.NotContains(t, c.BOMRef, "checksum=", "no redundant checksum qualifier on OCI refs")
+}
+
+func TestGenerator_MultiFilePyPIRelease_AllComponentsUniqueRefs(t *testing.T) {
+	// End-to-end reproduction of the duplicate-bom-ref bug: three wheels of the
+	// same PyPI version, each a distinct artifact (distinct sha256/url), must all
+	// appear with unique bom-refs and a schema-valid (collision-free) document.
+	db := newGeneratorTestDB(t)
+	res, err := db.Exec(`INSERT INTO projects (label, display_name, description, created_via, enabled, created_at)
+		VALUES ('data', '', '', 'manual', 1, CURRENT_TIMESTAMP)`)
+	require.NoError(t, err)
+	pid, _ := res.LastInsertId()
+
+	_, err = db.Exec(`INSERT INTO artifacts (id, ecosystem, name, version, upstream_url, sha256, size_bytes, cached_at, last_accessed_at, storage_path) VALUES
+		('w1','pypi','rpds-py','0.30.0','https://files.pythonhosted.org/rpds_py-0.30.0-cp313-manylinux.whl','d1',10,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,'/tmp/w1'),
+		('w2','pypi','rpds-py','0.30.0','https://files.pythonhosted.org/rpds_py-0.30.0-cp313-macosx.whl','d2',11,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,'/tmp/w2'),
+		('sd','pypi','rpds-py','0.30.0','https://files.pythonhosted.org/rpds_py-0.30.0.tar.gz','d3',12,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,'/tmp/sd')`)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO artifact_project_usage (artifact_id, project_id, first_used_at, last_used_at, use_count) VALUES
+		('w1',?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,1),
+		('w2',?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,1),
+		('sd',?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,1)`, pid, pid, pid)
+	require.NoError(t, err)
+
+	gen := stamped(NewGenerator(db, "1.2.0"))
+	out, err := gen.ForProject(context.Background(), &project.Project{ID: pid, Label: "data"})
+	require.NoError(t, err)
+
+	var got cdxBOM
+	require.NoError(t, json.Unmarshal(out, &got))
+	require.Len(t, got.Components, 3, "all three distinct wheel/sdist artifacts must appear")
+
+	refs := map[string]struct{}{}
+	for _, c := range got.Components {
+		assert.Equal(t, "pkg:pypi/rpds-py@0.30.0", c.PURL, "purl stays bare for reconciliation")
+		_, dup := refs[c.BOMRef]
+		assert.False(t, dup, "bom-ref %q duplicated", c.BOMRef)
+		refs[c.BOMRef] = struct{}{}
+	}
+	assert.Len(t, refs, 3, "every component has a unique bom-ref")
 }
 
 // --- helpers ---

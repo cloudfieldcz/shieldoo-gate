@@ -164,13 +164,13 @@ Per-component fields:
 | CycloneDX field        | Meaning                                                                                  | Source in Shieldoo Gate                                                  |
 |------------------------|------------------------------------------------------------------------------------------|--------------------------------------------------------------------------|
 | `type`                 | What kind of thing this is. `library` = a software package; `container` = a Docker/OCI image. | `container` for docker artifacts, `library` for everything else.         |
-| `bom-ref`              | A unique handle within this one SBOM file — other entries in the same document can reference this component by it. Most tooling expects `bom-ref` to equal the `purl`. | The component's `purl`. Falls back to `<ecosystem>:<name>@<version>` when no PURL can be built, or to `<ecosystem>:<name>` if the version is unknown. |
+| `bom-ref`              | A unique handle within this one SBOM file — CycloneDX **requires** it to be unique per document. | The component's `purl` disambiguated by the artifact's content digest. A purl identifies a *package version*, not a file, and one release can ship many distribution files (PyPI wheels + sdist, Maven jar/sources/javadoc) that share a single purl — so the bare purl alone is **not** unique. We append the purl-spec `checksum` qualifier (`<purl>?checksum=sha256:<digest>`) to keep the ref a valid, parseable purl that is unique per file and stable across regenerations. OCI/docker purls already embed the digest as the version, so they are used as-is. Falls back to `<ecosystem>:<name>[@<version>][@sha256:<digest>]` when no PURL can be built. The `purl` field itself stays bare (see below) for scanner reconciliation. |
 | `name`                 | Package name as the ecosystem knows it.                                                  | `artifacts.name`                                                         |
 | `version`              | The specific package version (e.g. `2.34.2`).                                            | `artifacts.version`                                                      |
 | `purl`                 | Universal package identifier ([purl spec](https://github.com/package-url/purl-spec)). Lets scanners find this exact artifact across ecosystems without guessing. | Built from `(ecosystem, name, version, sha256, upstream_url)` — see [PURL Mapping](#purl-mapping-by-ecosystem). |
 | `hashes[].alg`         | Hash algorithm used to verify the file is exactly this one.                              | Always `SHA-256`.                                                        |
 | `hashes[].content`     | The actual hash value.                                                                   | `artifacts.sha256` (with any `sha256:` prefix stripped).                 |
-| `licenses[]`           | What licenses the package is distributed under. Consumed by license-compliance tooling.  | `sbom_metadata.licenses_json` — list of SPDX IDs (or SPDX expressions like `MIT OR Apache-2.0`). Each single token is validated against the authoritative SPDX license list (`github.com/github/go-spdx/v2`): if it is a recognised **current** id it goes to `license.id` case-folded to the canonical casing (e.g. `apache-2.0` → `Apache-2.0`); anything else — loose author free-text like `BSD`, `LGPLv3`, `The MIT License`, as well as deprecated SPDX ids like `GPL-2.0` — is stored **verbatim** in `license.name`. The SBOM does not guess intent: unrecognised strings are preserved as written, not reinterpreted as canonical IDs. Consumers whose policy lists key off canonical IDs must normalise loose forms on their side. (Intake-side alias normalisation for SGW's own license-policy matching still lives in `internal/sbom/parser.go` and the scanner paths — it just no longer rewrites SBOM output.) |
+| `licenses[]`           | What licenses the package is distributed under. Consumed by license-compliance tooling.  | `sbom_metadata.licenses_json` — list of SPDX IDs (or SPDX expressions like `MIT OR Apache-2.0`). Each single token is validated against the authoritative SPDX license list (`github.com/github/go-spdx/v2`): if it is a recognised **current** id it goes to `license.id` case-folded to the canonical casing (e.g. `apache-2.0` → `Apache-2.0`); anything else — loose author free-text like `BSD`, `LGPLv3`, `The MIT License`, as well as deprecated SPDX ids like `GPL-2.0` — is stored **verbatim** in `license.name`. The SBOM does not guess intent: unrecognised strings are preserved as written, not reinterpreted as canonical IDs. Consumers whose policy lists key off canonical IDs must normalise loose forms on their side. (Intake-side alias normalisation for SGW's own license-policy matching still lives in `internal/sbom/parser.go` and the scanner paths — it just no longer rewrites SBOM output.) **Union-shape rule:** CycloneDX `licenseChoice` is a `oneOf` — a component's `licenses` array is *either* one-or-more `license` objects *or* exactly one `expression`, never mixed, and the expression form is capped at a single element. So an SPDX expression (`MIT OR Apache-2.0`, `… WITH …`) is emitted via the `expression` slot **only when it is the single license token**; when it shares the array with other licenses it is routed verbatim into `license.name` instead. This keeps the array schema-valid (strict validators like `cyclonedx-cli` and Dependency-Track reject a mixed array) without fabricating an unproven `AND`/`OR` join. |
 | `externalReferences[]` | Pointers off-doc: where to download, source repo, homepage, etc. We only emit the download URL. | `{type: "distribution", url: artifacts.upstream_url}`                    |
 | `properties[]`         | Vendor-specific extras — namespaced key/value pairs CycloneDX doesn't standardize. Tools that don't recognize the namespace simply ignore them. | `shieldoo:status` (CLEAN/QUARANTINED/…), `shieldoo:size_bytes`, `shieldoo:cached_at`, `shieldoo:released_at` (only when the artifact was once quarantined and then admin-released). |
 
@@ -234,9 +234,14 @@ Without these, scanners like Dependency-Track see `Django_filter` and
   not the deprecated 1.4 array form. We populate `components` only — never
   `services`.
 - License entries use the union shape: exactly one of `license.id`,
-  `license.name`, or `expression` is set per entry. Expressions (anything
-  containing ` AND `, ` OR `, ` WITH `, or parentheses) are emitted as
-  `expression`. Each remaining single token is checked against the SPDX
+  `license.name`, or `expression` is set per entry. `licenseChoice` is itself a
+  `oneOf` at the array level: a component's `licenses` array is *either* a list
+  of `license` objects *or* exactly one `expression` — the two forms must never
+  be mixed and the expression form holds at most one element. So an expression
+  (anything containing ` AND `, ` OR `, ` WITH `, or parentheses) is emitted via
+  the `expression` slot **only when it is the single license token**; when it
+  co-occurs with other licenses it is stored verbatim in `license.name` so the
+  array stays a valid all-`license`-object list. Each remaining single token is checked against the SPDX
   license list via `github.com/github/go-spdx/v2`: recognised **current** ids
   go to `license.id` (canonical-cased), everything else goes to `license.name`
   verbatim. No alias guessing happens at output time. Deprecated SPDX ids
@@ -248,6 +253,15 @@ Without these, scanners like Dependency-Track see `Django_filter` and
 - `serialNumber` is an RFC 4122 UUID in URN form (`urn:uuid:<uuid>`),
   matching the CycloneDX schema regex
   `^urn:uuid:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`.
+- **`bom-ref` is unique per document, derived from purl + content digest.**
+  CycloneDX requires `bom-ref` uniqueness. Because a purl names a package
+  *version* (not a file) and one release can ship many files sharing one purl,
+  the bare purl is not unique — we append the artifact's sha256 as the purl
+  `checksum` qualifier. The `purl` field itself is left bare so scanners
+  reconcile components by package version; consequently two components for
+  different files of the same release legitimately share a `purl` but never a
+  `bom-ref`. Identical purl + identical digest (byte-identical components) are
+  de-duplicated.
 - **1.6-only fields are intentionally omitted** so the document validates
   against the strict 1.5 schema: `component.manufacturer` (added in 1.6 —
   we use `component.supplier` instead) and `license.acknowledgement`
