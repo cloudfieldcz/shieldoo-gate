@@ -137,12 +137,23 @@ func (g *Generator) loadComponents(ctx context.Context, projectID int64) ([]cdxO
 	// Explicit empty slice (not nil) so empty projects serialize as
 	// `"components": []`, matching the documented contract.
 	out := make([]cdxOutComp, 0)
+	// Defensive enforcement of the CycloneDX bom-ref uniqueness invariant. After
+	// bomRef() disambiguates by content digest, a duplicate ref can only arise
+	// from two artifact rows with identical purl AND identical sha256 — i.e.
+	// byte-identical components — so dropping the later one loses nothing a
+	// consumer could tell apart, and guarantees a schema-valid document.
+	seen := make(map[string]struct{})
 	for rows.Next() {
 		var r rawRow
 		if err := rows.StructScan(&r); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
-		out = append(out, rowToComponent(r))
+		c := rowToComponent(r)
+		if _, dup := seen[c.BOMRef]; dup {
+			continue
+		}
+		seen[c.BOMRef] = struct{}{}
+		out = append(out, c)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -156,7 +167,7 @@ func rowToComponent(r rawRow) cdxOutComp {
 	purl := BuildPURL(r.Ecosystem, r.Name, r.Version, r.SHA256, r.UpstreamURL)
 	c := cdxOutComp{
 		Type:    componentType(r.Ecosystem),
-		BOMRef:  bomRefOrPURL(purl, r.Ecosystem, r.Name, r.Version),
+		BOMRef:  bomRef(purl, r.Ecosystem, r.Name, r.Version, r.SHA256),
 		Name:    r.Name,
 		Version: r.Version,
 	}
@@ -219,29 +230,60 @@ func componentType(eco string) string {
 	return "library"
 }
 
-// bomRefOrPURL returns the PURL when present (idiomatic CycloneDX —
-// `bom-ref ≡ purl` is what most dependency-graph tooling expects), falling
-// back to "<ecosystem>:<name>@<version>" when no PURL can be built (unknown
-// ecosystem, docker without a sha256 digest, malformed maven coordinates,
-// etc.). bom-ref must be unique within the BOM; (ecosystem, name, version)
-// is unique because loadComponents joins on the same key from
-// artifact_project_usage.
-func bomRefOrPURL(purl, eco, name, version string) string {
-	if purl != "" {
+// bomRef derives a document-unique bom-ref for an artifact. CycloneDX mandates
+// bom-ref uniqueness within a BOM, but a purl identifies a *package version*,
+// not a file: one PyPI/Maven release ships many distribution files (per-platform
+// wheels + sdist, jar/sources/javadoc) that legitimately share a single purl.
+// Anchoring bom-ref to the bare purl therefore collides — the old
+// "(ecosystem, name, version) is unique because loadComponents joins on that
+// key" assumption was simply wrong for multi-file ecosystems (a real BOM had
+// pkg:pypi/rpds-py@0.30.0 repeated 74×, once per wheel).
+//
+// The canonical bare purl stays in the component's `purl` field so scanners
+// (Dependency-Track, Grype) still reconcile components by package version. For
+// the bom-ref we disambiguate with the artifact's content digest — the system's
+// true per-file identity and its cache key — appended as the purl-spec
+// `checksum` qualifier. That keeps the ref a valid, parseable purl, unique per
+// file, and stable across regenerations (no counters or random UUIDs).
+// OCI/docker purls already embed the sha256 digest as the version, so they are
+// unique as-is and are left untouched.
+//
+// Falls back to "<ecosystem>:<name>[@<version>][@sha256:<digest>]" when no purl
+// can be built (unknown ecosystem, docker without a digest, malformed maven
+// coordinates).
+func bomRef(purl, eco, name, version, sha256 string) string {
+	digest := strings.ToLower(strings.TrimPrefix(sha256, "sha256:"))
+	if purl == "" {
+		base := eco + ":" + name
+		if version != "" {
+			base += "@" + version
+		}
+		if digest != "" {
+			base += "@sha256:" + digest
+		}
+		return base
+	}
+	// docker/OCI purls already carry the digest as the version → unique as-is.
+	// Without a digest there is nothing to disambiguate with, so keep the purl.
+	if eco == "docker" || digest == "" {
 		return purl
 	}
-	if version == "" {
-		return eco + ":" + name
-	}
-	return eco + ":" + name + "@" + version
+	return purl + "?checksum=sha256:" + digest
 }
 
 // licensesToCDX maps the SPDX ID list stored in sbom_metadata.licenses_json
 // into the CycloneDX license-choice array. Processing order per token:
 //
 //  1. URLs (Trivy occasionally emits them alongside the canonical ID) — skipped.
-//  2. SPDX expressions (containing AND/OR/WITH or parentheses) — emitted as
-//     `expression` verbatim.
+//  2. SPDX expressions (containing AND/OR/WITH or parentheses) — emitted as a
+//     standalone `expression` ONLY when they are the single surviving token.
+//     CycloneDX `licenseChoice` is a oneOf: a component's `licenses` array is
+//     EITHER one-or-more `license` objects OR exactly one `expression` — the
+//     two shapes must never be mixed, and the `expression` form is capped at a
+//     single element (cyclonedx-cli and Dependency-Track reject a mixed
+//     array). So when an expression shares the list with other tokens it is
+//     routed to free-text `license.name` verbatim (point 4) — lossless, and
+//     in keeping with not fabricating an AND/OR join we can't prove.
 //  3. Single tokens that the SPDX license list recognises (via go-spdx) →
 //     `license.id`, case-folded to the canonical form (e.g. "apache-2.0" →
 //     "Apache-2.0"). Strict validators (cyclonedx-cli, Dependency-Track)
@@ -256,30 +298,41 @@ func bomRefOrPURL(purl, eco, name, version string) string {
 // The 1.6-only `acknowledgement` field is intentionally omitted (would fail
 // 1.5 schema validation).
 func licensesToCDX(ids []string) []cdxLicenseChoice {
-	out := make([]cdxLicenseChoice, 0, len(ids))
+	// Drop noise first so the sole-expression decision below sees only real
+	// tokens: empty/whitespace-only entries and license URLs (which aren't
+	// valid SPDX enum values — the canonical id is already present alongside).
+	kept := make([]string, 0, len(ids))
 	for _, id := range ids {
-		// Skip empty / whitespace-only tokens: they carry no license info and
-		// would otherwise land in license.name as blank/space noise.
 		if strings.TrimSpace(id) == "" {
 			continue
 		}
-		// Trivy sometimes emits a license URL (e.g. https://licenses.nuget.org/MIT)
-		// alongside the canonical SPDX id. URLs aren't valid SPDX enum values, so
-		// schema validation rejects them. Skip — the SPDX id is already present.
 		if strings.HasPrefix(id, "http://") || strings.HasPrefix(id, "https://") {
 			continue
 		}
-		if isLicenseExpression(id) {
+		kept = append(kept, id)
+	}
+
+	// An `expression` may only be emitted when it stands alone (see point 2).
+	soleExpression := len(kept) == 1 && isLicenseExpression(kept[0])
+
+	out := make([]cdxLicenseChoice, 0, len(kept))
+	for _, id := range kept {
+		switch {
+		case soleExpression:
 			out = append(out, cdxLicenseChoice{Expression: id})
-			continue
-		}
-		// Authoritative SPDX check + case-fold. A recognised id lands in the
-		// schema-validated `license.id` slot in its canonical casing;
-		// everything else stays as free-text `license.name`.
-		if norm, ok := spdxCanonicalID(id); ok {
-			out = append(out, cdxLicenseChoice{License: &cdxLicenseRef{ID: norm}})
-		} else {
+		case isLicenseExpression(id):
+			// Expression sharing the array with other tokens — keep the string
+			// verbatim in the schema-valid `license.name` slot.
 			out = append(out, cdxLicenseChoice{License: &cdxLicenseRef{Name: id}})
+		default:
+			// Authoritative SPDX check + case-fold. A recognised id lands in the
+			// schema-validated `license.id` slot in its canonical casing;
+			// everything else stays as free-text `license.name`.
+			if norm, ok := spdxCanonicalID(id); ok {
+				out = append(out, cdxLicenseChoice{License: &cdxLicenseRef{ID: norm}})
+			} else {
+				out = append(out, cdxLicenseChoice{License: &cdxLicenseRef{Name: id}})
+			}
 		}
 	}
 	return out
