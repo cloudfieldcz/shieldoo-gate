@@ -94,6 +94,7 @@ uv pip compile requirements.in -o requirements.txt  # to generate pinned deps
 - `cloud.google.com/go/storage` — Google Cloud Storage
 - `golang.org/x/time/rate` — token-bucket rate limiter
 - `golang.org/x/sync/semaphore` — weighted semaphore
+- `github.com/github/go-spdx/v2` — authoritative SPDX license id validation + case normalisation for SBOM output
 
 ### Frontend
 

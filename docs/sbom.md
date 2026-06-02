@@ -170,7 +170,7 @@ Per-component fields:
 | `purl`                 | Universal package identifier ([purl spec](https://github.com/package-url/purl-spec)). Lets scanners find this exact artifact across ecosystems without guessing. | Built from `(ecosystem, name, version, sha256, upstream_url)` — see [PURL Mapping](#purl-mapping-by-ecosystem). |
 | `hashes[].alg`         | Hash algorithm used to verify the file is exactly this one.                              | Always `SHA-256`.                                                        |
 | `hashes[].content`     | The actual hash value.                                                                   | `artifacts.sha256` (with any `sha256:` prefix stripped).                 |
-| `licenses[]`           | What licenses the package is distributed under. Consumed by license-compliance tooling.  | `sbom_metadata.licenses_json` — list of SPDX IDs (or SPDX expressions like `MIT OR Apache-2.0`). Loose upstream forms (`BSD`, `LGPLv3`, `The MIT License`, …) are normalised to canonical SPDX IDs via a shared alias table in `internal/sbom/parser.go`, so both strict CycloneDX validators and the license-policy engine see the canonical form. Tokens with no alias match that fail the SPDX charset heuristic fall back to `license.name` free-text. Caveat: bare `BSD` is mapped to `BSD-3-Clause` (most common PyPI interpretation) — policies that differentiate BSD-2 from BSD-3 should be aware of this. |
+| `licenses[]`           | What licenses the package is distributed under. Consumed by license-compliance tooling.  | `sbom_metadata.licenses_json` — list of SPDX IDs (or SPDX expressions like `MIT OR Apache-2.0`). Each single token is validated against the authoritative SPDX license list (`github.com/github/go-spdx/v2`): if it is a recognised **current** id it goes to `license.id` case-folded to the canonical casing (e.g. `apache-2.0` → `Apache-2.0`); anything else — loose author free-text like `BSD`, `LGPLv3`, `The MIT License`, as well as deprecated SPDX ids like `GPL-2.0` — is stored **verbatim** in `license.name`. The SBOM does not guess intent: unrecognised strings are preserved as written, not reinterpreted as canonical IDs. Consumers whose policy lists key off canonical IDs must normalise loose forms on their side. (Intake-side alias normalisation for SGW's own license-policy matching still lives in `internal/sbom/parser.go` and the scanner paths — it just no longer rewrites SBOM output.) |
 | `externalReferences[]` | Pointers off-doc: where to download, source repo, homepage, etc. We only emit the download URL. | `{type: "distribution", url: artifacts.upstream_url}`                    |
 | `properties[]`         | Vendor-specific extras — namespaced key/value pairs CycloneDX doesn't standardize. Tools that don't recognize the namespace simply ignore them. | `shieldoo:status` (CLEAN/QUARANTINED/…), `shieldoo:size_bytes`, `shieldoo:cached_at`, `shieldoo:released_at` (only when the artifact was once quarantined and then admin-released). |
 
@@ -236,7 +236,14 @@ Without these, scanners like Dependency-Track see `Django_filter` and
 - License entries use the union shape: exactly one of `license.id`,
   `license.name`, or `expression` is set per entry. Expressions (anything
   containing ` AND `, ` OR `, ` WITH `, or parentheses) are emitted as
-  `expression`; everything else is treated as an SPDX ID under `license.id`.
+  `expression`. Each remaining single token is checked against the SPDX
+  license list via `github.com/github/go-spdx/v2`: recognised **current** ids
+  go to `license.id` (canonical-cased), everything else goes to `license.name`
+  verbatim. No alias guessing happens at output time. Deprecated SPDX ids
+  (e.g. `GPL-2.0`, superseded by `GPL-2.0-only`) are treated as unrecognised
+  and land in `license.name` — the library case-folds but does not migrate
+  deprecated→current, so emitting them as `license.id` would put a
+  non-canonical value in the SPDX-enum slot.
 - `hashes[].alg` is `SHA-256` (case-sensitive enum value from the schema).
 - `serialNumber` is an RFC 4122 UUID in URN form (`urn:uuid:<uuid>`),
   matching the CycloneDX schema regex

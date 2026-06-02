@@ -268,29 +268,120 @@ func TestRowToComponent_FreeTextLicense_GoesToName(t *testing.T) {
 	assert.Equal(t, "Foo Bar License v1", c.Licenses[3].License.Name)
 }
 
-func TestRowToComponent_LooseFormLicensesNormalised(t *testing.T) {
-	// Real-world PyPI/Go packages often emit loose-form licenses ("BSD",
-	// "LGPLv3", "The MIT License") that aren't in the SPDX enum verbatim.
-	// licensesToCDX must run them through the alias normaliser before
-	// deciding id-vs-name, otherwise strict validators (cyclonedx-cli)
-	// reject the SBOM.
+func TestRowToComponent_LooseFormLicenses_GoToName(t *testing.T) {
+	// SBOM output is honest: loose author free-text ("BSD", "LGPLv3",
+	// "The MIT License", "PSF", "Public-Domain") is NOT in the SPDX license
+	// list verbatim, so we do not guess the author's intent — it lands in the
+	// free-text `license.name` slot as-is. Only strings the SPDX list itself
+	// recognises go to `license.id`. (Intake-side alias normalisation for
+	// policy matching still lives in parser.go / scanner paths; it just no
+	// longer rewrites the SBOM output.)
 	r := rawRow{
 		Ecosystem: "pypi", Name: "x", Version: "1.0", SHA256: "abc",
 		LicensesJSON: nullString(`["BSD","LGPLv3","The MIT License","Apache-2.0","PSF","Public-Domain"]`),
 	}
 	c := rowToComponent(r)
 	require.Len(t, c.Licenses, 6)
-	assert.Equal(t, "BSD-3-Clause", c.Licenses[0].License.ID)     // loose "BSD" → BSD-3-Clause
-	assert.Equal(t, "LGPL-3.0-only", c.Licenses[1].License.ID)    // legacy "LGPLv3" → LGPL-3.0-only
-	assert.Equal(t, "MIT", c.Licenses[2].License.ID)              // free-text "The MIT License" → MIT
-	assert.Equal(t, "Apache-2.0", c.Licenses[3].License.ID)       // already canonical, unchanged
-	assert.Equal(t, "PSF-2.0", c.Licenses[4].License.ID)          // "PSF" → PSF-2.0 (only SPDX PSF entry)
-	assert.Equal(t, "Unlicense", c.Licenses[5].License.ID)        // hyphenated "Public-Domain" → Unlicense
-	// All must be in `id`, not `name` — alias normalisation should
-	// have promoted them into the SPDX enum slot.
+	// Loose forms → name verbatim, no id.
+	assert.Equal(t, "BSD", c.Licenses[0].License.Name)
+	assert.Empty(t, c.Licenses[0].License.ID)
+	assert.Equal(t, "LGPLv3", c.Licenses[1].License.Name)
+	assert.Empty(t, c.Licenses[1].License.ID)
+	assert.Equal(t, "The MIT License", c.Licenses[2].License.Name)
+	assert.Empty(t, c.Licenses[2].License.ID)
+	// Canonical SPDX id → id, unchanged.
+	assert.Equal(t, "Apache-2.0", c.Licenses[3].License.ID)
+	assert.Empty(t, c.Licenses[3].License.Name)
+	// "PSF" (SPDX only has PSF-2.0) and "Public-Domain" are not valid ids → name.
+	assert.Equal(t, "PSF", c.Licenses[4].License.Name)
+	assert.Empty(t, c.Licenses[4].License.ID)
+	assert.Equal(t, "Public-Domain", c.Licenses[5].License.Name)
+	assert.Empty(t, c.Licenses[5].License.ID)
+}
+
+func TestRowToComponent_SPDXIDsCaseFolded(t *testing.T) {
+	// go-spdx recognises ids case-insensitively and returns the canonical
+	// casing. Lowercase/odd-case inputs that ARE valid SPDX ids must be
+	// normalised into the `id` slot, not dropped to `name`.
+	r := rawRow{
+		Ecosystem: "pypi", Name: "x", Version: "1.0", SHA256: "abc",
+		LicensesJSON: nullString(`["mit","apache-2.0","bsd-3-clause"]`),
+	}
+	c := rowToComponent(r)
+	require.Len(t, c.Licenses, 3)
+	assert.Equal(t, "MIT", c.Licenses[0].License.ID)
+	assert.Equal(t, "Apache-2.0", c.Licenses[1].License.ID)
+	assert.Equal(t, "BSD-3-Clause", c.Licenses[2].License.ID)
 	for i, lc := range c.Licenses {
 		assert.Empty(t, lc.License.Name, "license %d should not be in .name", i)
 	}
+}
+
+func TestRowToComponent_DeprecatedSPDXID_GoesToName(t *testing.T) {
+	// Deprecated SPDX ids (e.g. "GPL-2.0", superseded by "GPL-2.0-only") are
+	// still in the SPDX list, but go-spdx case-folds without migrating them to
+	// the current form. Emitting them into license.id would put a
+	// non-canonical value in the SPDX-enum slot and disagree with the
+	// policy/intake path. So they must fall through to license.name verbatim,
+	// while the current "-only"/"-or-later" forms still go to license.id.
+	r := rawRow{
+		Ecosystem: "pypi", Name: "x", Version: "1.0", SHA256: "abc",
+		LicensesJSON: nullString(`["GPL-2.0","GPL-2.0-only","LGPL-2.1"]`),
+	}
+	c := rowToComponent(r)
+	require.Len(t, c.Licenses, 3)
+	// Deprecated → name verbatim, no id.
+	assert.Equal(t, "GPL-2.0", c.Licenses[0].License.Name)
+	assert.Empty(t, c.Licenses[0].License.ID)
+	// Current canonical form → id.
+	assert.Equal(t, "GPL-2.0-only", c.Licenses[1].License.ID)
+	assert.Empty(t, c.Licenses[1].License.Name)
+	// Another deprecated form → name.
+	assert.Equal(t, "LGPL-2.1", c.Licenses[2].License.Name)
+	assert.Empty(t, c.Licenses[2].License.ID)
+}
+
+func TestRowToComponent_LicenseRefAndDocumentRef_GoToName(t *testing.T) {
+	// LicenseRef-* / DocumentRef-* are valid inside SPDX *expressions* but are
+	// NOT permitted in the CycloneDX license.id enum — a strict validator
+	// rejects an SBOM that puts them there. They must land in license.name.
+	r := rawRow{
+		Ecosystem: "pypi", Name: "x", Version: "1.0", SHA256: "abc",
+		LicensesJSON: nullString(`["LicenseRef-MyProprietary","DocumentRef-ext:LicenseRef-Foo"]`),
+	}
+	c := rowToComponent(r)
+	require.Len(t, c.Licenses, 2)
+	assert.Equal(t, "LicenseRef-MyProprietary", c.Licenses[0].License.Name)
+	assert.Empty(t, c.Licenses[0].License.ID)
+	assert.Equal(t, "DocumentRef-ext:LicenseRef-Foo", c.Licenses[1].License.Name)
+	assert.Empty(t, c.Licenses[1].License.ID)
+}
+
+func TestRowToComponent_WithExceptionExpression(t *testing.T) {
+	// A single token carrying a WITH exception (e.g. GPL classpath exception)
+	// is a valid SPDX expression, not a bare id — it must be emitted via the
+	// `expression` slot, never license.id/license.name.
+	r := rawRow{
+		Ecosystem: "pypi", Name: "x", Version: "1.0", SHA256: "abc",
+		LicensesJSON: nullString(`["GPL-2.0-only WITH Classpath-exception-2.0"]`),
+	}
+	c := rowToComponent(r)
+	require.Len(t, c.Licenses, 1)
+	assert.Equal(t, "GPL-2.0-only WITH Classpath-exception-2.0", c.Licenses[0].Expression)
+	assert.Nil(t, c.Licenses[0].License)
+}
+
+func TestRowToComponent_WhitespaceOnlyLicense_Skipped(t *testing.T) {
+	// Blank / whitespace-only tokens carry no license info and must be dropped
+	// entirely — not emitted as a blank license.name entry. The real "MIT"
+	// token alongside them must still come through.
+	r := rawRow{
+		Ecosystem: "pypi", Name: "x", Version: "1.0", SHA256: "abc",
+		LicensesJSON: nullString(`["","   ","\t","MIT"]`),
+	}
+	c := rowToComponent(r)
+	require.Len(t, c.Licenses, 1, "only the MIT token should survive")
+	assert.Equal(t, "MIT", c.Licenses[0].License.ID)
 }
 
 func TestRowToComponent_NoPURL_WhenUnknownEcosystem(t *testing.T) {
