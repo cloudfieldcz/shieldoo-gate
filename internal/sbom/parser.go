@@ -197,6 +197,7 @@ var licenseAliasEntries = []aliasEntry{
 	{"apache license version 2.0", "Apache-2.0"},
 	{"apache software license", "Apache-2.0"},
 	{"apache-2", "Apache-2.0"},
+	{"bsd", "BSD-3-Clause"}, // loose form — package authors often mean BSD-3-Clause when they write just "BSD"
 	{"bsd 2-clause", "BSD-2-Clause"},
 	{"bsd 2-clause license", "BSD-2-Clause"},
 	{"bsd 3-clause", "BSD-3-Clause"},
@@ -225,13 +226,18 @@ var licenseAliasEntries = []aliasEntry{
 	{"isc license", "ISC"},
 	{"lgpl-2.1", "LGPL-2.1-only"},
 	{"lgpl-3.0", "LGPL-3.0-only"},
+	{"lgplv3", "LGPL-3.0-only"}, // legacy short form seen in PyPI metadata (e.g. setuptools)
+	{"lgplv2", "LGPL-2.1-only"},
+	{"lgplv2.1", "LGPL-2.1-only"},
 	{"mit", "MIT"},
 	{"mit license", "MIT"},
 	{"mit license (mit)", "MIT"},
 	{"mit-0", "MIT-0"},
 	{"mozilla public license 2.0", "MPL-2.0"},
 	{"mpl-2.0", "MPL-2.0"},
+	{"psf", "PSF-2.0"}, // Python Software Foundation License — SPDX only has PSF-2.0
 	{"public domain", "Unlicense"},
+	{"public-domain", "Unlicense"}, // hyphenated variant seen in npm package metadata
 	// MySQL Connector/J ships GPLv2 with the FOSS exception. Trivy / our
 	// extractor see the literal pom.xml `<name>` field — normalize so it
 	// matches a `blocked: ["GPL-2.0-only"]` policy line. Two phrasings exist:
