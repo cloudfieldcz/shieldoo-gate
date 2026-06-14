@@ -74,6 +74,15 @@ class ScannerBridgeServicer(scanner_pb2_grpc.ScannerBridgeServicer):
     def ScanArtifact(self, request, context):
         start = time.time()
         try:
+            # Unsupported ecosystems get an immediate clean response — no scan needed.
+            if request.ecosystem not in ("pypi", "npm"):
+                return scanner_pb2.ScanResponse(
+                    verdict="CLEAN",
+                    confidence=1.0,
+                    scanner_version=GUARDDOG_VERSION,
+                    duration_ms=int((time.time() - start) * 1000),
+                )
+
             # Isolate GuardDog's internal temp files in a per-scan directory so
             # they are cleaned up deterministically even if GuardDog crashes.
             scan_tmp = tempfile.mkdtemp(prefix="shieldoo-guarddog-scratch-")
@@ -137,13 +146,14 @@ class ScannerBridgeServicer(scanner_pb2_grpc.ScannerBridgeServicer):
             )
 
     def _run_guarddog_scan(self, request):
-        """Execute the appropriate GuardDog scanner based on ecosystem."""
+        """Execute the appropriate GuardDog scanner based on ecosystem.
+
+        Only called for supported ecosystems (pypi, npm) — unsupported ones
+        are short-circuited in ScanArtifact before reaching this method.
+        """
         if request.ecosystem == "pypi":
             return self.pypi_scanner.scan_local(request.artifact_path)
-        elif request.ecosystem == "npm":
-            return self.npm_scanner.scan_local(request.artifact_path)
-        else:
-            return {}
+        return self.npm_scanner.scan_local(request.artifact_path)
 
     def ScanArtifactAI(self, request, context):
         """AI-based security analysis of a package artifact."""
