@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import shutil
 import time
 from concurrent import futures
 
@@ -340,7 +341,6 @@ def _cleanup_stale_scratch(socket_dir: str, socket_path: str):
             continue
         try:
             if os.path.isdir(entry_path) and not os.path.islink(entry_path):
-                import shutil
                 shutil.rmtree(entry_path, ignore_errors=True)
             else:
                 os.unlink(entry_path)
