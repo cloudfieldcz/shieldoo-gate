@@ -44,6 +44,18 @@ func EnsureRepository(db *config.GateDB, registry, name string, isInternal bool)
 	return &repo, nil
 }
 
+// GetRepository returns a single repository by (registry, name) WITHOUT creating
+// one. Unlike EnsureRepository it never INSERTs — it is the read-only lookup used
+// on the pull/serve hot path. Returns sql.ErrNoRows when the repo does not exist.
+func GetRepository(db *config.GateDB, registry, name string) (*DockerRepository, error) {
+	var repo DockerRepository
+	err := db.Get(&repo, "SELECT "+repoColumns+" FROM docker_repositories WHERE registry = ? AND name = ?", registry, name)
+	if err != nil {
+		return nil, err // includes sql.ErrNoRows verbatim for the caller to classify
+	}
+	return &repo, nil
+}
+
 // GetRepositoryByID returns a single repository by its ID.
 func GetRepositoryByID(db *config.GateDB, id int64) (*DockerRepository, error) {
 	var repo DockerRepository

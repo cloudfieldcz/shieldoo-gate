@@ -57,13 +57,13 @@ type trivyOutput struct {
 }
 
 type trivyVulnRow struct {
-	VulnerabilityID  string  `json:"VulnerabilityID"`
-	PkgName          string  `json:"PkgName"`
-	InstalledVersion string  `json:"InstalledVersion"`
-	FixedVersion     string  `json:"FixedVersion"`
-	Severity         string  `json:"Severity"`
-	Title            string  `json:"Title"`
-	PrimaryURL       string  `json:"PrimaryURL"`
+	VulnerabilityID  string    `json:"VulnerabilityID"`
+	PkgName          string    `json:"PkgName"`
+	InstalledVersion string    `json:"InstalledVersion"`
+	FixedVersion     string    `json:"FixedVersion"`
+	Severity         string    `json:"Severity"`
+	Title            string    `json:"Title"`
+	PrimaryURL       string    `json:"PrimaryURL"`
 	CVSS             trivyCVSS `json:"CVSS"`
 }
 
@@ -87,10 +87,30 @@ func (s *TrivyManifestScanner) Scan(ctx context.Context, m manifest.Manifest) (m
 		return out, nil
 	}
 
+	// Isolate all Trivy scratch (decompression/analyzer temp + the SBOM temp
+	// file below) under a process-owned shieldoo-trivy-scratch-* dir exported as
+	// TMPDIR, so the tmpjanitor can reclaim it under the shieldoo-trivy- prefix
+	// if this process is hard-killed mid-scan. The happy path removes it via the
+	// deferred RemoveAll.
+	scratchDir, scratchErr := os.MkdirTemp("", "shieldoo-trivy-scratch-*")
+	if scratchErr == nil {
+		defer os.RemoveAll(scratchDir)
+	}
+
 	// Prefer in-memory bytes via a temp file; trivy doesn't accept stdin for SBOMs reliably.
 	sbomPath := m.SBOMPath
 	if sbomPath == "" {
-		f, err := os.CreateTemp("", "shieldoo-sbom-*.json")
+		// Place the SBOM temp inside the scratch dir so RemoveAll reclaims it.
+		// If the scratch dir could not be created, fall back to the legacy
+		// shieldoo-sbom-*.json name in /tmp so the janitor's shieldoo-sbom- rule
+		// still matches it, and remove it explicitly.
+		var f *os.File
+		var err error
+		if scratchErr == nil {
+			f, err = os.CreateTemp(scratchDir, "sbom-*.json")
+		} else {
+			f, err = os.CreateTemp("", "shieldoo-sbom-*.json")
+		}
 		if err != nil {
 			out.Status = "error"
 			out.Duration = time.Since(start)
@@ -99,12 +119,20 @@ func (s *TrivyManifestScanner) Scan(ctx context.Context, m manifest.Manifest) (m
 		_, _ = f.Write(m.SBOMBytes)
 		_ = f.Close()
 		sbomPath = f.Name()
-		defer os.Remove(sbomPath)
+		if scratchErr != nil {
+			defer os.Remove(sbomPath)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
+	//nolint:gosec // binaryPath is operator-controlled config, not user input
 	cmd := exec.CommandContext(ctx, s.binaryPath, "sbom", "--format", "json", "--quiet", sbomPath)
+	if scratchErr == nil {
+		// Additive env (never a bare cmd.Env) — a bare slice would strip
+		// PATH/HOME/proxy/DB-download config and fail-open every scan.
+		cmd.Env = append(os.Environ(), "TMPDIR="+scratchDir)
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

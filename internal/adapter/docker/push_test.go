@@ -36,7 +36,6 @@ func setupTestDockerWithPush(t *testing.T) *docker.DockerAdapter {
 		MinimumConfidence:   0.7,
 	}, nil)
 
-	blobDir := t.TempDir()
 	cfg := config.DockerUpstreamConfig{
 		DefaultRegistry: "https://registry-1.docker.io",
 		AllowedRegistries: []config.DockerRegistryEntry{
@@ -44,7 +43,9 @@ func setupTestDockerWithPush(t *testing.T) *docker.DockerAdapter {
 		},
 		Push: config.DockerPushConfig{Enabled: true},
 	}
-	blobStore := docker.NewBlobStore(blobDir)
+	blobBackend, err := local.NewLocalCacheStore(t.TempDir(), 0)
+	require.NoError(t, err)
+	blobStore := docker.NewBlobStore(blobBackend, "docker-push")
 	return docker.NewDockerAdapterWithPush(db, cacheStore, scanEngine, policyEngine, cfg, blobStore)
 }
 
@@ -210,7 +211,7 @@ func TestDockerPush_Disabled_Returns403(t *testing.T) {
 		DefaultRegistry: "https://registry-1.docker.io",
 		Push:            config.DockerPushConfig{Enabled: false},
 	}
-	a := docker.NewDockerAdapter(db, cacheStore, scanEngine, policyEngine, cfg)
+	a := docker.NewDockerAdapter(db, cacheStore, cacheStore, scanEngine, policyEngine, cfg)
 
 	req := httptest.NewRequest(http.MethodPost, "/v2/myteam/myapp/blobs/uploads/", nil)
 	w := httptest.NewRecorder()

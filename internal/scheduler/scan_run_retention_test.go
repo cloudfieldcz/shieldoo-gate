@@ -1,8 +1,10 @@
 package scheduler_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strconv"
 	"sync"
 	"testing"
@@ -53,6 +55,24 @@ func (f *fakeBlobStore) DeleteBlob(_ context.Context, path string) error {
 	f.deleted = append(f.deleted, path)
 	delete(f.stored, path)
 	return nil
+}
+
+func (f *fakeBlobStore) StatBlob(_ context.Context, path string) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if d, ok := f.stored[path]; ok {
+		return int64(len(d)), nil
+	}
+	return 0, cache.ErrBlobNotFound
+}
+
+func (f *fakeBlobStore) GetBlobStream(_ context.Context, path string) (io.ReadCloser, int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if d, ok := f.stored[path]; ok {
+		return io.NopCloser(bytes.NewReader(d)), int64(len(d)), nil
+	}
+	return nil, 0, cache.ErrBlobNotFound
 }
 
 func (f *fakeBlobStore) deletedPaths() []string {

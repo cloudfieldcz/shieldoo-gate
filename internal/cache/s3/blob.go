@@ -61,6 +61,47 @@ func (s *S3CacheStore) GetBlob(ctx context.Context, path string) ([]byte, error)
 	return io.ReadAll(out.Body)
 }
 
+// StatBlob returns the object size via HeadObject (no body transfer).
+func (s *S3CacheStore) StatBlob(ctx context.Context, path string) (int64, error) {
+	key := s.blobKey(path)
+	out, err := s.client.HeadObject(ctx, &awss3.HeadObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		var nf *s3types.NotFound
+		if errors.As(err, &nf) {
+			return 0, cache.ErrBlobNotFound
+		}
+		return 0, fmt.Errorf("s3 blob: head %s: %w", key, err)
+	}
+	if out.ContentLength == nil {
+		return 0, nil
+	}
+	return *out.ContentLength, nil
+}
+
+// GetBlobStream returns a streaming reader for the object and its size.
+func (s *S3CacheStore) GetBlobStream(ctx context.Context, path string) (io.ReadCloser, int64, error) {
+	key := s.blobKey(path)
+	out, err := s.client.GetObject(ctx, &awss3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		var nsk *s3types.NoSuchKey
+		if errors.As(err, &nsk) {
+			return nil, 0, cache.ErrBlobNotFound
+		}
+		return nil, 0, fmt.Errorf("s3 blob: get %s: %w", key, err)
+	}
+	var size int64
+	if out.ContentLength != nil {
+		size = *out.ContentLength
+	}
+	return out.Body, size, nil
+}
+
 // DeleteBlob removes s3://bucket/{prefix}/{path}.
 func (s *S3CacheStore) DeleteBlob(ctx context.Context, path string) error {
 	key := s.blobKey(path)

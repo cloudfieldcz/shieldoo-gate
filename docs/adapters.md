@@ -223,7 +223,35 @@ When `push.enabled: true` is set in config, the Docker adapter supports `docker 
 - Bare names without a slash (e.g. `nginx`) are NOT pushable (they resolve to Docker Hub).
 - Registry-prefixed names (e.g. `ghcr.io/user/app`) are NOT pushable.
 
-**Blob storage:** Pushed blobs are stored on the local filesystem at `{blob_path}/blobs/{algo}/{prefix}/{hex}` with two-level directory sharding. Path traversal in digest values is rejected.
+**Blob storage:** Pushed blobs and manifests are stored in the configured `cache.backend` (local / S3 / Azure Blob / GCS) under the `docker-push/` key namespace — **not `/tmp`**. Blobs are content-addressed at `docker-push/blobs/{algo}/{hex[:2]}/{hex}`, so the key is the content hash. Path traversal and non-hex digest values are rejected. See [ADR-009](adr/ADR-009-docker-push-durable-storage.md).
+
+- **Enabling push requires a durable backend.** With the `local` backend, `cache.local.path` must be a persistent directory (not `/tmp`); the gate **fails fast at startup** otherwise. Remote backends (S3/Azure/GCS) are always durable.
+- **Pushed images survive restarts.** Blob HEAD uses `StatBlob` (size, no download) and layer serving streams via `GetBlobStream` to avoid buffering whole layers in memory.
+- **Quarantine gate:** a pushed layer is servable by digest only if referenced by a non-quarantined manifest (`docker_blob_refs`). Layers of a quarantined image are not servable. On a backend/transport error for a known internal repo the serve path **fails closed** (`503`/`404`) and never falls through to the upstream registry.
+
+### Migrating existing push blobs (one-time, on upgrade)
+
+Before this version, pushed blobs were stored in `/tmp/shieldoo-gate-blobs`
+(ephemeral). After upgrading, move them to durable storage once:
+
+1. Deploy the new version (new pushes already go to durable storage).
+2. Run the one-shot migration (it recomputes each blob's SHA-256 before writing and
+   then reclaims `/tmp`):
+
+   ```bash
+   docker compose run --rm gate /shieldoo-gate -config /config.yaml -migrate-push-blobs
+   ```
+
+   Exit code `0` = all blobs migrated; exit code `1` = some blobs failed
+   verification (left in place as `*.corrupt`; inspect the logs).
+3. Confirm `/tmp/shieldoo-gate-blobs` is empty. On normal startup the gate logs a
+   warning if legacy blobs remain.
+
+Run the migration **before** any restart that would clear `/tmp`.
+
+**Future work:** (1) a local read-through cache for internal pulls to cut backend
+latency/egress; (2) blob GC / retention (delete on tag-delete or quarantine purge) —
+push blobs currently accumulate in object storage with no lifecycle.
 
 ### Routes
 

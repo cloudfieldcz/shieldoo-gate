@@ -48,7 +48,7 @@ func setupTestDockerWithTyposquat(t *testing.T, upstreamHandler http.HandlerFunc
 	cfg := config.DockerUpstreamConfig{
 		DefaultRegistry: upstream.URL,
 	}
-	a := docker.NewDockerAdapter(db, cacheStore, scanEngine, policyEngine, cfg)
+	a := docker.NewDockerAdapter(db, cacheStore, cacheStore, scanEngine, policyEngine, cfg)
 	return a, upstream, db
 }
 
@@ -240,7 +240,9 @@ func TestDockerAdapter_PushPath_NotGatedByTyposquat(t *testing.T) {
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
 		MinimumConfidence:   0.7,
 	}, db)
-	blobStore := docker.NewBlobStore(t.TempDir())
+	blobBackend, err := local.NewLocalCacheStore(t.TempDir(), 0)
+	require.NoError(t, err)
+	blobStore := docker.NewBlobStore(blobBackend, "docker-push")
 	cfg := config.DockerUpstreamConfig{
 		DefaultRegistry: "https://registry-1.docker.io",
 		Push:            config.DockerPushConfig{Enabled: true},

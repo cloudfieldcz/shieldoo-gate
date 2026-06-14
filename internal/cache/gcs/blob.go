@@ -61,6 +61,32 @@ func (s *GCSCacheStore) GetBlob(ctx context.Context, path string) ([]byte, error
 	return buf.Bytes(), nil
 }
 
+// StatBlob returns the object size via Attrs (no body transfer).
+func (s *GCSCacheStore) StatBlob(ctx context.Context, path string) (int64, error) {
+	key := s.blobKey(path)
+	attrs, err := s.client.Bucket(s.bucket).Object(key).Attrs(ctx)
+	if err != nil {
+		if errors.Is(err, gcsstorage.ErrObjectNotExist) {
+			return 0, cache.ErrBlobNotFound
+		}
+		return 0, fmt.Errorf("gcs blob: attrs %s: %w", key, err)
+	}
+	return attrs.Size, nil
+}
+
+// GetBlobStream returns a streaming reader for the object and its size.
+func (s *GCSCacheStore) GetBlobStream(ctx context.Context, path string) (io.ReadCloser, int64, error) {
+	key := s.blobKey(path)
+	rc, err := s.client.Bucket(s.bucket).Object(key).NewReader(ctx)
+	if err != nil {
+		if errors.Is(err, gcsstorage.ErrObjectNotExist) {
+			return nil, 0, cache.ErrBlobNotFound
+		}
+		return nil, 0, fmt.Errorf("gcs blob: get %s: %w", key, err)
+	}
+	return rc, rc.Attrs.Size, nil
+}
+
 // DeleteBlob removes gs://bucket/{prefix}/{path}.
 func (s *GCSCacheStore) DeleteBlob(ctx context.Context, path string) error {
 	key := s.blobKey(path)

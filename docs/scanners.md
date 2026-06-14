@@ -546,6 +546,38 @@ At startup, the sandbox scanner lists all containers with the `sgw-sandbox-` pre
 - **Go** is not supported — Go modules have no install hooks or post-install scripts, so there is no meaningful install-time behavior to observe.
 - **Maven and RubyGems are supported** — the sandbox can execute `mvn install:install-file` and `gem install --local` respectively to observe install-time behavior.
 
+## Scratch Cleanup (Temp Janitor)
+
+Trivy and GuardDog write internal scratch during a scan (analyzer dirs, decompression buffers, blob cache, a manifest SBOM temp). That scratch lives on `/tmp`, which is a **shared, named Docker volume** (`bridge-socket`) mounted into both the gate and the scanner-bridge containers so the gate can stage a download and the bridge can read it. The happy path removes scratch with a `defer`/`finally`, but a scanner **timeout, crash, or hard kill** (SIGKILL/OOM) of either process mid-scan orphans it — and because the volume is persistent, the leak grows without bound (observed at 33 GB+ in production).
+
+Two mechanisms keep `/tmp` bounded:
+
+### 1. Scratch is namespaced
+
+So that a janitor can prove what is safe to delete, all Shieldoo-owned scratch shares a `shieldoo-` prefix:
+
+- **Trivy (Go):** each Trivy subprocess runs with `TMPDIR=<per-scan dir>` named `shieldoo-trivy-scratch-*`, set additively on `cmd.Env` (`append(os.Environ(), …)` — never a bare slice, which would strip `PATH`/`HOME`/proxy/DB-download config and fail-open every scan). Applies to both [`internal/scanner/trivy`](../internal/scanner/trivy/trivy.go) and the manifest scanner [`internal/scanner/manifest/trivy`](../internal/scanner/manifest/trivy/trivy.go); the manifest SBOM temp is placed inside that dir. A per-scan `defer os.RemoveAll` handles the happy path.
+- **GuardDog (Python):** the bridge creates `<tmp>/shieldoo-guarddog/` and points `tempfile.tempdir` + `TMPDIR` at it **once at startup** ([`scanner-bridge/scratch_janitor.py`](../scanner-bridge/scratch_janitor.py) `setup_scratch_dir`). It is never mutated per scan — the bridge serves on a 64-thread pool and a per-scan global mutation would race across concurrent scans.
+- **Adapter staging:** each download is staged as a top-level **file** `shieldoo-gate-<eco>-*` via `os.CreateTemp`.
+
+### 2. Age-based janitor (the backstop)
+
+A periodic janitor in **both** processes deletes stale, process-owned scratch — the one case a per-scan `defer`/`finally` cannot cover (a hard kill of the whole process):
+
+- **Go:** [`internal/scanner/tmpjanitor`](../internal/scanner/tmpjanitor/) runs under the graceful-shutdown context when Trivy is enabled, sweeping `os.TempDir()` for `shieldoo-trivy-*` (dirs), `shieldoo-sbom-*` (files), and `shieldoo-gate-*` **regular files only**.
+- **Bridge:** a daemon thread sweeps `<tmp>/shieldoo-guarddog/`.
+
+Safety is by construction — no scan-activity tracking, no locks, no races:
+
+- **Age threshold ≫ scan timeout.** The Go `maxAge` is `max(1h, 5 × scanners.timeout)`; the bridge uses a fixed **1h floor** (it has no scan timeout to scale from). An in-flight scan's scratch is always too fresh to delete. **Operator note:** raising `scanners.timeout` toward 1h would require raising the bridge floor.
+- **TOCTOU-safe sweep.** `/tmp` holds attacker-influenced content (decompressed payloads with arbitrary names, symlinks, mtimes), so each sweep enumerates **direct children only**, decides age from the **top-level entry's** mtime (never recursing for the age decision), **skips symlinks**, rejects names containing `/` or `..`, and never deletes a denylisted basename.
+- **Blob-store guard.** The legacy `/tmp/shieldoo-gate-blobs` push blob store (a directory, the sole copy of pushed images until an operator runs `-migrate-push-blobs`; see [ADR-009](adr/ADR-009-docker-push-durable-storage.md)) is kept out of scope by both a denylist entry **and** the files-only rule on the `shieldoo-gate-` prefix. Active push blobs now live in the durable backend, not `/tmp`.
+- **Per-sweep deletion cap.** At most 100 entries per cycle (oldest-first), so the first backlog-draining sweep is not one blocking metadata storm that starves an in-flight scan into a timeout. Per-entry errors are logged and skipped, never aborting the sweep.
+
+The sandbox's own `sgw-sandbox-*` temp is **not** a `shieldoo-` prefix and is handled separately by the sandbox's [Orphan Cleanup](#orphan-cleanup); there is no overlap.
+
+**Observability:** the Go janitor exposes Prometheus metrics — `shieldoo_gate_tmpjanitor_reclaimed_bytes_total`, `shieldoo_gate_tmpjanitor_reclaimed_entries_total`, `shieldoo_gate_tmpjanitor_skipped_entries_total`, and the `shieldoo_gate_tmpjanitor_last_sweep_timestamp_seconds` gauge (a stale value is the thread-death signal). The bridge janitor is **log-only** (the sidecar exposes no Prometheus endpoint); operators monitor the gate metrics + bridge logs.
+
 ## Health Checks
 
 `Engine.HealthCheck()` runs `HealthCheck()` on every registered scanner **in parallel** and returns a map of scanner name to error (nil = healthy). This is exposed via `GET /api/v1/health` and includes scanner status in the response.

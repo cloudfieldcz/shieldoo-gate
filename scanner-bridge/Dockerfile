@@ -65,6 +65,7 @@ COPY prompts/ prompts/
 COPY ai_scanner.py .
 COPY ai_triage.py .
 COPY diff_scanner.py .
+COPY scratch_janitor.py .
 COPY main.py .
 
 ENV BRIDGE_SOCKET=/tmp/shieldoo-bridge.sock

@@ -12,6 +12,7 @@ import grpc
 import proto.scanner_pb2 as scanner_pb2
 import proto.scanner_pb2_grpc as scanner_pb2_grpc
 import diff_scanner
+import scratch_janitor
 
 logging.basicConfig(
     level=logging.INFO,
@@ -298,6 +299,14 @@ def serve():
     # Clean up stale socket
     if os.path.exists(socket_path):
         os.unlink(socket_path)
+
+    # Isolate GuardDog scratch into a bridge-owned dir and start the age-based
+    # janitor BEFORE serving — tempfile.tempdir must be set once, before any of
+    # the 64 scan threads run (Constraint 2). The janitor backstops the hard-kill
+    # leak the per-scan cleanup cannot cover.
+    scratch_dir = scratch_janitor.setup_scratch_dir()
+    if scratch_dir:
+        scratch_janitor.start_scratch_janitor(scratch_dir)
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=64))
     scanner_pb2_grpc.add_ScannerBridgeServicer_to_server(

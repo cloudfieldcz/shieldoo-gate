@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -91,6 +92,43 @@ func (s *LocalCacheStore) DeleteBlob(_ context.Context, path string) error {
 		return fmt.Errorf("local blob: delete %s: %w", clean, err)
 	}
 	return nil
+}
+
+// StatBlob returns the size of basePath/path without reading the body.
+func (s *LocalCacheStore) StatBlob(_ context.Context, path string) (int64, error) {
+	clean, err := sanitizeBlobPath(path)
+	if err != nil {
+		return 0, err
+	}
+	info, err := os.Stat(filepath.Join(s.basePath, clean))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, cache.ErrBlobNotFound
+		}
+		return 0, fmt.Errorf("local blob: stat %s: %w", clean, err)
+	}
+	return info.Size(), nil
+}
+
+// GetBlobStream opens basePath/path for streaming and returns its size.
+func (s *LocalCacheStore) GetBlobStream(_ context.Context, path string) (io.ReadCloser, int64, error) {
+	clean, err := sanitizeBlobPath(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	full := filepath.Join(s.basePath, clean)
+	info, err := os.Stat(full)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, 0, cache.ErrBlobNotFound
+		}
+		return nil, 0, fmt.Errorf("local blob: stat %s: %w", clean, err)
+	}
+	f, err := os.Open(full)
+	if err != nil {
+		return nil, 0, fmt.Errorf("local blob: open %s: %w", clean, err)
+	}
+	return f, info.Size(), nil
 }
 
 // ListBlobs satisfies scheduler.BlobLister. It returns all blob paths under

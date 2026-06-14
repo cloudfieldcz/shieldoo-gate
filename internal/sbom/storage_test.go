@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -26,6 +27,12 @@ func (f *failingBlobStore) GetBlob(_ context.Context, _ string) ([]byte, error) 
 }
 func (f *failingBlobStore) DeleteBlob(_ context.Context, _ string) error {
 	return fmt.Errorf("simulated blob backend failure")
+}
+func (f *failingBlobStore) StatBlob(_ context.Context, _ string) (int64, error) {
+	return 0, fmt.Errorf("simulated blob backend failure")
+}
+func (f *failingBlobStore) GetBlobStream(_ context.Context, _ string) (io.ReadCloser, int64, error) {
+	return nil, 0, fmt.Errorf("simulated blob backend failure")
 }
 
 func newTestStorage(t *testing.T) (Storage, *config.GateDB, string) {

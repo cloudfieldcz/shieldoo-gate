@@ -1,64 +1,86 @@
-package docker_test
+package docker
 
 import (
+	"context"
+	"io"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
-	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/docker"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/cache/local"
 )
 
-func TestBlobStore_PutAndGet(t *testing.T) {
-	bs := docker.NewBlobStore(t.TempDir())
-
-	content := []byte("fake layer content")
-	digest := "sha256:abc123def456"
-
-	err := bs.Put(digest, content)
-	require.NoError(t, err)
-
-	data, err := bs.Get(digest)
-	require.NoError(t, err)
-	assert.Equal(t, content, data)
+func newTestBlobStore(t *testing.T) *BlobStore {
+	t.Helper()
+	backend, err := local.NewLocalCacheStore(t.TempDir(), 0)
+	if err != nil {
+		t.Fatalf("backend: %v", err)
+	}
+	return NewBlobStore(backend, "docker-push")
 }
 
-func TestBlobStore_Exists(t *testing.T) {
-	bs := docker.NewBlobStore(t.TempDir())
-
-	assert.False(t, bs.Exists("sha256:doesnotexist"))
-
-	err := bs.Put("sha256:abc123", []byte("data"))
-	require.NoError(t, err)
-
-	assert.True(t, bs.Exists("sha256:abc123"))
+func TestBlobStore_PutGet_RoundTrips(t *testing.T) {
+	bs := newTestBlobStore(t)
+	ctx := context.Background()
+	digest := "sha256:abcd1234"
+	if err := bs.Put(ctx, digest, []byte("layer")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	got, err := bs.Get(ctx, digest)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if string(got) != "layer" {
+		t.Fatalf("got %q", got)
+	}
 }
 
-func TestBlobStore_PathTraversal_Rejected(t *testing.T) {
-	bs := docker.NewBlobStore(t.TempDir())
-
-	err := bs.Put("sha256:../../etc/passwd", []byte("evil"))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid digest")
+func TestBlobStore_GetStream_RoundTrips(t *testing.T) {
+	bs := newTestBlobStore(t)
+	ctx := context.Background()
+	_ = bs.Put(ctx, "sha256:dead", []byte("streamed-layer"))
+	rc, size, err := bs.GetStream(ctx, "sha256:dead")
+	if err != nil {
+		t.Fatalf("GetStream: %v", err)
+	}
+	defer rc.Close()
+	if size != int64(len("streamed-layer")) {
+		t.Fatalf("size = %d", size)
+	}
+	data, _ := io.ReadAll(rc)
+	if string(data) != "streamed-layer" {
+		t.Fatalf("got %q", data)
+	}
 }
 
-func TestBlobStore_InvalidDigestFormat_Rejected(t *testing.T) {
-	bs := docker.NewBlobStore(t.TempDir())
-
-	err := bs.Put("nocolon", []byte("bad"))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid digest")
+func TestBlobStore_ExistsAndStat(t *testing.T) {
+	bs := newTestBlobStore(t)
+	ctx := context.Background()
+	_ = bs.Put(ctx, "sha256:beef", []byte("xyz"))
+	ok, err := bs.Exists(ctx, "sha256:beef")
+	if err != nil || !ok {
+		t.Fatalf("Exists = %v, %v", ok, err)
+	}
+	ok, _ = bs.Exists(ctx, "sha256:0000")
+	if ok {
+		t.Fatal("Exists should be false for missing")
+	}
+	size, err := bs.Stat(ctx, "sha256:beef")
+	if err != nil || size != 3 {
+		t.Fatalf("Stat = %d, %v", size, err)
+	}
 }
 
-func TestBlobStore_GetSize(t *testing.T) {
-	bs := docker.NewBlobStore(t.TempDir())
-	content := []byte("some blob data here")
-	digest := "sha256:deadbeef"
-
-	err := bs.Put(digest, content)
-	require.NoError(t, err)
-
-	size, err := bs.GetSize(digest)
-	require.NoError(t, err)
-	assert.Equal(t, int64(len(content)), size)
+func TestBlobStore_DigestKey_RejectsTraversal(t *testing.T) {
+	bs := newTestBlobStore(t)
+	for _, bad := range []string{"", "noColon", "sha256:../escape", "sha256:a/b", "sha256:"} {
+		if _, err := bs.digestKey(bad); err == nil {
+			t.Errorf("digestKey(%q) should error", bad)
+		}
+	}
+	key, err := bs.digestKey("sha256:abcdef")
+	if err != nil {
+		t.Fatalf("valid digest: %v", err)
+	}
+	if key != "docker-push/blobs/sha256/ab/abcdef" {
+		t.Fatalf("key = %q", key)
+	}
 }

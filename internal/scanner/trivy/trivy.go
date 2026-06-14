@@ -86,6 +86,27 @@ func (s *TrivyScanner) Scan(ctx context.Context, artifact scanner.Artifact) (sca
 	return s.scanLegacy(ctx, artifact, start)
 }
 
+// newScanCmd builds the Trivy subprocess with an isolated, process-owned scratch
+// directory exported as TMPDIR, so all of Trivy's decompression/analyzer temp
+// lands under a shieldoo-trivy-scratch-* prefix the janitor can reclaim if this
+// process is hard-killed mid-scan. The returned cleanup removes it on the happy
+// path. TMPDIR is per-subprocess (thread-safe — never a process global).
+//
+// The env MUST be additive (os.Environ()+TMPDIR): a bare cmd.Env would strip
+// PATH/HOME/proxy/DB-download config and fail-open every scan. If the scratch
+// dir cannot be created (e.g. /tmp full), the scan still runs with the inherited
+// environment — the janitor just cannot namespace that degraded run's scratch.
+func (s *TrivyScanner) newScanCmd(ctx context.Context, args []string) (*exec.Cmd, func()) {
+	//nolint:gosec // binaryPath is operator-controlled config, not user input
+	cmd := exec.CommandContext(ctx, s.binaryPath, args...)
+	scratch, err := os.MkdirTemp("", "shieldoo-trivy-scratch-*")
+	if err != nil {
+		return cmd, func() {}
+	}
+	cmd.Env = append(os.Environ(), "TMPDIR="+scratch)
+	return cmd, func() { _ = os.RemoveAll(scratch) }
+}
+
 // scanCycloneDX runs trivy once in CycloneDX mode and parses both vuln and
 // license data from the same output.
 func (s *TrivyScanner) scanCycloneDX(ctx context.Context, artifact scanner.Artifact, start time.Time) (scanner.ScanResult, error) {
@@ -106,8 +127,8 @@ func (s *TrivyScanner) scanCycloneDX(ctx context.Context, artifact scanner.Artif
 	scanArtifact.LocalPath = scanPath
 
 	args := s.buildCycloneDXArgs(scanArtifact)
-	//nolint:gosec // binaryPath is operator-controlled config, not user input
-	cmd := exec.CommandContext(ctx, s.binaryPath, args...)
+	cmd, cleanupScratch := s.newScanCmd(ctx, args)
+	defer cleanupScratch()
 	output, err := cmd.Output()
 	if err != nil {
 		return scanner.ScanResult{
@@ -446,8 +467,8 @@ func (s *TrivyScanner) scanLegacy(ctx context.Context, artifact scanner.Artifact
 		args = append(args, "--cache-dir", s.cacheDir)
 	}
 
-	//nolint:gosec // binaryPath is operator-controlled config, not user input
-	cmd := exec.CommandContext(ctx, s.binaryPath, args...)
+	cmd, cleanupScratch := s.newScanCmd(ctx, args)
+	defer cleanupScratch()
 	output, err := cmd.Output()
 	if err != nil {
 		return scanner.ScanResult{
@@ -578,17 +599,17 @@ type cdxLicense struct {
 }
 
 type cdxVuln struct {
-	ID        string       `json:"id"`
-	BOMRef    string       `json:"bom-ref"`
-	Ratings   []cdxRating  `json:"ratings"`
-	Advisors  []any        `json:"advisories"`
-	Affects   []cdxAffect  `json:"affects"`
-	Source    cdxVulnSrc   `json:"source"`
-	Analysis  cdxAnalysis  `json:"analysis"`
-	CwesArr   []int        `json:"cwes"`
-	CreatedAt string       `json:"created"`
-	Updated   string       `json:"updated"`
-	Descrip   string       `json:"description"`
+	ID        string      `json:"id"`
+	BOMRef    string      `json:"bom-ref"`
+	Ratings   []cdxRating `json:"ratings"`
+	Advisors  []any       `json:"advisories"`
+	Affects   []cdxAffect `json:"affects"`
+	Source    cdxVulnSrc  `json:"source"`
+	Analysis  cdxAnalysis `json:"analysis"`
+	CwesArr   []int       `json:"cwes"`
+	CreatedAt string      `json:"created"`
+	Updated   string      `json:"updated"`
+	Descrip   string      `json:"description"`
 }
 
 type cdxRating struct {
@@ -730,4 +751,3 @@ func firstNonEmpty(parts ...string) string {
 	}
 	return ""
 }
-

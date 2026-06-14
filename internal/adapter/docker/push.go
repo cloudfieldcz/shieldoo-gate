@@ -115,8 +115,11 @@ func (ph *pushHandler) handleBlobUploadComplete(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Store blob.
-	if err := ph.blobStore.Put(digest, body); err != nil {
+	// Store blob with a context detached from the client request so a client
+	// disconnect mid-PUT does not abort the durable write.
+	putCtx, cancel := adapter.PipelineContextFrom(r.Context())
+	defer cancel()
+	if err := ph.blobStore.Put(putCtx, digest, body); err != nil {
 		log.Error().Err(err).Str("digest", digest).Msg("docker push: failed to store blob")
 		http.Error(w, "failed to store blob", http.StatusInternalServerError)
 		return
@@ -129,11 +132,9 @@ func (ph *pushHandler) handleBlobUploadComplete(w http.ResponseWriter, r *http.R
 
 // handleBlobHead handles HEAD /v2/{name}/blobs/{digest}
 func (ph *pushHandler) handleBlobHead(w http.ResponseWriter, r *http.Request, digest string) {
-	if ph.blobStore.Exists(digest) {
-		size, err := ph.blobStore.GetSize(digest)
-		if err == nil {
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", size))
-		}
+	size, err := ph.blobStore.Stat(r.Context(), digest)
+	if err == nil {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", size))
 		w.Header().Set("Docker-Content-Digest", digest)
 		w.WriteHeader(http.StatusOK)
 		return

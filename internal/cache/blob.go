@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"errors"
+	"io"
 )
 
 // BlobStore is a content-agnostic blob storage interface used for artifacts
@@ -24,6 +25,14 @@ type BlobStore interface {
 	// DeleteBlob removes the blob at path. It is NOT an error if the blob
 	// does not exist — the post-condition is "not present".
 	DeleteBlob(ctx context.Context, path string) error
+
+	// StatBlob returns the size of the blob at path without transferring its
+	// body. Returns ErrBlobNotFound if absent.
+	StatBlob(ctx context.Context, path string) (int64, error)
+
+	// GetBlobStream returns a streaming reader for the blob at path plus its
+	// size. The caller must Close the reader. Returns ErrBlobNotFound if absent.
+	GetBlobStream(ctx context.Context, path string) (io.ReadCloser, int64, error)
 }
 
 // ErrBlobNotFound is returned by BlobStore.GetBlob when the requested path

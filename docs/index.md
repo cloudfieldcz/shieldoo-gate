@@ -12,7 +12,7 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
 
 - [Architecture](architecture.md) — component overview, request flow, startup sequence, concurrency model
 - [Data Model](data-model.md) — database schema, Go structs, table relationships, migrations
-- [Scanners](scanners.md) — scan engine, built-in and external scanners, aggregation, threat feed
+- [Scanners](scanners.md) — scan engine, built-in and external scanners, aggregation, threat feed, [scratch cleanup / temp janitor](scanners.md#scratch-cleanup-temp-janitor)
 - [SBOM Export](sbom.md) — per-project CycloneDX 1.5 SBOM download (`GET /api/v1/projects/{id}/sbom`)
   - [Version-Diff Scanner](scanners/version-diff.md) — AI-driven cross-version semantic analysis (replaces v1.x heuristic, see [ADR-005](adr/ADR-005-ai-driven-version-diff.md))
 - [Protocol Adapters](adapters.md) — PyPI, npm, NuGet, Docker, Maven, RubyGems, Go Modules proxy implementations and routing
@@ -26,7 +26,7 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
 
 - [API Reference](api/) — OpenAPI 3.1 spec for the REST API
 - [`shdg` CLI](cli/shdg.md) — push CycloneDX SBOMs to the vulnerability-scan API from CI
-- [Architecture Decision Records](adr/) — ADR-001 through ADR-008 (latest: [ADR-008 — license overrides per-project](adr/ADR-008-license-overrides-per-project.md))
+- [Architecture Decision Records](adr/) — ADR-001 through ADR-009 (latest: [ADR-009 — durable storage for Docker push blobs](adr/ADR-009-docker-push-durable-storage.md))
 - [Planned Features](features/index.md) — phased roadmap with 15 proposed features across enterprise foundation, advanced detection, compliance, developer experience, and advanced deployment
 
 ## Architecture

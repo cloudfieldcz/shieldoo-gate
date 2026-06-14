@@ -20,6 +20,7 @@ source "${SCRIPT_DIR}/test_npm.sh"
 source "${SCRIPT_DIR}/test_nuget.sh"
 source "${SCRIPT_DIR}/test_docker.sh"
 source "${SCRIPT_DIR}/test_docker_registry.sh"
+source "${SCRIPT_DIR}/test_docker_push_durable.sh"
 source "${SCRIPT_DIR}/test_maven.sh"
 source "${SCRIPT_DIR}/test_rubygems.sh"
 source "${SCRIPT_DIR}/test_gomod.sh"
@@ -127,6 +128,7 @@ test_npm
 test_nuget
 test_docker
 test_docker_registry
+test_docker_push_durable
 test_maven
 test_rubygems
 test_gomod

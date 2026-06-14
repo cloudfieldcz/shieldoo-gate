@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,7 +13,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -52,11 +52,13 @@ type DockerAdapter struct {
 }
 
 // NewDockerAdapter creates and wires a DockerAdapter.
-// If cfg.Push.Enabled, automatically initializes push support with a
-// BlobStore at os.TempDir()/shieldoo-gate-blobs.
+// If cfg.Push.Enabled, push support is initialized with a durable BlobStore over
+// the supplied blobBackend (the runtime's configured storage target) under the
+// "docker-push" key namespace — NOT a /tmp directory.
 func NewDockerAdapter(
 	db *config.GateDB,
 	cacheStore cache.CacheStore,
+	blobBackend cache.BlobStore,
 	scanEngine *scanner.Engine,
 	policyEngine *policy.Engine,
 	cfg config.DockerUpstreamConfig,
@@ -73,8 +75,7 @@ func NewDockerAdapter(
 		tokenExch:  newTokenExchanger(httpClient),
 	}
 	if cfg.Push.Enabled {
-		blobPath := filepath.Join(os.TempDir(), "shieldoo-gate-blobs")
-		a.blobStore = NewBlobStore(blobPath)
+		a.blobStore = NewBlobStore(blobBackend, "docker-push")
 		a.pushHandler = newPushHandler(a.blobStore)
 	}
 	a.router = a.buildRouter()
@@ -229,7 +230,7 @@ func (a *DockerAdapter) handleV2Wildcard(w http.ResponseWriter, r *http.Request)
 		}
 		// For internal namespaces, serve blobs from BlobStore.
 		if a.pushHandler != nil && a.cfg.Push.Enabled && a.resolver.IsPushAllowed(name) {
-			if a.serveInternalBlob(w, r, digest) {
+			if a.serveInternalBlob(w, r, name, digest) {
 				return
 			}
 		}
@@ -418,8 +419,11 @@ func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Store manifest as blob.
-	if err := a.pushHandler.blobStore.Put(manifestDigest, body); err != nil {
+	// Store manifest as blob (detached context: manifest persistence must survive
+	// client disconnect, like the scan below).
+	mctx, mcancel := adapter.PipelineContextFrom(r.Context())
+	defer mcancel()
+	if err := a.pushHandler.blobStore.Put(mctx, manifestDigest, body); err != nil {
 		log.Error().Err(err).Str("digest", manifestDigest).Msg("docker push: failed to store manifest blob")
 		http.Error(w, "failed to store manifest", http.StatusInternalServerError)
 		return
@@ -510,6 +514,7 @@ func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request
 			Reason:     policyResult.Reason,
 		})
 		_ = UpsertTag(a.db, repo.ID, ref, manifestDigest, artifactID)
+		a.recordManifestBlobRefs(repo.ID, artifactID, manifestDigest, body)
 
 		w.Header().Set("X-Shieldoo-Warning", "MEDIUM vulnerability detected; see admin dashboard for details")
 		w.Header().Set("Docker-Content-Digest", manifestDigest)
@@ -521,10 +526,23 @@ func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request
 	// Allow — persist artifact as clean and create/update tag.
 	_ = a.persistArtifact(artifactID, scanArtifact, hex.EncodeToString(h[:]), body, model.StatusClean, "", nil, scanResults)
 	_ = UpsertTag(a.db, repo.ID, ref, manifestDigest, artifactID)
+	a.recordManifestBlobRefs(repo.ID, artifactID, manifestDigest, body)
 
 	w.Header().Set("Docker-Content-Digest", manifestDigest)
 	w.Header().Set("Location", fmt.Sprintf("/v2/%s/manifests/%s", name, ref))
 	w.WriteHeader(http.StatusCreated)
+}
+
+// serveBackendTimeout bounds blobstore reads on the serve path so a slow or hung
+// backend cannot pin a pull request open indefinitely.
+const serveBackendTimeout = 60 * time.Second
+
+// classifyServeError decides how a blobstore read error on a KNOWN internal tag
+// is surfaced. Genuine absence may legitimately fall through to upstream; any
+// other (transport/backend) error must fail closed — never serve unscanned
+// upstream content for a name:ref that has an internal image.
+func classifyServeError(err error) (fallThrough bool) {
+	return errors.Is(err, cache.ErrBlobNotFound)
 }
 
 // serveInternalManifest tries to serve a manifest for an internally-pushed image.
@@ -564,10 +582,19 @@ func (a *DockerAdapter) serveInternalManifest(w http.ResponseWriter, r *http.Req
 	// Fetch manifest from BlobStore.
 	// Note: BlobStore is content-addressable (digest-keyed), so integrity
 	// is inherent — the digest IS the content hash. No separate SHA256 check needed.
-	manifestBytes, err := a.pushHandler.blobStore.Get(tag.ManifestDigest)
+	// The tag exists (GetTag above succeeded), so only genuine absence may fall
+	// through; any backend/transport error must fail closed.
+	mctx, mcancel := context.WithTimeout(r.Context(), serveBackendTimeout)
+	defer mcancel()
+	manifestBytes, err := a.pushHandler.blobStore.Get(mctx, tag.ManifestDigest)
 	if err != nil {
-		log.Debug().Err(err).Str("digest", tag.ManifestDigest).Msg("docker: internal manifest not in blobstore, falling through")
-		return false
+		if classifyServeError(err) {
+			log.Debug().Err(err).Str("digest", tag.ManifestDigest).Msg("docker: internal manifest absent, falling through")
+			return false
+		}
+		log.Error().Err(err).Str("digest", tag.ManifestDigest).Msg("docker: backend error serving internal manifest, failing closed")
+		http.Error(w, "internal storage error", http.StatusServiceUnavailable)
+		return true
 	}
 
 	log.Info().Str("artifact", artifactID).Str("digest", tag.ManifestDigest).Msg("docker: serving internal manifest from blobstore")
@@ -586,18 +613,51 @@ func (a *DockerAdapter) serveInternalManifest(w http.ResponseWriter, r *http.Req
 	return true
 }
 
-// serveInternalBlob tries to serve a blob from the BlobStore for internally-pushed images.
-// Returns true if the blob was served, false to fall through to upstream.
-func (a *DockerAdapter) serveInternalBlob(w http.ResponseWriter, _ *http.Request, digest string) bool {
-	data, err := a.pushHandler.blobStore.Get(digest)
+// serveInternalBlob serves a pushed layer/config blob by digest, gated by the
+// docker_blob_refs table: a blob is servable only if referenced by a
+// non-quarantined manifest in this internal repo. Returns true if it handled the
+// response (served, 404, or 503).
+func (a *DockerAdapter) serveInternalBlob(w http.ResponseWriter, r *http.Request, name, digest string) bool {
+	repo, err := GetRepository(a.db, "", name) // read-only lookup, no INSERT
 	if err != nil {
-		return false
+		if errors.Is(err, sql.ErrNoRows) {
+			return false // not an internal repo — let normal resolution proceed
+		}
+		log.Error().Err(err).Str("name", name).Msg("docker: repo lookup failed, failing closed")
+		http.Error(w, "internal storage error", http.StatusServiceUnavailable)
+		return true
 	}
+	servable, err := BlobServable(r.Context(), a.db, repo.ID, digest)
+	if err != nil {
+		log.Error().Err(err).Str("digest", digest).Msg("docker: blob authz check failed, failing closed")
+		http.Error(w, "internal storage error", http.StatusServiceUnavailable)
+		return true
+	}
+	if !servable {
+		// Known internal repo but blob not referenced by a clean manifest
+		// (foreign, or belongs to a quarantined image): deny explicitly. Never
+		// fall through to upstream for an internal name.
+		http.NotFound(w, r)
+		return true
+	}
+	bctx, bcancel := context.WithTimeout(r.Context(), serveBackendTimeout)
+	defer bcancel()
+	rc, size, err := a.pushHandler.blobStore.GetStream(bctx, digest)
+	if err != nil {
+		if classifyServeError(err) {
+			http.NotFound(w, r) // referenced but bytes missing → 404, not upstream
+			return true
+		}
+		log.Error().Err(err).Str("digest", digest).Msg("docker: backend error serving internal blob, failing closed")
+		http.Error(w, "internal storage error", http.StatusServiceUnavailable)
+		return true
+	}
+	defer rc.Close()
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Docker-Content-Digest", digest)
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", size))
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
+	_, _ = io.Copy(w, rc)
 	return true
 }
 

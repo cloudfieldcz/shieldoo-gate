@@ -42,7 +42,7 @@ func setupTestDocker(t *testing.T, upstreamHandler http.HandlerFunc) (*docker.Do
 	cfg := config.DockerUpstreamConfig{
 		DefaultRegistry: upstream.URL,
 	}
-	a := docker.NewDockerAdapter(db, cacheStore, scanEngine, policyEngine, cfg)
+	a := docker.NewDockerAdapter(db, cacheStore, cacheStore, scanEngine, policyEngine, cfg)
 	return a, upstream, db, cacheStore
 }
 
@@ -77,7 +77,7 @@ func TestDockerAdapter_V2Check_NoUpstream_StillReturnsHeader(t *testing.T) {
 	cfg := config.DockerUpstreamConfig{
 		DefaultRegistry: "http://does-not-exist.invalid",
 	}
-	a := docker.NewDockerAdapter(db, cacheStore, scanEngine, policyEngine, cfg)
+	a := docker.NewDockerAdapter(db, cacheStore, cacheStore, scanEngine, policyEngine, cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/v2/", nil)
 	w := httptest.NewRecorder()
@@ -248,7 +248,7 @@ func setupTestDockerMultiUpstream(t *testing.T, defaultHandler, ghcrHandler http
 			{Host: "ghcr.io", URL: ghcrUpstream.URL},
 		},
 	}
-	return docker.NewDockerAdapter(db, cacheStore, scanEngine, policyEngine, cfg)
+	return docker.NewDockerAdapter(db, cacheStore, cacheStore, scanEngine, policyEngine, cfg)
 }
 
 func TestDockerAdapter_AllowedRegistry_BlobRoutesToCorrectUpstream(t *testing.T) {

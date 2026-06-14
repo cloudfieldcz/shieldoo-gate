@@ -56,6 +56,40 @@ func (s *AzureBlobStore) GetBlob(ctx context.Context, path string) ([]byte, erro
 	return io.ReadAll(resp.Body)
 }
 
+// StatBlob returns the blob size via GetProperties (no body transfer).
+func (s *AzureBlobStore) StatBlob(ctx context.Context, path string) (int64, error) {
+	name := s.blobName(path)
+	blobClient := s.client.ServiceClient().NewContainerClient(s.containerName).NewBlobClient(name)
+	props, err := blobClient.GetProperties(ctx, nil)
+	if err != nil {
+		if bloberror.HasCode(err, bloberror.BlobNotFound) {
+			return 0, cache.ErrBlobNotFound
+		}
+		return 0, fmt.Errorf("azure blob: stat %s: %w", name, err)
+	}
+	if props.ContentLength == nil {
+		return 0, nil
+	}
+	return *props.ContentLength, nil
+}
+
+// GetBlobStream returns a streaming reader for the blob and its size.
+func (s *AzureBlobStore) GetBlobStream(ctx context.Context, path string) (io.ReadCloser, int64, error) {
+	name := s.blobName(path)
+	resp, err := s.client.DownloadStream(ctx, s.containerName, name, nil)
+	if err != nil {
+		if bloberror.HasCode(err, bloberror.BlobNotFound) {
+			return nil, 0, cache.ErrBlobNotFound
+		}
+		return nil, 0, fmt.Errorf("azure blob: get %s: %w", name, err)
+	}
+	var size int64
+	if resp.ContentLength != nil {
+		size = *resp.ContentLength
+	}
+	return resp.Body, size, nil
+}
+
 // DeleteBlob removes {container}/{prefix}/{path}.
 func (s *AzureBlobStore) DeleteBlob(ctx context.Context, path string) error {
 	name := s.blobName(path)

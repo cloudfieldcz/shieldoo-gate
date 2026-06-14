@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -22,7 +23,6 @@ import (
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/docker"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/gomod"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/maven"
-	"github.com/cloudfieldcz/shieldoo-gate/internal/maven/effectivepom"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/npm"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/nuget"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/pypi"
@@ -31,31 +31,34 @@ import (
 	"github.com/cloudfieldcz/shieldoo-gate/internal/api"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/auth"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/cache"
-	"github.com/cloudfieldcz/shieldoo-gate/internal/cache/local"
 	azureblobcache "github.com/cloudfieldcz/shieldoo-gate/internal/cache/azureblob"
 	gcscache "github.com/cloudfieldcz/shieldoo-gate/internal/cache/gcs"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/cache/local"
 	s3cache "github.com/cloudfieldcz/shieldoo-gate/internal/cache/s3"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
-	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/license"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/maven/effectivepom"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/policy"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/project"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/sbom"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
-	"github.com/cloudfieldcz/shieldoo-gate/internal/scheduler"
-	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner/builtin"
 	aiscanner "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/ai"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner/builtin"
 	guarddog "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/guarddog"
 	osvscanner "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/osv"
-	sandboxscanner "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/sandbox"
-	trivyscanner "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/trivy"
 	reputationscanner "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/reputation"
+	sandboxscanner "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/sandbox"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner/tmpjanitor"
+	trivyscanner "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/trivy"
 	versiondiff "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/versiondiff"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/scheduler"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/threatfeed"
 )
 
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to configuration file")
+	migratePushBlobs := flag.Bool("migrate-push-blobs", false, "migrate legacy /tmp push blobs to the durable backend, then exit")
 	flag.Parse()
 
 	// Load config
@@ -138,6 +141,42 @@ func main() {
 		blobStore = store
 	default:
 		log.Fatal().Str("backend", cfg.Cache.Backend).Msg("unknown cache backend")
+	}
+
+	// Durable-backend contract: Docker push blobs must NOT live under /tmp, or a
+	// reboot/restart silently loses pushed images. Fail fast at startup rather than
+	// discover the loss later.
+	if cfg.Upstreams.Docker.Push.Enabled {
+		if cfg.Cache.Backend == "local" || cfg.Cache.Backend == "" {
+			if cfg.Cache.Local.Path == "" || pathUnderTemp(cfg.Cache.Local.Path) {
+				log.Fatal().Msg("docker push is enabled but cache.local.path is unset or under /tmp; configure a persistent data dir or a remote backend")
+			}
+		}
+	}
+
+	// One-shot push-blob migration: move legacy /tmp blobs into the durable backend
+	// and exit. Run by an operator once after deploying durable storage.
+	legacyPushDir := filepath.Join(os.TempDir(), "shieldoo-gate-blobs")
+	if *migratePushBlobs {
+		dst := docker.NewBlobStore(blobStore, "docker-push")
+		sum, err := docker.MigratePushBlobs(context.Background(), docker.MigrateConfig{
+			LegacyDir: legacyPushDir,
+			Dest:      dst,
+		})
+		if err != nil {
+			log.Fatal().Err(err).Msg("push blob migration failed")
+		}
+		log.Info().Int("migrated", sum.Migrated).Int("failed", sum.Failed).
+			Int64("bytes", sum.Bytes).Msg("push blob migration finished; exiting")
+		if sum.Failed > 0 {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	// Normal startup: warn (do not migrate) if legacy data remains.
+	if entries, err := os.ReadDir(filepath.Join(legacyPushDir, "blobs")); err == nil && len(entries) > 0 {
+		log.Warn().Str("dir", legacyPushDir).
+			Msg("legacy push blobs found in /tmp; run with -migrate-push-blobs to move them to durable storage")
 	}
 
 	// One-time backfill for docker_manifest_meta. Runs after cache init because
@@ -446,14 +485,14 @@ func main() {
 	pypiAdapter := pypi.NewPyPIAdapter(db, cacheStore, scanEngine, policyEngine, pypiUpstream, tagMutCfg)
 	npmAdapter := npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine, npmUpstream, tagMutCfg)
 	nugetAdapter := nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, nugetUpstream, tagMutCfg)
-	dockerAdapter := docker.NewDockerAdapter(db, cacheStore, scanEngine, policyEngine, cfg.Upstreams.Docker)
+	dockerAdapter := docker.NewDockerAdapter(db, cacheStore, blobStore, scanEngine, policyEngine, cfg.Upstreams.Docker)
 	// Init effective-POM resolver for Maven license enrichment (if enabled).
 	var pomResolver *effectivepom.Resolver
 	if cfg.Upstreams.MavenResolver.Enabled {
 		pomResolverCfg := effectivepom.Config{
-			Enabled:         true,
-			CacheSize:       cfg.Upstreams.MavenResolver.CacheSize,
-			MaxDepth:        cfg.Upstreams.MavenResolver.MaxDepth,
+			Enabled:   true,
+			CacheSize: cfg.Upstreams.MavenResolver.CacheSize,
+			MaxDepth:  cfg.Upstreams.MavenResolver.MaxDepth,
 		}
 		if d, err := time.ParseDuration(cfg.Upstreams.MavenResolver.CacheTTL); err == nil {
 			pomResolverCfg.CacheTTL = d
@@ -697,6 +736,30 @@ func main() {
 	scanResultsRetention.Start()
 	defer scanResultsRetention.Stop()
 
+	// Start scratch temp janitor when Trivy is enabled (Trivy is the main /tmp
+	// scratch producer). Backstops the hard-kill leak the per-scan defer cannot
+	// cover — see docs/scanners.md "Scratch cleanup" and the plan. maxAge floors
+	// at 1h and scales to 5× the scan timeout so an in-flight scan's scratch is
+	// always too fresh to delete. Denylist guards the gRPC socket and the legacy
+	// /tmp push blob store (shieldoo-gate-blobs, pending -migrate-push-blobs).
+	if cfg.Scanners.Trivy.Enabled {
+		janitorMaxAge := time.Hour
+		if five := 5 * scanTimeout; five > janitorMaxAge {
+			janitorMaxAge = five
+		}
+		bridgeSocket := cfg.Scanners.GuardDog.BridgeSocket
+		if bridgeSocket == "" {
+			bridgeSocket = "/tmp/shieldoo-bridge.sock"
+		}
+		janitor := tmpjanitor.New(tmpjanitor.Config{
+			Dir:      os.TempDir(),
+			MaxAge:   janitorMaxAge,
+			Denylist: []string{"shieldoo-gate-blobs", filepath.Base(bridgeSocket)},
+		})
+		go janitor.Run(ctx)
+		log.Info().Dur("max_age", janitorMaxAge).Msg("scratch temp janitor enabled")
+	}
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
@@ -765,6 +828,17 @@ func parseDuration(s string, fallbackDur time.Duration) time.Duration {
 		return fallbackDur
 	}
 	return d
+}
+
+// pathUnderTemp reports whether p is os.TempDir() or a descendant of it. Uses
+// component-wise containment (filepath.Rel) so a sibling like /tmpdata is NOT
+// wrongly flagged the way a naive string-prefix check would.
+func pathUnderTemp(p string) bool {
+	rel, err := filepath.Rel(filepath.Clean(os.TempDir()), filepath.Clean(p))
+	if err != nil {
+		return false
+	}
+	return rel == "." || (!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != "..")
 }
 
 // fallback returns val if non-empty, otherwise defaultVal.
