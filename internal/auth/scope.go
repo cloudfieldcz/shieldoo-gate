@@ -46,20 +46,72 @@ func HasScope(ctx context.Context, scope string) bool {
 	return false
 }
 
-// RequireScope returns an http middleware that 403s any request whose context does
-// not carry scope. Global-super-token requests always pass.
+// scopeSatisfies reports whether the held scope list satisfies a required scope.
+// The wildcard "*" (global super-token) satisfies any requirement, an exact match
+// satisfies, and admin:write implies admin:read (a writer can always read). No
+// other implications exist — proxy:fetch, scan:upload, and admin are orthogonal
+// least-privilege roles.
+func scopeSatisfies(held []string, required string) bool {
+	for _, s := range held {
+		switch {
+		case s == "*":
+			return true
+		case s == required:
+			return true
+		case required == model.ScopeAdminRead && s == model.ScopeAdminWrite:
+			return true
+		}
+	}
+	return false
+}
+
+// RequireScope returns an http middleware that 403s any request whose held scopes
+// do not satisfy scope. Global-super-token ("*") requests always pass, and
+// admin:write satisfies an admin:read requirement (see scopeSatisfies).
 func RequireScope(scope string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if HasScope(r.Context(), "*") || HasScope(r.Context(), scope) {
+			if scopeSatisfies(ScopesFromContext(r.Context()), scope) {
 				next.ServeHTTP(w, r)
 				return
 			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"error":"forbidden","message":"missing scope ` + scope + `"}`))
+			writeForbidden(w, scope)
 		})
 	}
+}
+
+// RequireScopeByMethod returns middleware that derives the required admin scope
+// from the HTTP method: GET/HEAD/OPTIONS require admin:read, every other verb
+// requires admin:write.
+//
+// The rule is about the *authorization class*, NOT literal statelessness: a GET
+// may still perform security bookkeeping with side effects — e.g. GET …/sbom
+// recomputes the SBOM SHA-256 and, on mismatch, marks integrity_violated and
+// writes an sbom_integrity_violation audit row (Security Invariant 7). Those
+// reads correctly require only admin:read; do not "fix" that UPDATE away to
+// satisfy a naive read-only reading of this comment.
+func RequireScopeByMethod() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			required := model.ScopeAdminWrite
+			switch r.Method {
+			case http.MethodGet, http.MethodHead, http.MethodOptions:
+				required = model.ScopeAdminRead
+			}
+			if scopeSatisfies(ScopesFromContext(r.Context()), required) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			writeForbidden(w, required)
+		})
+	}
+}
+
+// writeForbidden emits the canonical 403 JSON body naming the missing scope.
+func writeForbidden(w http.ResponseWriter, scope string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.Write([]byte(`{"error":"forbidden","message":"missing scope ` + scope + `"}`))
 }
 
 // ScopesFromAPIKey returns the canonical scope list for an APIKey, defaulting to

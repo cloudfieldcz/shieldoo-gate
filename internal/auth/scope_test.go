@@ -66,6 +66,107 @@ func TestRequireScope_Forbidden(t *testing.T) {
 	}
 }
 
+func TestScopeSatisfies_WriteImpliesRead(t *testing.T) {
+	if !scopeSatisfies([]string{"admin:write"}, "admin:read") {
+		t.Error("admin:write should satisfy an admin:read requirement")
+	}
+}
+
+func TestScopeSatisfies_ReadDoesNotImplyWrite(t *testing.T) {
+	if scopeSatisfies([]string{"admin:read"}, "admin:write") {
+		t.Error("admin:read must NOT satisfy an admin:write requirement")
+	}
+}
+
+func TestScopeSatisfies_Wildcard(t *testing.T) {
+	if !scopeSatisfies([]string{"*"}, "admin:write") {
+		t.Error("wildcard should satisfy any requirement")
+	}
+}
+
+func TestScopeSatisfies_Exact(t *testing.T) {
+	if !scopeSatisfies([]string{"proxy:fetch"}, "proxy:fetch") {
+		t.Error("exact match should satisfy")
+	}
+	if scopeSatisfies([]string{"proxy:fetch"}, "admin:read") {
+		t.Error("proxy:fetch is unrelated to admin:read")
+	}
+}
+
+func TestRequireScope_WriteImpliesRead(t *testing.T) {
+	mw := RequireScope("admin:read")
+	called := false
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest("GET", "/", nil)
+	req = req.WithContext(WithScopes(req.Context(), []string{"admin:write"}))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if !called || rr.Code != http.StatusOK {
+		t.Errorf("admin:write should pass admin:read check; got code %d", rr.Code)
+	}
+}
+
+func TestRequireScopeByMethod_ReadVerbAllowsReadScope(t *testing.T) {
+	handler := RequireScopeByMethod()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	for _, method := range []string{"GET", "HEAD", "OPTIONS"} {
+		req := httptest.NewRequest(method, "/", nil)
+		req = req.WithContext(WithScopes(req.Context(), []string{"admin:read"}))
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Errorf("%s with admin:read should be 200, got %d", method, rr.Code)
+		}
+	}
+}
+
+func TestRequireScopeByMethod_MutatingVerbRejectsReadScope(t *testing.T) {
+	handler := RequireScopeByMethod()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	for _, method := range []string{"POST", "PUT", "PATCH", "DELETE"} {
+		req := httptest.NewRequest(method, "/", nil)
+		req = req.WithContext(WithScopes(req.Context(), []string{"admin:read"}))
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusForbidden {
+			t.Errorf("%s with only admin:read should be 403, got %d", method, rr.Code)
+		}
+	}
+}
+
+func TestRequireScopeByMethod_MutatingVerbAllowsWriteScope(t *testing.T) {
+	handler := RequireScopeByMethod()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	for _, method := range []string{"POST", "PUT", "PATCH", "DELETE"} {
+		req := httptest.NewRequest(method, "/", nil)
+		req = req.WithContext(WithScopes(req.Context(), []string{"admin:write"}))
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Errorf("%s with admin:write should be 200, got %d", method, rr.Code)
+		}
+	}
+}
+
+func TestRequireScopeByMethod_GlobalTokenAllowsEverything(t *testing.T) {
+	handler := RequireScopeByMethod()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest("DELETE", "/", nil)
+	req = req.WithContext(WithScopes(req.Context(), []string{"*"}))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Errorf("global token should pass any verb; got %d", rr.Code)
+	}
+}
+
 func TestScopesFromAPIKey_Default(t *testing.T) {
 	scopes := ScopesFromAPIKey(&model.APIKey{Scopes: ""})
 	if len(scopes) != 1 || scopes[0] != "proxy:fetch" {

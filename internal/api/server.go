@@ -35,8 +35,9 @@ type Server struct {
 	adminChain       *auth.AdminAuthChain
 	patMw            *auth.PATBearerMiddleware
 	authHandlers     *auth.AuthHandlers
-	authEnabled      bool
-	proxyAuthEnabled bool
+	authEnabled        bool
+	proxyAuthEnabled   bool
+	adminScopeEnforced bool
 	publicURLs       config.PublicURLsConfig
 	onRescanQueued   func()
 	projectSvc       project.Service
@@ -97,6 +98,16 @@ func (s *Server) SetRescanNotifier(fn func()) {
 // are registered only when both OIDC auth and proxy auth are enabled.
 func (s *Server) SetProxyAuth(proxyAuthEnabled, authEnabled bool) {
 	s.proxyAuthEnabled = proxyAuthEnabled && authEnabled
+}
+
+// SetAdminScopeEnforcement enables method-based scope authorization on the admin
+// API. It must be true only when OIDC auth is enabled — the mode where the admin
+// API authenticates users and where PATs exist. It is deliberately decoupled
+// from adminChain, which main.go wires unconditionally ("always-on" PAT bearer);
+// gating on adminChain would 403 every unauthenticated request in no-auth or
+// proxy-auth-only mode, where the admin API is intentionally not OIDC-protected.
+func (s *Server) SetAdminScopeEnforcement(enabled bool) {
+	s.adminScopeEnforced = enabled
 }
 
 // SetPublicURLs configures the public-facing URLs for each ecosystem proxy.
@@ -169,6 +180,16 @@ func (s *Server) Routes() chi.Router {
 		}
 
 		r.Route("/api/v1", func(r chi.Router) {
+			// Authorization: derive the required admin scope from the HTTP method
+			// (GET/HEAD/OPTIONS -> admin:read, mutations -> admin:write; admin:write
+			// implies admin:read). Enabled only when OIDC auth is on (see
+			// SetAdminScopeEnforcement); in no-auth / proxy-auth-only mode the admin
+			// API stays open. The scope sources are the auth chain: PAT scopes,
+			// OIDC-injected admin:read+write, or "*" for the global token.
+			if s.adminScopeEnforced {
+				r.Use(auth.RequireScopeByMethod())
+			}
+
 			// Artifacts
 			r.Get("/artifacts", s.handleListArtifacts)
 			r.Get("/artifacts/{id}", s.handleGetArtifact)

@@ -147,6 +147,31 @@ func TestMiddleware_UsernameIsNotKeyOwnerEmail(t *testing.T) {
 	assert.NotEqual(t, "owner@example.com", captured.Label)
 }
 
+func TestMiddleware_ScopesSurviveProjectResolution(t *testing.T) {
+	// Regression: WithScopes must be applied to the same ctx that is threaded
+	// past project.WithContext, so the downstream RequireScope("proxy:fetch")
+	// still sees the scope when project resolution is enabled.
+	db, svc := newProjectSvc(t, project.Config{Mode: project.ModeLazy})
+	plaintext := "sgw_fetch_proj"
+	_, err := db.CreateAPIKeyWithScopes(sha256Hex(plaintext), "pat", "dev@example.com", "proxy:fetch")
+	require.NoError(t, err)
+
+	mw := NewAPIKeyMiddleware(db, "").WithProjectService(svc)
+	defer mw.Stop()
+
+	handler := mw.Authenticate(RequireScope("proxy:fetch")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NotNil(t, project.FromContext(r.Context()), "project must still be resolved")
+		w.WriteHeader(http.StatusOK)
+	})))
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", basicAuthHeader("team-alpha", plaintext))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
 func TestMiddleware_GlobalToken_ProjectResolution(t *testing.T) {
 	db, svc := newProjectSvc(t, project.Config{Mode: project.ModeLazy})
 	mw := NewAPIKeyMiddleware(db, "gt-secret").WithProjectService(svc)

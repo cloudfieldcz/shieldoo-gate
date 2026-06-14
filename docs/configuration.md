@@ -725,11 +725,38 @@ The following routes enforce least-privilege scopes via `RequireScope`:
 | Route | Scope | Notes |
 |---|---|---|
 | `POST /api/v1/projects/{label}/components/{name}/scans` | `scan:upload` | CI ingestion; PAT-Bearer only. |
-| Admin reads (artifacts, vulnerabilities, audit, projects, …) | `admin:read` | OIDC sessions get this implicitly. |
-| Admin writes (overrides, ignores, deletes, rescan) | `admin:write` | OIDC sessions get this implicitly. |
-| Proxy Basic-auth (pip/npm/docker/…) | `proxy:fetch` | Default scope on legacy keys. |
+| Admin reads — `GET`/`HEAD`/`OPTIONS` on `/api/v1/*` | `admin:read` | Derived from HTTP method. OIDC sessions get this implicitly. |
+| Admin writes — `POST`/`PUT`/`PATCH`/`DELETE` on `/api/v1/*` | `admin:write` | Derived from HTTP method; `admin:write` implies `admin:read`. OIDC sessions get this implicitly. |
+| Proxy Basic-auth (pip/npm/docker/…) | `proxy:fetch` | Default scope on new and legacy keys. |
+
+Admin-API authorization is **method-based**: a single middleware on the
+`/api/v1` group maps the HTTP verb to the required scope (`GET`/`HEAD`/`OPTIONS`
+→ `admin:read`, everything else → `admin:write`). `admin:write` satisfies an
+`admin:read` requirement; no other scope implies another (`proxy:fetch`,
+`scan:upload`, and the admin scopes are independent least-privilege roles).
+Insufficient scope returns `403 {"error":"forbidden","message":"missing scope …"}`.
 
 The global super-token (`proxy_auth.global_token_env`) bypasses scope checks
 (it carries the `*` wildcard). Both authentication paths — Basic-auth proxy
 and Bearer-PAT admin — emit `super_token_used` audit rows when the global
 token authenticates a request.
+
+> **Breaking change (v1.2.0).** Scope enforcement is now wired on the proxy and
+> admin APIs (previously only `scan:upload` was checked). The two enforcement
+> points activate independently:
+> - **Proxy `proxy:fetch`** — active whenever `proxy_auth.enabled` is true.
+> - **Admin `admin:read`/`admin:write`** — active only when `auth.enabled`
+>   (OIDC) is true. That is the only mode where the admin API authenticates
+>   users and where PATs can be minted (the `/api/v1/api-keys` endpoints require
+>   `proxy_auth` **and** `auth`). In no-auth or proxy-auth-only (global-token)
+>   deployments the admin API behaves as before.
+>
+> After upgrade (OIDC-enabled deployments):
+> - A `proxy:fetch`-only PAT can no longer perform admin actions (it gets 403).
+> - A PAT without `proxy:fetch` can no longer pull packages through the proxy.
+> - **Find affected tokens** before upgrading by inspecting the audit log for
+>   admin-API activity keyed to a `pat:<hash>` identity that lacks an `admin:*`
+>   scope.
+> - **Remediate** by minting tokens with the right scopes: `proxy:fetch,admin:read`
+>   for a puller+viewer, `admin:write` for a full operator (implies `admin:read`).
+> - The global super-token and OIDC admin-UI sessions are unaffected.

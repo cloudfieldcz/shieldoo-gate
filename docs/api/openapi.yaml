@@ -4,7 +4,32 @@ info:
   description: |
     Administration and observability API for Shieldoo Gate — an open-source
     supply chain security proxy for Docker, PyPI, npm, NuGet, and more.
-  version: 1.1.0
+
+    ## Authorization scopes
+
+    Authentication establishes *who* you are; scopes decide *what* you may do.
+    Every credential carries a scope set:
+
+    - **PAT** (`Authorization: Bearer <token>` on the admin API, or the Basic-auth
+      password on the proxy) — scopes from the key's `scopes` column.
+    - **OIDC session** (cookie) — implicitly granted `admin:read,admin:write`
+      (a valid operator session is full admin; scopes are **not** read from the
+      JWT, they are injected by the auth chain).
+    - **Global super-token** — scope `*`, bypasses every check (always audited
+      via `super_token_used`).
+
+    Enforcement:
+
+    - **Admin API** (`/api/v1/*`): the required scope is derived from the HTTP
+      method — `GET`/`HEAD`/`OPTIONS` require `admin:read`; `POST`/`PUT`/`PATCH`/
+      `DELETE` require `admin:write`. `admin:write` implies `admin:read`.
+      Insufficient scope → **403** `{"error":"forbidden","message":"missing scope …"}`.
+    - **Proxy** (package pulls): require `proxy:fetch`.
+    - **Scan-upload**: requires `scan:upload`.
+
+    Scopes are orthogonal least-privilege roles: only `admin:write ⇒ admin:read`;
+    no other implication. A `proxy:fetch`-only token cannot perform admin actions.
+  version: 1.2.0
   license:
     name: Apache 2.0
     url: https://www.apache.org/licenses/LICENSE-2.0
@@ -1718,6 +1743,28 @@ paths:
         "503": { description: Drafter disabled or sidecar unreachable }
 
 components:
+  securitySchemes:
+    BearerPAT:
+      type: http
+      scheme: bearer
+      description: |
+        Personal access token. Scopes come from the key's `scopes` column.
+        Admin API requires `admin:read`/`admin:write` (method-derived);
+        scan-upload requires `scan:upload`. The global super-token (scope `*`)
+        is also accepted here.
+    CookieSession:
+      type: apiKey
+      in: cookie
+      name: shieldoo_session
+      description: |
+        OIDC session cookie. Implicitly granted `admin:read,admin:write`
+        (scopes are injected by the auth chain, not read from the JWT).
+    BasicPAT:
+      type: http
+      scheme: basic
+      description: |
+        Proxy authentication. Username = project label, password = PAT or global
+        token. Requires the `proxy:fetch` scope.
   parameters:
     artifactId:
       name: id

@@ -78,6 +78,7 @@ func (m *APIKeyMiddleware) Authenticate(next http.Handler) http.Handler {
 		var (
 			identity string // rate-limit key for project.Resolve
 			user     *UserInfo
+			scopes   []string // capability scopes placed in context for RequireScope
 		)
 
 		// 1. Check global token (constant-time comparison).
@@ -87,6 +88,7 @@ func (m *APIKeyMiddleware) Authenticate(next http.Handler) http.Handler {
 				Name:  "global-token",
 			}
 			identity = "global-token"
+			scopes = []string{"*"} // super-token bypasses every RequireScope check
 			if m.auditWriter != nil {
 				_ = m.auditWriter.WriteVulnEvent(r.Context(), model.AuditEntry{
 					EventType:    model.EventSuperTokenUsed,
@@ -114,9 +116,12 @@ func (m *APIKeyMiddleware) Authenticate(next http.Handler) http.Handler {
 				Name:  key.Name,
 			}
 			identity = hash
+			scopes = ScopesFromAPIKey(key)
 		}
 
-		ctx := ContextWithUser(r.Context(), user)
+		// Scopes are applied to the same ctx that is threaded past project
+		// resolution below, so downstream RequireScope("proxy:fetch") sees them.
+		ctx := WithScopes(ContextWithUser(r.Context(), user), scopes)
 
 		// 3. Resolve project from Basic auth username (if project service is wired).
 		if m.projectSvc != nil {

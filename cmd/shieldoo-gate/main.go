@@ -600,6 +600,14 @@ func main() {
 	// Always-on so CI tokens authenticate even when OIDC is disabled.
 	adminPATMw := auth.NewPATBearerMiddleware(db, globalToken, adminAudit)
 	apiServer.SetAdminAuthChain(auth.NewAdminAuthChain(adminPATMw, oidcMw), adminPATMw)
+	// Enforce admin-API scopes only when OIDC auth is enabled. That is the only
+	// mode where the admin API authenticates users (OIDC sessions / PAT bearer)
+	// and where PATs can exist at all — the /api/v1/api-keys endpoints are gated
+	// on proxy_auth && auth, so without OIDC no PAT can be minted to escalate.
+	// In no-auth or proxy-auth-only (global-token) mode the admin API is not
+	// OIDC-protected; enforcing scopes there would only 403 the open/dev path
+	// without adding security (the global token carries "*" regardless).
+	apiServer.SetAdminScopeEnforcement(cfg.Auth.Enabled)
 
 	host := cfg.Server.Host
 	if host == "" {
@@ -607,9 +615,12 @@ func main() {
 	}
 
 	// wrapProxy applies the API key middleware to a handler if proxy auth is enabled.
+	// Authenticate populates the request scopes; RequireScope("proxy:fetch") then
+	// rejects any token that lacks the proxy:fetch capability (the global "*" token
+	// always passes). Order matters: authenticate first, then authorize.
 	wrapProxy := func(h http.Handler) http.Handler {
 		if apiKeyMw != nil {
-			return apiKeyMw.Authenticate(h)
+			return apiKeyMw.Authenticate(auth.RequireScope("proxy:fetch")(h))
 		}
 		return h
 	}

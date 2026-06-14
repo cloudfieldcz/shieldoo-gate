@@ -144,6 +144,100 @@ func TestAPIKeyMiddleware_SetsUserContext(t *testing.T) {
 	assert.Equal(t, "ctx-key", capturedUser.Name)
 }
 
+func TestAPIKeyMiddleware_PAT_SetsScopesInContext(t *testing.T) {
+	db := setupTestDBForAuth(t)
+	plaintext := "sgw_scopedpat"
+	hash := sha256Hex(plaintext)
+	_, err := db.CreateAPIKeyWithScopes(hash, "scoped", "dev@example.com", "admin:read")
+	require.NoError(t, err)
+
+	mw := NewAPIKeyMiddleware(db, "")
+	defer mw.Stop()
+
+	var captured []string
+	handler := mw.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured = ScopesFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", basicAuthHeader("any", plaintext))
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	assert.Equal(t, []string{"admin:read"}, captured)
+}
+
+func TestAPIKeyMiddleware_GlobalToken_SetsWildcardScope(t *testing.T) {
+	db := setupTestDBForAuth(t)
+	mw := NewAPIKeyMiddleware(db, "global-secret")
+	defer mw.Stop()
+
+	var captured []string
+	handler := mw.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured = ScopesFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", basicAuthHeader("ci", "global-secret"))
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	assert.Equal(t, []string{"*"}, captured)
+}
+
+// proxyChain mirrors cmd/shieldoo-gate/main.go wrapProxy: authenticate, then
+// require proxy:fetch.
+func proxyChain(mw *APIKeyMiddleware) http.Handler {
+	return mw.Authenticate(RequireScope("proxy:fetch")(okHandler))
+}
+
+func TestProxyChain_ProxyFetchToken_Allows(t *testing.T) {
+	db := setupTestDBForAuth(t)
+	plaintext := "sgw_fetcher"
+	_, err := db.CreateAPIKeyWithScopes(sha256Hex(plaintext), "fetcher", "dev@example.com", "proxy:fetch")
+	require.NoError(t, err)
+
+	mw := NewAPIKeyMiddleware(db, "")
+	defer mw.Stop()
+
+	req := httptest.NewRequest("GET", "/simple/six/", nil)
+	req.Header.Set("Authorization", basicAuthHeader("any", plaintext))
+	rec := httptest.NewRecorder()
+	proxyChain(mw).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestProxyChain_AdminOnlyToken_Forbidden(t *testing.T) {
+	db := setupTestDBForAuth(t)
+	plaintext := "sgw_adminonly"
+	_, err := db.CreateAPIKeyWithScopes(sha256Hex(plaintext), "admin-only", "dev@example.com", "admin:read")
+	require.NoError(t, err)
+
+	mw := NewAPIKeyMiddleware(db, "")
+	defer mw.Stop()
+
+	req := httptest.NewRequest("GET", "/simple/six/", nil)
+	req.Header.Set("Authorization", basicAuthHeader("any", plaintext))
+	rec := httptest.NewRecorder()
+	proxyChain(mw).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code, "a token without proxy:fetch must not pull through the proxy")
+}
+
+func TestProxyChain_GlobalToken_Allows(t *testing.T) {
+	db := setupTestDBForAuth(t)
+	mw := NewAPIKeyMiddleware(db, "global-secret")
+	defer mw.Stop()
+
+	req := httptest.NewRequest("GET", "/simple/six/", nil)
+	req.Header.Set("Authorization", basicAuthHeader("ci", "global-secret"))
+	rec := httptest.NewRecorder()
+	proxyChain(mw).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code, "global token (*) must pass proxy:fetch")
+}
+
 func TestAPIKeyMiddleware_BearerSchemaIgnored(t *testing.T) {
 	db := setupTestDBForAuth(t)
 	mw := NewAPIKeyMiddleware(db, "token")
