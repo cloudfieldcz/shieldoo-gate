@@ -105,9 +105,25 @@ func (s *TrivyScanner) scanCycloneDX(ctx context.Context, artifact scanner.Artif
 	scanArtifact := artifact
 	scanArtifact.LocalPath = scanPath
 
+	// Isolate Trivy's internal temp files (analyzer scratch, blob cache, etc.)
+	// in a per-scan directory so they are cleaned up deterministically even if
+	// Trivy crashes or times out.
+	trivyTmp, err := os.MkdirTemp("", "shieldoo-trivy-scratch-*")
+	if err != nil {
+		return scanner.ScanResult{
+			Verdict:   scanner.VerdictClean,
+			ScannerID: s.Name(),
+			Duration:  time.Since(start),
+			ScannedAt: time.Now(),
+			Error:     fmt.Errorf("trivy scanner: creating scratch dir: %w", err),
+		}, nil
+	}
+	defer os.RemoveAll(trivyTmp)
+
 	args := s.buildCycloneDXArgs(scanArtifact)
 	//nolint:gosec // binaryPath is operator-controlled config, not user input
 	cmd := exec.CommandContext(ctx, s.binaryPath, args...)
+	cmd.Env = appendTMPDIR(os.Environ(), trivyTmp)
 	output, err := cmd.Output()
 	if err != nil {
 		return scanner.ScanResult{
@@ -446,8 +462,23 @@ func (s *TrivyScanner) scanLegacy(ctx context.Context, artifact scanner.Artifact
 		args = append(args, "--cache-dir", s.cacheDir)
 	}
 
+	// Isolate Trivy's internal temp files in a per-scan directory so they are
+	// cleaned up deterministically even if Trivy crashes or times out.
+	trivyTmp, err := os.MkdirTemp("", "shieldoo-trivy-scratch-*")
+	if err != nil {
+		return scanner.ScanResult{
+			Verdict:   scanner.VerdictClean,
+			ScannerID: s.Name(),
+			Duration:  time.Since(start),
+			ScannedAt: time.Now(),
+			Error:     fmt.Errorf("trivy scanner: creating scratch dir: %w", err),
+		}, nil
+	}
+	defer os.RemoveAll(trivyTmp)
+
 	//nolint:gosec // binaryPath is operator-controlled config, not user input
 	cmd := exec.CommandContext(ctx, s.binaryPath, args...)
+	cmd.Env = appendTMPDIR(os.Environ(), trivyTmp)
 	output, err := cmd.Output()
 	if err != nil {
 		return scanner.ScanResult{
@@ -729,5 +760,20 @@ func firstNonEmpty(parts ...string) string {
 		}
 	}
 	return ""
+}
+
+// appendTMPDIR returns a copy of env with TMPDIR set to dir, replacing any
+// existing TMPDIR entry. This ensures Trivy's internal temp files (analyzer
+// scratch dirs, blob cache, decompression buffers) land in a directory we
+// control and can clean up deterministically after the scan completes.
+func appendTMPDIR(env []string, dir string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, e := range env {
+		if strings.HasPrefix(e, "TMPDIR=") {
+			continue
+		}
+		out = append(out, e)
+	}
+	return append(out, "TMPDIR="+dir)
 }
 

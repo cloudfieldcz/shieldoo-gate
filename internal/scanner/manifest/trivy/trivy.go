@@ -104,8 +104,21 @@ func (s *TrivyManifestScanner) Scan(ctx context.Context, m manifest.Manifest) (m
 
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
+
+	// Isolate Trivy's internal temp files in a per-scan directory so they are
+	// cleaned up deterministically even if Trivy crashes or times out.
+	trivyTmp, err := os.MkdirTemp("", "shieldoo-trivy-manifest-scratch-*")
+	if err != nil {
+		out.Status = "error"
+		out.Duration = time.Since(start)
+		out.Error = fmt.Errorf("trivy sbom: creating scratch dir: %w", err)
+		return out, out.Error
+	}
+	defer os.RemoveAll(trivyTmp)
+
 	cmd := exec.CommandContext(ctx, s.binaryPath, "sbom", "--format", "json", "--quiet", sbomPath)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Env = appendTMPDIR(os.Environ(), trivyTmp)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -153,4 +166,17 @@ func (s *TrivyManifestScanner) Scan(ctx context.Context, m manifest.Manifest) (m
 	out.Status = "ok"
 	out.Duration = time.Since(start)
 	return out, nil
+}
+
+// appendTMPDIR returns a copy of env with TMPDIR set to dir, replacing any
+// existing TMPDIR entry.
+func appendTMPDIR(env []string, dir string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, e := range env {
+		if strings.HasPrefix(e, "TMPDIR=") {
+			continue
+		}
+		out = append(out, e)
+	}
+	return append(out, "TMPDIR="+dir)
 }

@@ -46,3 +46,19 @@ func TestTrivyScanner_HealthCheck_BinaryNotFound(t *testing.T) {
 }
 
 var _ scanner.Scanner = (*TrivyScanner)(nil)
+
+func TestAppendTMPDIR_AddsNew(t *testing.T) {
+	env := []string{"HOME=/home/user", "PATH=/usr/bin"}
+	result := appendTMPDIR(env, "/my/tmp")
+	assert.Contains(t, result, "HOME=/home/user")
+	assert.Contains(t, result, "PATH=/usr/bin")
+	assert.Contains(t, result, "TMPDIR=/my/tmp")
+}
+
+func TestAppendTMPDIR_ReplacesExisting(t *testing.T) {
+	env := []string{"HOME=/home/user", "TMPDIR=/old/tmp", "PATH=/usr/bin"}
+	result := appendTMPDIR(env, "/new/tmp")
+	assert.Contains(t, result, "TMPDIR=/new/tmp")
+	assert.NotContains(t, result, "TMPDIR=/old/tmp")
+	assert.Equal(t, len(env), len(result)) // same count (replaced, not added)
+}

@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import shutil
+import tempfile
 import time
 from concurrent import futures
 
@@ -73,17 +74,16 @@ class ScannerBridgeServicer(scanner_pb2_grpc.ScannerBridgeServicer):
     def ScanArtifact(self, request, context):
         start = time.time()
         try:
-            if request.ecosystem == "pypi":
-                results = self.pypi_scanner.scan_local(request.artifact_path)
-            elif request.ecosystem == "npm":
-                results = self.npm_scanner.scan_local(request.artifact_path)
-            else:
-                return scanner_pb2.ScanResponse(
-                    verdict="CLEAN",
-                    confidence=1.0,
-                    scanner_version=GUARDDOG_VERSION,
-                    duration_ms=int((time.time() - start) * 1000),
-                )
+            # Isolate GuardDog's internal temp files in a per-scan directory so
+            # they are cleaned up deterministically even if GuardDog crashes.
+            scan_tmp = tempfile.mkdtemp(prefix="shieldoo-guarddog-scratch-")
+            original_tmpdir = tempfile.tempdir
+            tempfile.tempdir = scan_tmp
+            try:
+                results = self._run_guarddog_scan(request)
+            finally:
+                tempfile.tempdir = original_tmpdir
+                shutil.rmtree(scan_tmp, ignore_errors=True)
 
             findings = []
             verdict = "CLEAN"
@@ -135,6 +135,15 @@ class ScannerBridgeServicer(scanner_pb2_grpc.ScannerBridgeServicer):
                 scanner_version=GUARDDOG_VERSION,
                 duration_ms=duration_ms,
             )
+
+    def _run_guarddog_scan(self, request):
+        """Execute the appropriate GuardDog scanner based on ecosystem."""
+        if request.ecosystem == "pypi":
+            return self.pypi_scanner.scan_local(request.artifact_path)
+        elif request.ecosystem == "npm":
+            return self.npm_scanner.scan_local(request.artifact_path)
+        else:
+            return {}
 
     def ScanArtifactAI(self, request, context):
         """AI-based security analysis of a package artifact."""
@@ -300,12 +309,7 @@ def serve():
     socket_dir = os.path.dirname(socket_path)
     os.makedirs(socket_dir, exist_ok=True)
 
-    # Startup sweep: remove any stale scratch files left by a previous unclean
-    # shutdown. Only the socket file should live in the socket directory; anything
-    # else is orphaned temporary data from a crashed scan.
-    _cleanup_stale_scratch(socket_dir, socket_path)
-
-    # Clean up stale socket
+    # Clean up stale socket from a previous unclean shutdown.
     if os.path.exists(socket_path):
         os.unlink(socket_path)
 
@@ -320,36 +324,6 @@ def serve():
     os.chmod(socket_path, 0o666)
     logger.info("Scanner bridge listening on %s", socket_path)
     server.wait_for_termination()
-
-
-def _cleanup_stale_scratch(socket_dir: str, socket_path: str):
-    """Remove stale scratch files/dirs from the socket directory.
-
-    After an unclean shutdown, temporary scan data may be orphaned in the
-    socket volume. This removes everything except the socket file itself.
-    """
-    try:
-        entries = os.listdir(socket_dir)
-    except OSError:
-        return
-
-    removed = 0
-    for entry in entries:
-        entry_path = os.path.join(socket_dir, entry)
-        # Never remove the socket itself.
-        if entry_path == socket_path:
-            continue
-        try:
-            if os.path.isdir(entry_path) and not os.path.islink(entry_path):
-                shutil.rmtree(entry_path, ignore_errors=True)
-            else:
-                os.unlink(entry_path)
-            removed += 1
-        except OSError as e:
-            logger.warning("startup sweep: failed to remove %s: %s", entry_path, e)
-
-    if removed:
-        logger.info("startup sweep: removed %d stale entries from %s", removed, socket_dir)
 
 
 if __name__ == "__main__":
