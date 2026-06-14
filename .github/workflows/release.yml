@@ -255,12 +255,21 @@ jobs:
           SHIELDOO_URL:   ${{ vars.SHIELDOO_URL }}
           SHIELDOO_TOKEN: ${{ secrets.SGW_TOKEN }}
         run: |
+          # Image scans gate on `critical`, not `high`. Container base-image OS
+          # packages (Debian/alpine: kernel headers, ncurses, perl, libssh2,
+          # mbedtls, …) produce a continuous stream of HIGH CVEs that usually
+          # have no upstream fix at release time (fixed_version empty), so gating
+          # releases on them blocks shipping through no fault of our code. High
+          # base-image CVEs are handled by periodic base-image bumps, not by
+          # release-blocking. CRITICALs still fail the build. The source-tree
+          # vuln-scan job above keeps `--fail-on high` — those are our own deps
+          # and are actionable.
           shdg scan \
             --project   shieldoo-gate \
             --component ${{ matrix.image.name }} \
             --image     ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image.ref }}:${{ needs.docker.outputs.version }} \
             --ecosystem docker \
-            --wait --fail-on high --timeout 15m
+            --wait --fail-on critical --timeout 15m
 
   release:
     name: GitHub release
