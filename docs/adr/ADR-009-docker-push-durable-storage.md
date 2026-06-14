@@ -57,6 +57,13 @@ durable:
 - Read-time integrity is intentionally not re-verified on the push-blob serve path
   (content-addressed keys make the digest the integrity guarantee); this diverges
   from Security Invariant #7, which governs SBOM reads.
+- The manifest `HEAD` path must serve internal images locally and must not leak an
+  upstream `401`/`403` for a push-allowed name — otherwise the docker push client's
+  manifest existence probe aborts the push. The initial implementation proxied
+  `HEAD` straight to upstream; this was fixed (mirror `GET`, map push-allowed
+  upstream auth errors to `404`). The durable-push e2e is harness-driven (HTTP push
+  API), so this real-client behavior is covered by unit tests in
+  `manifest_head_test.go` — a real `docker push`/`pull` e2e remains a follow-up.
 - Alternatives rejected: handler-direct `cache.BlobStore` calls (more churn, no
   digest-keying seam); write-through local cache + async promote (superseded by the
   read-through-cache follow-up).

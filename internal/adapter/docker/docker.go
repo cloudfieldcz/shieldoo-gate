@@ -345,6 +345,14 @@ func (a *DockerAdapter) handleV2WildcardHead(w http.ResponseWriter, r *http.Requ
 			})
 			return
 		}
+		// For internal (push-allowed) namespaces, mirror the GET path: serve the
+		// manifest HEAD from the durable store first. The docker push client issues
+		// a manifest HEAD as an existence probe, so an already-pushed image must be
+		// answered locally and never proxied upstream.
+		pushAllowed := a.pushHandler != nil && a.cfg.Push.Enabled && a.resolver.IsPushAllowed(name)
+		if pushAllowed && a.serveInternalManifestHead(w, r, name, ref) {
+			return
+		}
 		registry, imagePath, upstreamURL, err := a.resolver.Resolve(name)
 		if err != nil {
 			adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
@@ -353,7 +361,12 @@ func (a *DockerAdapter) handleV2WildcardHead(w http.ResponseWriter, r *http.Requ
 			})
 			return
 		}
-		a.handleManifestHead(w, r, registry, imagePath, upstreamURL, ref)
+		// A push-allowed name that misses the internal store is either a brand-new
+		// push target or a pull-through. The gate never forwards client creds
+		// upstream, so an upstream 401/403 means "not available here" — map it to
+		// 404 so the docker push client proceeds to PUT instead of aborting on the
+		// leaked upstream auth error. Genuine 200/404 from upstream pass through.
+		a.handleManifestHead(w, r, registry, imagePath, upstreamURL, ref, pushAllowed)
 		return
 	}
 
@@ -610,6 +623,65 @@ func (a *DockerAdapter) serveInternalManifest(w http.ResponseWriter, r *http.Req
 		ClientIP:   r.RemoteAddr,
 		UserAgent:  r.UserAgent(),
 	})
+	return true
+}
+
+// serveInternalManifestHead answers HEAD /manifests/{ref} for an internally-pushed
+// image from the durable store, mirroring serveInternalManifest (quarantine-gated)
+// but emitting headers only. Returns true if it handled the response (200/403/503),
+// false to fall through to upstream resolution.
+//
+// Unlike the GET path it uses a read-only repository lookup (GetRepository) and
+// never creates a repo row, so a HEAD existence probe for a pull-through name has
+// no side effects.
+func (a *DockerAdapter) serveInternalManifestHead(w http.ResponseWriter, r *http.Request, name, ref string) bool {
+	repo, err := GetRepository(a.db, "", name)
+	if err != nil {
+		return false // not a known internal repo (incl. sql.ErrNoRows) → fall through
+	}
+	tag, err := GetTag(a.db, repo.ID, ref)
+	if err != nil {
+		return false // tag not pushed here → fall through
+	}
+
+	safeName := MakeSafeName("", name)
+	artifactID := fmt.Sprintf("docker:%s:%s", safeName, ref)
+	status, err := adapter.GetArtifactStatus(a.db, artifactID)
+	if err != nil {
+		log.Error().Err(err).Str("artifact", artifactID).Msg("docker HEAD: failed to check internal artifact status")
+		http.Error(w, "internal error checking artifact status", http.StatusServiceUnavailable)
+		return true
+	}
+	if status != nil && status.Status == model.StatusQuarantined {
+		adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
+			Error:    "quarantined",
+			Artifact: artifactID,
+			Reason:   status.QuarantineReason,
+		})
+		return true
+	}
+
+	// Content-addressed digest key — integrity is inherent. Only genuine absence
+	// may fall through; any backend/transport error fails closed.
+	mctx, mcancel := context.WithTimeout(r.Context(), serveBackendTimeout)
+	defer mcancel()
+	manifestBytes, err := a.pushHandler.blobStore.Get(mctx, tag.ManifestDigest)
+	if err != nil {
+		if classifyServeError(err) {
+			log.Debug().Err(err).Str("digest", tag.ManifestDigest).Msg("docker HEAD: internal manifest absent, falling through")
+			return false
+		}
+		log.Error().Err(err).Str("digest", tag.ManifestDigest).Msg("docker HEAD: backend error, failing closed")
+		http.Error(w, "internal storage error", http.StatusServiceUnavailable)
+		return true
+	}
+
+	adapter.UpdateLastAccessedAt(a.db, artifactID)
+	w.Header().Set("Content-Type", detectManifestContentType(manifestBytes))
+	w.Header().Set("Docker-Content-Digest", tag.ManifestDigest)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(manifestBytes)))
+	w.Header().Set("X-Shieldoo-Scanned", "true")
+	w.WriteHeader(http.StatusOK)
 	return true
 }
 
@@ -1427,7 +1499,7 @@ func detectManifestContentType(body []byte) string {
 //   3. Cache miss: HEAD is proxied to upstream so the daemon gets upstream's
 //      digest. The follow-up GET runs the full scan pipeline — HEAD itself is
 //      a metadata probe and does not deliver any artifact content.
-func (a *DockerAdapter) handleManifestHead(w http.ResponseWriter, r *http.Request, registry, imagePath, upstreamURL, ref string) {
+func (a *DockerAdapter) handleManifestHead(w http.ResponseWriter, r *http.Request, registry, imagePath, upstreamURL, ref string, mapAuthToNotFound bool) {
 	artifactID := fmt.Sprintf("docker:%s:%s", MakeSafeName(registry, imagePath), ref)
 
 	// Quarantine gate — fail closed if status lookup itself errors.
@@ -1463,7 +1535,7 @@ func (a *DockerAdapter) handleManifestHead(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Cache miss: proxy HEAD upstream.
-	a.proxyManifestHead(w, r, upstreamURL, registry, imagePath, ref)
+	a.proxyManifestHead(w, r, upstreamURL, registry, imagePath, ref, mapAuthToNotFound)
 }
 
 // proxyManifestHead forwards HEAD /v2/{name}/manifests/{ref} to the upstream
@@ -1472,8 +1544,21 @@ func (a *DockerAdapter) handleManifestHead(w http.ResponseWriter, r *http.Reques
 // and Content-Length are relayed to the client.
 //
 // SECURITY: Uses per-registry credentials from config, NOT client Authorization.
-func (a *DockerAdapter) proxyManifestHead(w http.ResponseWriter, r *http.Request, upstreamURL, registryHost, name, ref string) {
+func (a *DockerAdapter) proxyManifestHead(w http.ResponseWriter, r *http.Request, upstreamURL, registryHost, name, ref string, mapAuthToNotFound bool) {
 	target := upstreamURL + "/v2/" + name + "/manifests/" + ref
+
+	// authError writes the upstream-auth-failure response. For a push-allowed
+	// name (mapAuthToNotFound) the gate cannot serve the artifact anyway, so a
+	// failure to authenticate upstream is reported as 404 ("not present here") —
+	// this lets the docker push client proceed to PUT rather than aborting on a
+	// leaked upstream 401. Otherwise the original gateway error is preserved.
+	authError := func(origMsg string, origCode int) {
+		if mapAuthToNotFound {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, origMsg, origCode)
+	}
 
 	build := func(authHeader string) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodHead, target, nil)
@@ -1506,13 +1591,13 @@ func (a *DockerAdapter) proxyManifestHead(w http.ResponseWriter, r *http.Request
 		resp.Body.Close()
 		realm, service, scope, ok := parseWwwAuthenticate(wwwAuth)
 		if !ok {
-			http.Error(w, "upstream auth challenge unparseable", http.StatusBadGateway)
+			authError("upstream auth challenge unparseable", http.StatusBadGateway)
 			return
 		}
 		token, tokenErr := a.tokenExch.exchangeToken(r.Context(), realm, service, scope)
 		if tokenErr != nil {
 			log.Error().Err(tokenErr).Str("target", target).Msg("docker HEAD manifest: token exchange failed")
-			http.Error(w, "upstream auth failed", http.StatusBadGateway)
+			authError("upstream auth failed", http.StatusBadGateway)
 			return
 		}
 		req2, _ := build("Bearer " + token)
@@ -1523,6 +1608,13 @@ func (a *DockerAdapter) proxyManifestHead(w http.ResponseWriter, r *http.Request
 		}
 	}
 	defer resp.Body.Close()
+
+	// A push-allowed name whose upstream existence probe is denied (401/403) is
+	// reported as absent so the docker push client proceeds to PUT.
+	if mapAuthToNotFound && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+		http.NotFound(w, r)
+		return
+	}
 
 	for key, vals := range resp.Header {
 		for _, v := range vals {
