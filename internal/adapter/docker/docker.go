@@ -558,6 +558,62 @@ func classifyServeError(err error) (fallThrough bool) {
 	return errors.Is(err, cache.ErrBlobNotFound)
 }
 
+// looksLikeManifestDigest reports whether a manifest reference is a digest
+// (algo:hex) rather than a named tag. Docker tags are [A-Za-z0-9_.-] and never
+// contain a colon, so a colon unambiguously marks a digest reference.
+func looksLikeManifestDigest(ref string) bool { return strings.Contains(ref, ":") }
+
+// resolveInternalManifest maps a manifest reference (named tag OR digest) for an
+// internal repo to its manifest digest and the artifact id used for the quarantine
+// gate. The docker pull client resolves a tag and then re-fetches the manifest BY
+// DIGEST, so both forms must resolve internally — a digest miss here previously
+// fell through to upstream and broke pulls of pushed images.
+//
+// found=false → not a known internal manifest (caller falls through). When the
+// resolved manifest is quarantined, quarantineStatus is non-nil and the caller
+// must deny. A digest reference is treated as quarantined if ANY tag pointing at
+// it is quarantined.
+func (a *DockerAdapter) resolveInternalManifest(repo *DockerRepository, name, ref string) (manifestDigest, artifactID string, quarantineStatus *model.ArtifactStatus, found bool, err error) {
+	safeName := MakeSafeName("", name)
+
+	// Build the (digest, candidate artifact id) set to gate on.
+	type candidate struct{ digest, aid string }
+	var candidates []candidate
+	if looksLikeManifestDigest(ref) {
+		tags, terr := GetTagByDigest(a.db, repo.ID, ref)
+		if terr != nil {
+			return "", "", nil, false, terr
+		}
+		if len(tags) == 0 {
+			return "", "", nil, false, nil // digest not pushed here → fall through
+		}
+		manifestDigest = ref
+		for _, t := range tags {
+			candidates = append(candidates, candidate{ref, fmt.Sprintf("docker:%s:%s", safeName, t.Tag)})
+		}
+	} else {
+		tag, terr := GetTag(a.db, repo.ID, ref)
+		if terr != nil {
+			return "", "", nil, false, nil // tag not found → fall through
+		}
+		manifestDigest = tag.ManifestDigest
+		candidates = append(candidates, candidate{tag.ManifestDigest, fmt.Sprintf("docker:%s:%s", safeName, ref)})
+	}
+	artifactID = candidates[0].aid
+
+	// Quarantine gate across every artifact that references this manifest.
+	for _, c := range candidates {
+		status, serr := adapter.GetArtifactStatus(a.db, c.aid)
+		if serr != nil {
+			return manifestDigest, c.aid, nil, true, serr
+		}
+		if status != nil && status.Status == model.StatusQuarantined {
+			return manifestDigest, c.aid, status, true, nil
+		}
+	}
+	return manifestDigest, artifactID, nil, true, nil
+}
+
 // serveInternalManifest tries to serve a manifest for an internally-pushed image.
 // Returns true if the manifest was served (or an error response was written), false to fall through to upstream.
 func (a *DockerAdapter) serveInternalManifest(w http.ResponseWriter, r *http.Request, name, ref string) bool {
@@ -567,27 +623,20 @@ func (a *DockerAdapter) serveInternalManifest(w http.ResponseWriter, r *http.Req
 		return false
 	}
 
-	// Resolve tag → manifest digest.
-	tag, err := GetTag(a.db, repo.ID, ref)
+	manifestDigest, artifactID, qstatus, found, err := a.resolveInternalManifest(repo, name, ref)
 	if err != nil {
-		// Tag not found — not an internal image, fall through.
-		return false
-	}
-
-	// Check artifact status (quarantine check).
-	safeName := MakeSafeName("", name)
-	artifactID := fmt.Sprintf("docker:%s:%s", safeName, ref)
-	status, err := adapter.GetArtifactStatus(a.db, artifactID)
-	if err != nil {
-		log.Error().Err(err).Str("artifact", artifactID).Msg("docker: failed to check internal artifact status")
+		log.Error().Err(err).Str("artifact", artifactID).Msg("docker: failed to resolve internal manifest")
 		http.Error(w, "internal error checking artifact status", http.StatusServiceUnavailable)
 		return true
 	}
-	if status != nil && status.Status == model.StatusQuarantined {
+	if !found {
+		return false // not an internal image → fall through to upstream
+	}
+	if qstatus != nil {
 		adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
 			Error:    "quarantined",
 			Artifact: artifactID,
-			Reason:   status.QuarantineReason,
+			Reason:   qstatus.QuarantineReason,
 		})
 		return true
 	}
@@ -595,25 +644,25 @@ func (a *DockerAdapter) serveInternalManifest(w http.ResponseWriter, r *http.Req
 	// Fetch manifest from BlobStore.
 	// Note: BlobStore is content-addressable (digest-keyed), so integrity
 	// is inherent — the digest IS the content hash. No separate SHA256 check needed.
-	// The tag exists (GetTag above succeeded), so only genuine absence may fall
-	// through; any backend/transport error must fail closed.
+	// The manifest is known internal, so only genuine absence may fall through;
+	// any backend/transport error must fail closed.
 	mctx, mcancel := context.WithTimeout(r.Context(), serveBackendTimeout)
 	defer mcancel()
-	manifestBytes, err := a.pushHandler.blobStore.Get(mctx, tag.ManifestDigest)
+	manifestBytes, err := a.pushHandler.blobStore.Get(mctx, manifestDigest)
 	if err != nil {
 		if classifyServeError(err) {
-			log.Debug().Err(err).Str("digest", tag.ManifestDigest).Msg("docker: internal manifest absent, falling through")
+			log.Debug().Err(err).Str("digest", manifestDigest).Msg("docker: internal manifest absent, falling through")
 			return false
 		}
-		log.Error().Err(err).Str("digest", tag.ManifestDigest).Msg("docker: backend error serving internal manifest, failing closed")
+		log.Error().Err(err).Str("digest", manifestDigest).Msg("docker: backend error serving internal manifest, failing closed")
 		http.Error(w, "internal storage error", http.StatusServiceUnavailable)
 		return true
 	}
 
-	log.Info().Str("artifact", artifactID).Str("digest", tag.ManifestDigest).Msg("docker: serving internal manifest from blobstore")
+	log.Info().Str("artifact", artifactID).Str("digest", manifestDigest).Msg("docker: serving internal manifest from blobstore")
 	adapter.UpdateLastAccessedAt(a.db, artifactID)
 	w.Header().Set("Content-Type", detectManifestContentType(manifestBytes))
-	w.Header().Set("Docker-Content-Digest", tag.ManifestDigest)
+	w.Header().Set("Docker-Content-Digest", manifestDigest)
 	w.Header().Set("X-Shieldoo-Scanned", "true")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(manifestBytes)
@@ -639,24 +688,21 @@ func (a *DockerAdapter) serveInternalManifestHead(w http.ResponseWriter, r *http
 	if err != nil {
 		return false // not a known internal repo (incl. sql.ErrNoRows) → fall through
 	}
-	tag, err := GetTag(a.db, repo.ID, ref)
-	if err != nil {
-		return false // tag not pushed here → fall through
-	}
 
-	safeName := MakeSafeName("", name)
-	artifactID := fmt.Sprintf("docker:%s:%s", safeName, ref)
-	status, err := adapter.GetArtifactStatus(a.db, artifactID)
+	manifestDigest, artifactID, qstatus, found, err := a.resolveInternalManifest(repo, name, ref)
 	if err != nil {
-		log.Error().Err(err).Str("artifact", artifactID).Msg("docker HEAD: failed to check internal artifact status")
+		log.Error().Err(err).Str("artifact", artifactID).Msg("docker HEAD: failed to resolve internal manifest")
 		http.Error(w, "internal error checking artifact status", http.StatusServiceUnavailable)
 		return true
 	}
-	if status != nil && status.Status == model.StatusQuarantined {
+	if !found {
+		return false // tag/digest not pushed here → fall through
+	}
+	if qstatus != nil {
 		adapter.WriteJSONError(w, http.StatusForbidden, adapter.ErrorResponse{
 			Error:    "quarantined",
 			Artifact: artifactID,
-			Reason:   status.QuarantineReason,
+			Reason:   qstatus.QuarantineReason,
 		})
 		return true
 	}
@@ -665,20 +711,20 @@ func (a *DockerAdapter) serveInternalManifestHead(w http.ResponseWriter, r *http
 	// may fall through; any backend/transport error fails closed.
 	mctx, mcancel := context.WithTimeout(r.Context(), serveBackendTimeout)
 	defer mcancel()
-	manifestBytes, err := a.pushHandler.blobStore.Get(mctx, tag.ManifestDigest)
+	manifestBytes, err := a.pushHandler.blobStore.Get(mctx, manifestDigest)
 	if err != nil {
 		if classifyServeError(err) {
-			log.Debug().Err(err).Str("digest", tag.ManifestDigest).Msg("docker HEAD: internal manifest absent, falling through")
+			log.Debug().Err(err).Str("digest", manifestDigest).Msg("docker HEAD: internal manifest absent, falling through")
 			return false
 		}
-		log.Error().Err(err).Str("digest", tag.ManifestDigest).Msg("docker HEAD: backend error, failing closed")
+		log.Error().Err(err).Str("digest", manifestDigest).Msg("docker HEAD: backend error, failing closed")
 		http.Error(w, "internal storage error", http.StatusServiceUnavailable)
 		return true
 	}
 
 	adapter.UpdateLastAccessedAt(a.db, artifactID)
 	w.Header().Set("Content-Type", detectManifestContentType(manifestBytes))
-	w.Header().Set("Docker-Content-Digest", tag.ManifestDigest)
+	w.Header().Set("Docker-Content-Digest", manifestDigest)
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(manifestBytes)))
 	w.Header().Set("X-Shieldoo-Scanned", "true")
 	w.WriteHeader(http.StatusOK)

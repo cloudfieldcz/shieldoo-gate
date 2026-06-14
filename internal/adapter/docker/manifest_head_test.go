@@ -25,6 +25,13 @@ func headManifest(a *docker.DockerAdapter, name, ref string) *httptest.ResponseR
 	return w
 }
 
+func getManifest(a *docker.DockerAdapter, name, ref string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, "/v2/"+name+"/manifests/"+ref, nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+	return w
+}
+
 // Regression for the v0.12.0 docker-push break: HEAD /manifests/{ref} for an
 // internally-pushed image MUST be served from the durable BlobStore, NOT proxied
 // to the upstream registry. The classic/containerd push client issues a manifest
@@ -58,6 +65,41 @@ func TestHEADManifest_InternalPushedImage_ServedFromStore(t *testing.T) {
 		"HEAD of an internally-pushed manifest must serve from the durable store, not proxy upstream")
 	require.Equal(t, digest, w.Header().Get("Docker-Content-Digest"))
 	require.Equal(t, "true", w.Header().Get("X-Shieldoo-Scanned"))
+}
+
+// docker pull resolves a tag, then re-fetches/verifies the manifest BY DIGEST.
+// Internal manifests must therefore resolve by digest too — not only by tag —
+// otherwise the by-digest probe falls through to upstream and breaks the pull of
+// a pushed image. Covers both HEAD and GET.
+func TestManifest_InternalPushedImage_ResolvableByDigest(t *testing.T) {
+	backend, err := local.NewLocalCacheStore(t.TempDir(), 10)
+	require.NoError(t, err)
+	bs := docker.NewBlobStore(backend, "docker-push")
+	a, db := newServeTestAdapter(t, bs)
+
+	manifest := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json"}`)
+	sum := sha256.Sum256(manifest)
+	digest := "sha256:" + hex.EncodeToString(sum[:])
+	require.NoError(t, bs.Put(context.Background(), digest, manifest))
+
+	repo, err := docker.EnsureRepository(db, "", "myteam/app", true)
+	require.NoError(t, err)
+	_, err = db.Exec(
+		`INSERT INTO artifacts (id, ecosystem, name, version, upstream_url, sha256, size_bytes, cached_at, last_accessed_at, storage_path)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"docker:myteam_app:v1", "docker", "myteam/app", "v1", "internal://myteam/app", digest[7:], len(manifest),
+		time.Now().UTC(), time.Now().UTC(), "")
+	require.NoError(t, err)
+	// Only a NAMED tag is stored; the request comes in by DIGEST.
+	require.NoError(t, docker.UpsertTag(db, repo.ID, "v1", digest, "docker:myteam_app:v1"))
+
+	hw := headManifest(a, "myteam/app", digest)
+	require.Equal(t, http.StatusOK, hw.Code, "HEAD by digest must resolve the internally-pushed manifest")
+	require.Equal(t, digest, hw.Header().Get("Docker-Content-Digest"))
+
+	gw := getManifest(a, "myteam/app", digest)
+	require.Equal(t, http.StatusOK, gw.Code, "GET by digest must resolve the internally-pushed manifest")
+	require.Equal(t, manifest, gw.Body.Bytes())
 }
 
 // During the first push of a brand-new internal image, the push client HEADs the
