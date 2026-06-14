@@ -42,6 +42,8 @@ COPY ai_triage.py .
 COPY diff_scanner.py .
 COPY main.py .
 
-ENV BRIDGE_SOCKET=/tmp/shieldoo-bridge.sock
+RUN mkdir -p /var/run/shieldoo
+
+ENV BRIDGE_SOCKET=/var/run/shieldoo/shieldoo-bridge.sock
 
 CMD ["python", "main.py"]

@@ -89,7 +89,7 @@ scanners:
                                           # whenever version_diff is enabled (validated at startup).
   guarddog:
     enabled: true
-    bridge_socket: "/tmp/shieldoo-bridge.sock"
+    bridge_socket: "/var/run/shieldoo/shieldoo-bridge.sock"
   trivy:
     enabled: true
     binary: "trivy"
@@ -106,7 +106,7 @@ scanners:
     api_key_env: "AI_SCANNER_API_KEY"    # env var name holding the API key
     timeout: "15s"                       # timeout per LLM API call
     max_input_tokens: 32000
-    bridge_socket: "/tmp/shieldoo-bridge.sock"
+    bridge_socket: "/var/run/shieldoo/shieldoo-bridge.sock"
     # Azure OpenAI settings (when provider is "azure_openai"):
     azure_endpoint: ""                   # e.g. "https://<instance>.openai.azure.com/"
     azure_deployment: "gpt-54-mini"      # Azure deployment name

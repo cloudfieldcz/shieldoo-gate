@@ -57,7 +57,7 @@ scanners:
   timeout: "60s"
   guarddog:
     enabled: true
-    bridge_socket: "/tmp/shieldoo-bridge.sock"
+    bridge_socket: "/var/run/shieldoo/shieldoo-bridge.sock"
   trivy:
     enabled: true
     binary: "trivy"

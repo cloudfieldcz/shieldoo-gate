@@ -5,7 +5,7 @@ import warnings
 
 from proto import scanner_pb2 as proto_dot_scanner__pb2
 
-GRPC_GENERATED_VERSION = '1.68.1'
+GRPC_GENERATED_VERSION = '1.81.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -18,14 +18,14 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + f' but the generated code in proto/scanner_pb2_grpc.py depends on'
+        + ' but the generated code in proto/scanner_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
     )
 
 
-class ScannerBridgeStub(object):
+class ScannerBridgeStub:
     """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
@@ -54,6 +54,11 @@ class ScannerBridgeStub(object):
                 request_serializer=proto_dot_scanner__pb2.TriageRequest.SerializeToString,
                 response_deserializer=proto_dot_scanner__pb2.TriageResponse.FromString,
                 _registered_method=True)
+        self.DraftIgnoreReason = channel.unary_unary(
+                '/scanner.ScannerBridge/DraftIgnoreReason',
+                request_serializer=proto_dot_scanner__pb2.DraftIgnoreReasonRequest.SerializeToString,
+                response_deserializer=proto_dot_scanner__pb2.DraftIgnoreReasonResponse.FromString,
+                _registered_method=True)
         self.HealthCheck = channel.unary_unary(
                 '/scanner.ScannerBridge/HealthCheck',
                 request_serializer=proto_dot_scanner__pb2.HealthRequest.SerializeToString,
@@ -61,7 +66,7 @@ class ScannerBridgeStub(object):
                 _registered_method=True)
 
 
-class ScannerBridgeServicer(object):
+class ScannerBridgeServicer:
     """Missing associated documentation comment in .proto file."""
 
     def ScanArtifact(self, request, context):
@@ -83,6 +88,12 @@ class ScannerBridgeServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def TriageFindings(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DraftIgnoreReason(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -117,6 +128,11 @@ def add_ScannerBridgeServicer_to_server(servicer, server):
                     request_deserializer=proto_dot_scanner__pb2.TriageRequest.FromString,
                     response_serializer=proto_dot_scanner__pb2.TriageResponse.SerializeToString,
             ),
+            'DraftIgnoreReason': grpc.unary_unary_rpc_method_handler(
+                    servicer.DraftIgnoreReason,
+                    request_deserializer=proto_dot_scanner__pb2.DraftIgnoreReasonRequest.FromString,
+                    response_serializer=proto_dot_scanner__pb2.DraftIgnoreReasonResponse.SerializeToString,
+            ),
             'HealthCheck': grpc.unary_unary_rpc_method_handler(
                     servicer.HealthCheck,
                     request_deserializer=proto_dot_scanner__pb2.HealthRequest.FromString,
@@ -130,7 +146,7 @@ def add_ScannerBridgeServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class ScannerBridge(object):
+class ScannerBridge:
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod
@@ -231,6 +247,33 @@ class ScannerBridge(object):
             '/scanner.ScannerBridge/TriageFindings',
             proto_dot_scanner__pb2.TriageRequest.SerializeToString,
             proto_dot_scanner__pb2.TriageResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DraftIgnoreReason(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/scanner.ScannerBridge/DraftIgnoreReason',
+            proto_dot_scanner__pb2.DraftIgnoreReasonRequest.SerializeToString,
+            proto_dot_scanner__pb2.DraftIgnoreReasonResponse.FromString,
             options,
             channel_credentials,
             insecure,

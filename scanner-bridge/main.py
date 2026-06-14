@@ -293,7 +293,16 @@ class ScannerBridgeServicer(scanner_pb2_grpc.ScannerBridgeServicer):
 
 
 def serve():
-    socket_path = os.environ.get("BRIDGE_SOCKET", "/tmp/shieldoo-bridge.sock")
+    socket_path = os.environ.get("BRIDGE_SOCKET", "/var/run/shieldoo/shieldoo-bridge.sock")
+
+    # Ensure the socket directory exists (needed for first startup on empty volumes).
+    socket_dir = os.path.dirname(socket_path)
+    os.makedirs(socket_dir, exist_ok=True)
+
+    # Startup sweep: remove any stale scratch files left by a previous unclean
+    # shutdown. Only the socket file should live in the socket directory; anything
+    # else is orphaned temporary data from a crashed scan.
+    _cleanup_stale_scratch(socket_dir, socket_path)
 
     # Clean up stale socket
     if os.path.exists(socket_path):
@@ -310,6 +319,37 @@ def serve():
     os.chmod(socket_path, 0o666)
     logger.info("Scanner bridge listening on %s", socket_path)
     server.wait_for_termination()
+
+
+def _cleanup_stale_scratch(socket_dir: str, socket_path: str):
+    """Remove stale scratch files/dirs from the socket directory.
+
+    After an unclean shutdown, temporary scan data may be orphaned in the
+    socket volume. This removes everything except the socket file itself.
+    """
+    try:
+        entries = os.listdir(socket_dir)
+    except OSError:
+        return
+
+    removed = 0
+    for entry in entries:
+        entry_path = os.path.join(socket_dir, entry)
+        # Never remove the socket itself.
+        if entry_path == socket_path:
+            continue
+        try:
+            if os.path.isdir(entry_path) and not os.path.islink(entry_path):
+                import shutil
+                shutil.rmtree(entry_path, ignore_errors=True)
+            else:
+                os.unlink(entry_path)
+            removed += 1
+        except OSError as e:
+            logger.warning("startup sweep: failed to remove %s: %s", entry_path, e)
+
+    if removed:
+        logger.info("startup sweep: removed %d stale entries from %s", removed, socket_dir)
 
 
 if __name__ == "__main__":

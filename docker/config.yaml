@@ -81,7 +81,7 @@ scanners:
   timeout: "60s"
   guarddog:
     enabled: true
-    bridge_socket: "/tmp/shieldoo-bridge.sock"
+    bridge_socket: "/var/run/shieldoo/shieldoo-bridge.sock"
   trivy:
     enabled: true
     binary: "trivy"
@@ -98,7 +98,7 @@ scanners:
     api_key_env: "AI_SCANNER_API_KEY"
     timeout: "45s"
     max_input_tokens: 32000
-    bridge_socket: "/tmp/shieldoo-bridge.sock"
+    bridge_socket: "/var/run/shieldoo/shieldoo-bridge.sock"
     azure_endpoint: ""
     azure_deployment: "gpt-54-mini"
   sandbox:

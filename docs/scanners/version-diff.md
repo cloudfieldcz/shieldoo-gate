@@ -33,8 +33,8 @@ gate's local filesystem (path arrives in
 ```yaml
 # scanner-bridge service in docker-compose / .deploy/compose.yaml
 volumes:
-  - bridge-socket:/tmp                         # already required for gRPC + new artifact
-  - gate-cache:/var/cache/shieldoo-gate:ro     # NEW: required for version-diff (>= v2.0)
+  - bridge-socket:/var/run/shieldoo              # gRPC socket only (no temp data)
+  - gate-cache:/var/cache/shieldoo-gate:ro       # required for version-diff (>= v2.0)
 ```
 
 Without this mount, every diff scan raises `FileNotFoundError`, the bridge
@@ -43,9 +43,9 @@ returns `UNKNOWN`, and the Go scanner fail-opens. The shipped compose files
 `.deploy/compose.yaml`) already include the mount; custom deployments need
 to mirror it.
 
-The current artifact is reachable through the existing `bridge-socket:/tmp`
-mount — the gate writes downloads into `/tmp/shieldoo-gate-<eco>-*.tmp`,
-which is shared with the bridge.
+The current artifact is reachable through the gate cache volume — the gate
+writes downloads into `/var/cache/shieldoo-gate/` which is shared with the
+bridge via the `gate-cache` volume mount.
 
 ## Configuration
 

@@ -20,7 +20,7 @@ services:
       - "8087:8087"   # Go Modules
       - "8080:8080"   # Admin API
     volumes:
-      - bridge-socket:/tmp
+      - bridge-socket:/var/run/shieldoo
       - gate-data:/var/lib/shieldoo-gate
       - gate-cache:/var/cache/shieldoo-gate
       - trivy-cache:/var/cache/trivy
@@ -42,13 +42,13 @@ services:
         SGW_TOKEN: ${SGW_TOKEN:-}
     platform: linux/amd64
     volumes:
-      - bridge-socket:/tmp
+      - bridge-socket:/var/run/shieldoo
       # Read-only access to the gate cache for AI-driven version-diff:
       # the bridge needs to open the previously-cached artifact via the
       # path the gate sends in ScanArtifactDiff.previous_path.
       - gate-cache:/var/cache/shieldoo-gate:ro
     environment:
-      BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
+      BRIDGE_SOCKET: /var/run/shieldoo/shieldoo-bridge.sock
       AI_SCANNER_ENABLED: "${AI_SCANNER_ENABLED:-false}"
       AI_SCANNER_API_KEY: "${AI_SCANNER_API_KEY:-}"
       AI_SCANNER_PROVIDER: "${AI_SCANNER_PROVIDER:-azure_openai}"

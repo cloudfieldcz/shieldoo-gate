@@ -25,14 +25,14 @@ services:
       retries: 30
       start_period: 10s
     volumes:
-      - e2e-bridge-socket:/tmp
+      - e2e-bridge-socket:/var/run/shieldoo
       - e2e-gate-data:/var/lib/shieldoo-gate
       - e2e-gate-cache:/var/cache/shieldoo-gate
       - e2e-trivy-cache:/var/cache/trivy
       - e2e-gate-logs:/var/log/shieldoo-gate
       - ./config.e2e.yaml:/etc/shieldoo-gate/config.yaml:ro
     environment:
-      SGW_SCANNERS_GUARDDOG_BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
+      SGW_SCANNERS_GUARDDOG_BRIDGE_SOCKET: /var/run/shieldoo/shieldoo-bridge.sock
       # AI scanner: set SGW_SCANNERS_AI_ENABLED=true to enable in e2e
       SGW_SCANNERS_AI_ENABLED: "${SGW_SCANNERS_AI_ENABLED:-false}"
       # Policy mode: overridden per E2E pass (strict/balanced/permissive)
@@ -56,7 +56,7 @@ services:
       dockerfile: Dockerfile
     platform: linux/amd64
     volumes:
-      - e2e-bridge-socket:/tmp
+      - e2e-bridge-socket:/var/run/shieldoo
       # Read-only access to the gate cache so the AI-driven version-diff scanner
       # can open the previously-cached artifact via the path the gate sends in
       # ScanArtifactDiff.previous_path. Without this mount the bridge raises
@@ -64,7 +64,7 @@ services:
       # silently bypassing the LLM diff step.
       - e2e-gate-cache:/var/cache/shieldoo-gate:ro
     environment:
-      BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
+      BRIDGE_SOCKET: /var/run/shieldoo/shieldoo-bridge.sock
       AI_SCANNER_ENABLED: "${AI_SCANNER_ENABLED:-false}"
       AI_SCANNER_API_KEY: "${AI_SCANNER_API_KEY:-}"
       AI_SCANNER_PROVIDER: "${AI_SCANNER_PROVIDER:-azure_openai}"

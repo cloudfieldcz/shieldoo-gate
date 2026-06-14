@@ -48,9 +48,9 @@ services:
     image: ghcr.io/cloudfieldcz/scanner-bridge:${SGW_VERSION:-latest}
     restart: unless-stopped
     volumes:
-      - bridge-socket:/tmp
+      - bridge-socket:/var/run/shieldoo
     environment:
-      BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
+      BRIDGE_SOCKET: /var/run/shieldoo/shieldoo-bridge.sock
     networks:
       - backend
 
@@ -64,14 +64,14 @@ services:
       scanner-bridge:
         condition: service_started
     volumes:
-      - bridge-socket:/tmp
+      - bridge-socket:/var/run/shieldoo
       - gate-cache:/var/cache/shieldoo-gate
       - trivy-cache:/var/cache/trivy
       - ./config.yaml:/etc/shieldoo-gate/config.yaml:ro
     env_file:
       - .env
     environment:
-      SGW_SCANNERS_GUARDDOG_BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
+      SGW_SCANNERS_GUARDDOG_BRIDGE_SOCKET: /var/run/shieldoo/shieldoo-bridge.sock
       SGW_DATABASE_POSTGRES_DSN: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
       SGW_PUBLIC_URLS_PYPI: "https://pypi.${SGW_DOMAIN}"
       SGW_PUBLIC_URLS_NPM: "https://npm.${SGW_DOMAIN}"

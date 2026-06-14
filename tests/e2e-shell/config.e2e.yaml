@@ -85,7 +85,7 @@ scanners:
   timeout: "120s"
   guarddog:
     enabled: true
-    bridge_socket: "/tmp/shieldoo-bridge.sock"
+    bridge_socket: "/var/run/shieldoo/shieldoo-bridge.sock"
   trivy:
     enabled: true
     binary: "trivy"
@@ -102,7 +102,7 @@ scanners:
     api_key_env: "AI_SCANNER_API_KEY"
     timeout: "15s"
     max_input_tokens: 32000
-    bridge_socket: "/tmp/shieldoo-bridge.sock"
+    bridge_socket: "/var/run/shieldoo/shieldoo-bridge.sock"
     azure_endpoint: ""
     azure_deployment: "gpt-54-mini"
   # Typosquatting detection: enabled by default, checks package names against popular packages.
