@@ -11,7 +11,7 @@
 # if any native extension lost a shared lib it needs.
 
 # ---- Builder: toolchain + dependency install ----
-FROM python:3.13.13-slim AS builder
+FROM python:3.13.14-slim AS builder
 
 ARG SGW_TOKEN=""
 # Basic-auth username = project label on a self-hosted Shieldoo Gate. We use
@@ -46,7 +46,26 @@ COPY proto/ proto/
 RUN python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. proto/scanner.proto
 
 # ---- Runtime: clean image, no build toolchain or -dev headers ----
-FROM python:3.13.13-slim AS runtime
+FROM python:3.13.14-slim AS runtime
+
+# Pull Debian-security patches for base-image OS packages on top of the pinned
+# base tag, then strip perl. The tag (python:3.13.14-slim) is pinned for
+# reproducibility; `apt-get upgrade` adds whatever fixed package versions
+# Debian-security has published at build time (e.g. openssl 3.5.6-1~deb13u2 for
+# CVE-2026-45447). `perl-base` is a Debian "essential" package shipped by the
+# base image but used NOWHERE in the bridge (a glibc Python gRPC service —
+# guarddog is Python, semgrep is a Rust binary, pygit2 bundles libgit2; nothing
+# invokes the Perl interpreter). It is the source of the only two CRITICAL
+# findings (CVE-2026-42496, CVE-2026-8376) plus the perl-base highs/mediums,
+# none of which have an upstream fix. Force-purging it deletes the interpreter
+# and its files so the scanner no longer sees the package; apt/dpkg are never
+# run at runtime, so the resulting dpkg "essential removed" state is inert. The
+# final `! command -v perl` fails the build if perl somehow survives. See ADR-010.
+RUN apt-get update \
+ && apt-get upgrade -y \
+ && dpkg --purge --force-remove-essential --force-depends perl-base \
+ && rm -rf /var/lib/apt/lists/* \
+ && ! command -v perl
 
 WORKDIR /app
 
@@ -58,6 +77,13 @@ COPY --from=builder /app/proto/ proto/
 # Fail the build now (not at runtime in prod) if a native extension is missing a
 # shared lib it depends on after dropping the -dev packages.
 RUN python -c "import _cffi_backend; import pygit2; import grpc"
+
+# Upgrade the base-image pip to a patched release. pip is shipped by the base
+# image (not a runtime dependency of the bridge, which only runs `python
+# main.py`), so it is flagged by the scanner but not covered by requirements.txt.
+# 26.1.2 fixes CVE-2026-3219, CVE-2026-6357 and PYSEC-2026-196. Exact-pinned per
+# the MANDATORY version-pinning rule (CLAUDE.md).
+RUN python -m pip install --no-cache-dir --upgrade 'pip==26.1.2'
 
 COPY extractors/ extractors/
 COPY extractors_diff/ extractors_diff/

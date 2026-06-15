@@ -21,7 +21,12 @@ COPY ui/ ./
 RUN npm run build
 
 # Stage 2: Build Go binary
-FROM golang:1.25.10-alpine AS go-builder
+# Go 1.26.4 ships the fix for CVE-2026-42504 (mime/WordDecoder.DecodeHeader
+# quadratic complexity), CVE-2026-42507 (net/textproto) and CVE-2026-27145
+# (crypto/x509). Keep in lockstep with go.mod's `go` directive and the CI
+# GO_VERSION in .github/workflows/release.yml so all build paths embed the
+# same patched stdlib.
+FROM golang:1.26.4-alpine AS go-builder
 
 ARG SGW_TOKEN=""
 # Same rationale as stage 1 — identify as project "shieldoo-gate" when

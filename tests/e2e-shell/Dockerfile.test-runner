@@ -10,7 +10,7 @@
 # We do NOT need the rest of internal/ — the shdg main package is Go-stdlib-only.
 # We also do NOT git-stamp the binary (no .git in the build context); a hard-coded
 # "e2e" value is sufficient for the smoke test.
-FROM golang:1.25-alpine AS shdg-build
+FROM golang:1.26.4-alpine AS shdg-build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -95,8 +95,8 @@ RUN apt-get update && \
 # ---------------------------------------------------------------------------
 # Go (pinned with checksum)
 # ---------------------------------------------------------------------------
-ARG GO_VERSION=1.25.0
-ARG GO_SHA256=2852af0cb20a13139b3448992e69b868e50ed0f8a1e5940ee1de9e19a123b613
+ARG GO_VERSION=1.26.4
+ARG GO_SHA256=1153d3d50e0ac764b447adfe05c2bcf08e889d42a02e0fe0259bd47f6733ad7f
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz && \
     echo "${GO_SHA256}  /tmp/go.tar.gz" | sha256sum -c - && \
     tar -C /usr/local -xzf /tmp/go.tar.gz && \
