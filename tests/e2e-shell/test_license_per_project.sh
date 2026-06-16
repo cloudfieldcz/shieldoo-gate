@@ -25,7 +25,7 @@ test_license_per_project() {
     # tests run against the default project; if a more specific label exists in
     # the test rig we still match a license-blocked artifact below.
     local pid
-    pid=$(curl -sf "${E2E_ADMIN_URL}/api/v1/projects" "${bearer[@]}" \
+    pid=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/projects" "${bearer[@]}" \
         | jq -r '.projects[]? | select(.label == "default") | .id')
     if [ -z "$pid" ] || [ "$pid" = "null" ]; then
         log_skip "License per-project: no 'default' project (rig changed?)"
@@ -37,7 +37,7 @@ test_license_per_project() {
     # the project's artifacts list. If none is present, the rig hasn't run
     # license enforcement against this project yet — skip cleanly.
     local list
-    list=$(curl -sf "${E2E_ADMIN_URL}/api/v1/projects/${pid}/artifacts" "${bearer[@]}")
+    list=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/projects/${pid}/artifacts" "${bearer[@]}")
     local first_eco first_name first_ver first_id
     first_eco=$(echo "$list" | jq -r '.artifacts[]? | select(.decision == "BLOCKED_LICENSE") | .ecosystem' | head -n1)
     first_name=$(echo "$list" | jq -r '.artifacts[]? | select(.decision == "BLOCKED_LICENSE") | .name' | head -n1)
@@ -54,7 +54,7 @@ test_license_per_project() {
     # skip this step in that case.)
     if [ -n "$first_id" ] && [ "$first_id" != "null" ]; then
         local code
-        code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+        code=$(admin_curl -s -o /dev/null -w "%{http_code}" -X POST \
             "${E2E_ADMIN_URL}/api/v1/artifacts/$(printf %s "$first_id" | jq -sRr @uri)/release" \
             "${bearer[@]}")
         case "$code" in
@@ -83,7 +83,7 @@ test_license_per_project() {
             '{ecosystem:$eco, name:$name, scope:"package", kind:"allow", reason:"e2e per-project release"}')
     fi
     create_resp=$(mktemp)
-    create_code=$(curl -s -o "$create_resp" -w "%{http_code}" -X POST \
+    create_code=$(admin_curl -s -o "$create_resp" -w "%{http_code}" -X POST \
         "${E2E_ADMIN_URL}/api/v1/projects/${pid}/overrides" \
         "${bearer[@]}" -H "Content-Type: application/json" -d "$create_body")
     local oid=""
@@ -92,7 +92,7 @@ test_license_per_project() {
     elif [ "$create_code" = "409" ]; then
         # Already-active row from a prior run. Look it up so we can still
         # exercise the GET + revoke steps.
-        oid=$(curl -sf "${E2E_ADMIN_URL}/api/v1/projects/${pid}/overrides" "${bearer[@]}" \
+        oid=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/projects/${pid}/overrides" "${bearer[@]}" \
             | jq -r --arg name "$first_name" --arg eco "$first_eco" \
                 '.items[]? | select(.name == $name and .ecosystem == $eco and .revoked == false) | .id' \
             | head -n1)
@@ -109,7 +109,7 @@ test_license_per_project() {
     fi
 
     # Step 3: GET listing includes the new override.
-    if curl -sf "${E2E_ADMIN_URL}/api/v1/projects/${pid}/overrides" "${bearer[@]}" \
+    if admin_curl -sf "${E2E_ADMIN_URL}/api/v1/projects/${pid}/overrides" "${bearer[@]}" \
         | jq -e --argjson id "$oid" '.items[]? | select(.id == $id)' >/dev/null; then
         log_pass "License per-project: override visible in project overrides listing"
     else
@@ -120,7 +120,7 @@ test_license_per_project() {
     # JSON true/false; SQLite via sqlx may return either form depending on the
     # column type — accept both.
     local revoke_code
-    revoke_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+    revoke_code=$(admin_curl -s -o /dev/null -w "%{http_code}" -X POST \
         "${E2E_ADMIN_URL}/api/v1/projects/${pid}/overrides/${oid}/revoke" \
         "${bearer[@]}" -H "Content-Type: application/json" -d '{"reason":"e2e cleanup"}')
     if [ "$revoke_code" != "200" ]; then
@@ -128,7 +128,7 @@ test_license_per_project() {
         return
     fi
     local revoked
-    revoked=$(curl -sf "${E2E_ADMIN_URL}/api/v1/projects/${pid}/overrides" "${bearer[@]}" \
+    revoked=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/projects/${pid}/overrides" "${bearer[@]}" \
         | jq -r --argjson id "$oid" '.items[]? | select(.id == $id) | .revoked')
     if [ "$revoked" = "true" ] || [ "$revoked" = "1" ]; then
         log_pass "License per-project: revoke transitioned override to revoked"
@@ -144,7 +144,7 @@ test_license_per_project() {
     # the system remained safe (the global is itself an explicit approval).
     if [ -n "$first_id" ] && [ "$first_id" != "null" ]; then
         local recheck
-        recheck=$(curl -sf "${E2E_ADMIN_URL}/api/v1/projects/${pid}/artifacts" "${bearer[@]}" \
+        recheck=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/projects/${pid}/artifacts" "${bearer[@]}" \
             | jq -r --arg id "$first_id" '.artifacts[]? | select(.id == $id) | .decision')
         case "$recheck" in
             BLOCKED_LICENSE)

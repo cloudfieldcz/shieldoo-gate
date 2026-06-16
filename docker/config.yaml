@@ -213,6 +213,8 @@ auth:
   client_secret_env: "SGW_OIDC_CLIENT_SECRET"  # Env var holding the client secret
   redirect_url: "http://localhost:8080/auth/callback" # e.g. "https://shieldoo-gate.example.com:8080/auth/callback"
   scopes: ["openid", "email", "profile"]
+  cookie_insecure: true              # Local HTTP dev only — allows the http redirect_url above.
+                                     # MUST be false (default) in production so session cookies are Secure.
 
 # API key authentication for proxy endpoints (pip, npm, docker, nuget, gem, go).
 # When disabled, proxy endpoints are open — protected by network segmentation only.

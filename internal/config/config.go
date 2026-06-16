@@ -170,6 +170,14 @@ type AuthConfig struct {
 	ClientSecretEnv string  `mapstructure:"client_secret_env"`
 	RedirectURL    string   `mapstructure:"redirect_url"`
 	Scopes         []string `mapstructure:"scopes"`
+	// SessionTTL is the admin UI session lifetime (e.g. "15m"). Default 15m.
+	SessionTTL string `mapstructure:"session_ttl"`
+	// CookieInsecure drops the Secure attribute from auth cookies. Explicit opt-out
+	// for local HTTP dev ONLY — default false keeps cookies Secure in production.
+	CookieInsecure bool `mapstructure:"cookie_insecure"`
+	// AllowedOrigins is an explicit Origin allowlist for the CSRF guard on
+	// cookie-authenticated mutations. Empty (default) requires same-origin.
+	AllowedOrigins []string `mapstructure:"allowed_origins"`
 }
 
 // RescanConfig controls the periodic artifact rescan scheduler.
@@ -201,6 +209,11 @@ var knownEventTypes = map[string]bool{
 
 type ServerConfig struct {
 	Host string `mapstructure:"host"`
+	// TrustedProxies lists CIDRs (or bare IPs) whose X-Forwarded-For / X-Real-IP
+	// headers are honored when resolving the client IP for audit logging and rate
+	// limiting. Empty (default) trusts no proxy — the real TCP peer is always used,
+	// preventing IP spoofing. Set this to your reverse-proxy / load-balancer subnet.
+	TrustedProxies []string `mapstructure:"trusted_proxies"`
 }
 
 type PortsConfig struct {
@@ -888,6 +901,17 @@ func (c *Config) validateAuth() error {
 	}
 	if c.Auth.ClientID == "" {
 		return fmt.Errorf("config: auth.client_id is required when auth is enabled")
+	}
+	// The session cookie is a credential; it must not be transmittable over cleartext.
+	// Require an https redirect_url unless the operator explicitly opts into insecure
+	// cookies for local HTTP development.
+	if !c.Auth.CookieInsecure && c.Auth.RedirectURL != "" && !strings.HasPrefix(c.Auth.RedirectURL, "https://") {
+		return fmt.Errorf("config: auth.redirect_url must use https:// (set auth.cookie_insecure=true to allow http for local dev)")
+	}
+	if c.Auth.SessionTTL != "" {
+		if _, err := time.ParseDuration(c.Auth.SessionTTL); err != nil {
+			return fmt.Errorf("config: auth.session_ttl %q is not a valid duration: %w", c.Auth.SessionTTL, err)
+		}
 	}
 	return nil
 }

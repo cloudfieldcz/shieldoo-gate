@@ -37,7 +37,7 @@ test_projects() {
 
         # Query the admin API to confirm the project exists.
         local list_resp
-        list_resp=$(curl -sf "${E2E_ADMIN_URL}/api/v1/projects" 2>/dev/null)
+        list_resp=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/projects" 2>/dev/null)
         if [ -n "$list_resp" ]; then
             if echo "$list_resp" | jq -e --arg l "$label" '.projects[] | select(.label == $l)' > /dev/null 2>&1; then
                 log_pass "Projects: lazy-created project visible via /api/v1/projects"
@@ -64,7 +64,7 @@ test_projects() {
         curl -s -o /dev/null -u "${lowered}:${global_token}" "${E2E_PYPI_URL}/simple/" > /dev/null
         sleep 1
         local match_count
-        match_count=$(curl -sf "${E2E_ADMIN_URL}/api/v1/projects" | jq -r --arg l "$lowered" '[.projects[] | select(.label == $l)] | length')
+        match_count=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/projects" | jq -r --arg l "$lowered" '[.projects[] | select(.label == $l)] | length')
         assert_eq "Projects: mixed-case labels collapse into a single lowercase row" "1" "$match_count"
     else
         log_skip "Projects: lazy auto-create + mixed-case (SGW_PROJECTS_MODE=${mode})"
@@ -83,7 +83,7 @@ test_projects() {
     # ------------------------------------------------------------------
     curl -s -o /dev/null -u ":${global_token}" "${E2E_PYPI_URL}/simple/" > /dev/null
     local has_default
-    has_default=$(curl -sf "${E2E_ADMIN_URL}/api/v1/projects" | jq -r '[.projects[] | select(.label == "default")] | length')
+    has_default=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/projects" | jq -r '[.projects[] | select(.label == "default")] | length')
     assert_gte "Projects: 'default' project exists (seeded or auto-used)" 1 "$has_default"
 
     # ------------------------------------------------------------------
@@ -97,13 +97,13 @@ test_projects() {
     # ------------------------------------------------------------------
     local explicit="e2e-api-$(date +%s)"
     local create_status
-    create_status=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${E2E_ADMIN_URL}/api/v1/projects" \
+    create_status=$(admin_curl -s -o /dev/null -w "%{http_code}" -X POST "${E2E_ADMIN_URL}/api/v1/projects" \
         -H "Content-Type: application/json" \
         -d "{\"label\":\"${explicit}\",\"display_name\":\"E2E explicit\"}")
     assert_eq "Projects: POST /api/v1/projects creates (201)" "201" "$create_status"
 
     local created_via_api
-    created_via_api=$(curl -sf "${E2E_ADMIN_URL}/api/v1/projects" | jq -r --arg l "$explicit" '.projects[] | select(.label == $l) | .created_via')
+    created_via_api=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/projects" | jq -r --arg l "$explicit" '.projects[] | select(.label == $l) | .created_via')
     assert_eq "Projects: created_via=api for explicit creation" "api" "$created_via_api"
 
     # ------------------------------------------------------------------
@@ -124,13 +124,13 @@ test_projects() {
 
     # Find project id.
     local usage_pid
-    usage_pid=$(curl -sf "${E2E_ADMIN_URL}/api/v1/projects" | jq -r --arg l "$usage_label" '.projects[] | select(.label == $l) | .id')
+    usage_pid=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/projects" | jq -r --arg l "$usage_label" '.projects[] | select(.label == $l) | .id')
 
     if [ -n "$usage_pid" ] && [ "$usage_pid" != "null" ]; then
         log_pass "Projects: usage project id=${usage_pid} discovered (label='${usage_label}')"
         # List artifacts via the project-scoped endpoint.
         local usage_resp_status
-        usage_resp_status=$(curl -s -o /dev/null -w "%{http_code}" \
+        usage_resp_status=$(admin_curl -s -o /dev/null -w "%{http_code}" \
             "${E2E_ADMIN_URL}/api/v1/projects/${usage_pid}/artifacts")
         assert_eq "Projects: /projects/{id}/artifacts returns 200" "200" "$usage_resp_status"
     else

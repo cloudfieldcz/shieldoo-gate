@@ -114,7 +114,7 @@ test_gomod() {
         encoded_id=$(jq -rn --arg s "$go_artifact_id" '$s|@uri')
 
         local licenses_body
-        licenses_body=$(curl -sf "${E2E_ADMIN_URL}/api/v1/artifacts/${encoded_id}/licenses" 2>/dev/null || true)
+        licenses_body=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/artifacts/${encoded_id}/licenses" 2>/dev/null || true)
         if [ -z "$licenses_body" ]; then
             log_fail "GoMod: /licenses endpoint returned empty body for ${go_artifact_id}"
         else

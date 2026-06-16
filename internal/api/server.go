@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter/docker"
@@ -16,6 +15,7 @@ import (
 	"github.com/cloudfieldcz/shieldoo-gate/internal/cache"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/license"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/policy"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/project"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/sbom"
@@ -48,6 +48,22 @@ type Server struct {
 	aiDeps           AIDeps
 	rateLimiter      *auth.RateLimiter
 	scanSched        *scanScheduler
+	trustedProxies   []string
+	csrfOrigins      []string
+}
+
+// SetTrustedProxies configures the CIDRs whose X-Forwarded-For / X-Real-IP headers
+// are honored when resolving the client IP. Empty (default) means no proxy is
+// trusted and the real TCP peer is always used.
+func (s *Server) SetTrustedProxies(cidrs []string) {
+	s.trustedProxies = cidrs
+}
+
+// SetCSRFAllowedOrigins configures the explicit Origin allowlist for the CSRF guard
+// on cookie-authenticated mutations. Empty (default) means same-origin is required
+// (the request Origin host must equal the request Host).
+func (s *Server) SetCSRFAllowedOrigins(origins []string) {
+	s.csrfOrigins = origins
 }
 
 // NewServer creates a new Server with the given dependencies.
@@ -101,11 +117,10 @@ func (s *Server) SetProxyAuth(proxyAuthEnabled, authEnabled bool) {
 }
 
 // SetAdminScopeEnforcement enables method-based scope authorization on the admin
-// API. It must be true only when OIDC auth is enabled — the mode where the admin
-// API authenticates users and where PATs exist. It is deliberately decoupled
-// from adminChain, which main.go wires unconditionally ("always-on" PAT bearer);
-// gating on adminChain would 403 every unauthenticated request in no-auth or
-// proxy-auth-only mode, where the admin API is intentionally not OIDC-protected.
+// API. main.go enables it whenever ANY auth mechanism is active (OIDC auth OR
+// proxy_auth); only the fully open no-auth dev mode leaves it off. In proxy-auth-only
+// mode this 403s anonymous requests while the global token ("*") still passes — it is
+// the scope-gate half of the fail-closed admin chain (see auth.AdminAuthChain).
 func (s *Server) SetAdminScopeEnforcement(enabled bool) {
 	s.adminScopeEnforced = enabled
 }
@@ -137,7 +152,10 @@ func (s *Server) Routes() chi.Router {
 	r := chi.NewRouter()
 
 	r.Use(auth.Recoverer)
-	r.Use(middleware.RealIP)
+	// Resolve client IP from forwarding headers only behind configured trusted
+	// proxies; otherwise keep the real TCP peer so audit ClientIP and rate-limit
+	// keys cannot be spoofed via X-Forwarded-For (replaces chi middleware.RealIP).
+	r.Use(auth.TrustedProxyMiddleware(s.trustedProxies))
 
 	// Health endpoint — always unauthenticated.
 	r.Get("/api/v1/health", s.handleHealth)
@@ -146,8 +164,11 @@ func (s *Server) Routes() chi.Router {
 	r.Handle("/metrics", promhttp.Handler())
 
 	// Auth flow endpoints (unauthenticated — they implement the login flow).
+	// The CSRF guard protects the cookie-authenticated POSTs (logout/refresh); the
+	// GET login/callback are safe methods and pass through untouched.
 	if s.authEnabled && s.authHandlers != nil {
 		r.Route("/auth", func(r chi.Router) {
+			r.Use(auth.CSRFGuard(s.csrfOrigins))
 			r.Get("/login", s.authHandlers.HandleLogin)
 			r.Get("/callback", s.authHandlers.HandleCallback)
 			r.Post("/logout", s.authHandlers.HandleLogout)
@@ -177,6 +198,13 @@ func (s *Server) Routes() chi.Router {
 			r.Use(s.adminChain.Authenticate)
 		case s.authEnabled && s.oidcMw != nil:
 			r.Use(s.oidcMw.Authenticate)
+		}
+
+		// CSRF guard: blocks cross-site cookie-authenticated mutations. Token
+		// (PAT/global) requests carry Authorization and are exempt; safe methods
+		// pass through. Only active when OIDC auth issues session cookies.
+		if s.authEnabled {
+			r.Use(auth.CSRFGuard(s.csrfOrigins))
 		}
 
 		r.Route("/api/v1", func(r chi.Router) {
@@ -271,11 +299,19 @@ func (s *Server) Routes() chi.Router {
 				r.Delete("/policy/licenses", s.handleDeleteGlobalLicensePolicy)
 			}
 
-			// API key management (only when auth + proxy_auth are both enabled)
+			// API key management (only when auth + proxy_auth are both enabled).
+			// Gated on the dedicated keys:manage scope (in addition to the method
+			// scope) so a general admin:write token cannot mint/revoke keys unless
+			// explicitly granted. OIDC operator sessions are granted keys:manage.
 			if s.proxyAuthEnabled {
-				r.Post("/api-keys", s.handleCreateAPIKey)
-				r.Get("/api-keys", s.handleListAPIKeys)
-				r.Delete("/api-keys/{id}", s.handleRevokeAPIKey)
+				r.Group(func(r chi.Router) {
+					if s.adminScopeEnforced {
+						r.Use(auth.RequireScope(model.ScopeKeysManage))
+					}
+					r.Post("/api-keys", s.handleCreateAPIKey)
+					r.Get("/api-keys", s.handleListAPIKeys)
+					r.Delete("/api-keys/{id}", s.handleRevokeAPIKey)
+				})
 			}
 
 			// Vulnerability scan routes.

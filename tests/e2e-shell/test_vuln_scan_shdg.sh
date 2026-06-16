@@ -9,7 +9,7 @@ test_vuln_scan_shdg() {
         return
     fi
     local pre_status
-    pre_status=$(curl -s -o /dev/null -w "%{http_code}" \
+    pre_status=$(admin_curl -s -o /dev/null -w "%{http_code}" \
         "${E2E_ADMIN_URL}/api/v1/vulnerabilities/summary")
     if [ "$pre_status" = "503" ]; then
         log_skip "shdg: feature disabled"
@@ -128,7 +128,7 @@ test_vuln_scan_shdg_image() {
         return
     fi
     local pre_status
-    pre_status=$(curl -s -o /dev/null -w "%{http_code}" \
+    pre_status=$(admin_curl -s -o /dev/null -w "%{http_code}" \
         "${E2E_ADMIN_URL}/api/v1/vulnerabilities/summary")
     if [ "$pre_status" = "503" ]; then
         log_skip "shdg --image: feature disabled"

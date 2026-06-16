@@ -62,10 +62,24 @@ fi
 # E2E_AUTH_USERINFO is "user:pass@" prefix for embedding in URLs (uv, npm).
 E2E_CURL_AUTH=()
 E2E_AUTH_USERINFO=""
+# E2E_ADMIN_CURL_AUTH carries the global super-token as a Bearer header for the ADMIN
+# API. Since the admin auth chain now fails closed whenever proxy_auth is enabled
+# (proxy-auth-only mode no longer leaves the admin API open), admin calls must present
+# the global token (scope "*") via Authorization: Bearer. When proxy_auth is disabled
+# the array is empty and admin_curl behaves exactly like curl (admin API open in dev).
+E2E_ADMIN_CURL_AUTH=()
 if [ "${SGW_PROXY_AUTH_ENABLED:-false}" = "true" ] && [ -n "${SGW_PROXY_TOKEN:-}" ]; then
     E2E_CURL_AUTH=(-u "ci-bot:${SGW_PROXY_TOKEN}")
     E2E_AUTH_USERINFO="ci-bot:${SGW_PROXY_TOKEN}@"
+    E2E_ADMIN_CURL_AUTH=(-H "Authorization: Bearer ${SGW_PROXY_TOKEN}")
 fi
+
+# admin_curl — curl wrapper that authenticates to the admin API with the global
+# super-token when proxy_auth is enabled. Use it for every admin-API call so tests
+# pass in both the open (dev) and fail-closed (proxy_auth) configurations.
+admin_curl() {
+    curl "${E2E_ADMIN_CURL_AUTH[@]}" "$@"
+}
 
 # auth_url "http://host:port" → "http://ci-bot:token@host:port" (when auth enabled)
 auth_url() {
@@ -160,7 +174,7 @@ assert_http_status() {
 # api_get path — GET from Admin API, outputs response body (fails on HTTP error)
 api_get() {
     local path="$1"
-    curl -sf "${E2E_ADMIN_URL}${path}"
+    admin_curl -sf "${E2E_ADMIN_URL}${path}"
 }
 
 # api_jq path jq_filter — api_get + jq filter

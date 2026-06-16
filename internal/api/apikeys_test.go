@@ -34,6 +34,12 @@ func withUser(r *http.Request, email, name string) *http.Request {
 	return r.WithContext(ctx)
 }
 
+// withScopes adds the caller's held scopes to the request context (as the auth
+// middleware would). Required for the API-key minting subset check.
+func withScopes(r *http.Request, scopes ...string) *http.Request {
+	return r.WithContext(auth.WithScopes(r.Context(), scopes))
+}
+
 func TestCreateAPIKey_GeneratesValidKey(t *testing.T) {
 	s, _ := setupTestServer(t)
 
@@ -41,6 +47,7 @@ func TestCreateAPIKey_GeneratesValidKey(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/v1/api-keys", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withUser(req, "alice@example.com", "Alice")
+	req = withScopes(req, "*") // operator-level caller
 	rec := httptest.NewRecorder()
 
 	s.handleCreateAPIKey(rec, req)
@@ -62,6 +69,7 @@ func TestCreateAPIKey_ReturnsPlaintextOnce(t *testing.T) {
 	body := `{"name":"one-time"}`
 	req := httptest.NewRequest("POST", "/api/v1/api-keys", strings.NewReader(body))
 	req = withUser(req, "alice@example.com", "Alice")
+	req = withScopes(req, "*")
 	rec := httptest.NewRecorder()
 	s.handleCreateAPIKey(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code)
@@ -165,6 +173,36 @@ func TestRevokeAPIKey_RejectsNonOwner(t *testing.T) {
 	key, err := db.GetAPIKeyByHash("hash-alice2")
 	require.NoError(t, err)
 	assert.True(t, key.Enabled, "key should still be enabled after non-owner revoke attempt")
+}
+
+// A caller must not be able to mint a key with scopes it does not itself hold.
+func TestCreateAPIKey_CannotGrantScopeNotHeld(t *testing.T) {
+	s, _ := setupTestServer(t)
+
+	body := `{"name":"escalate","scopes":["admin:write"]}`
+	req := httptest.NewRequest("POST", "/api/v1/api-keys", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = withUser(req, "low@example.com", "Low")
+	req = withScopes(req, model.ScopeProxyFetch, model.ScopeKeysManage) // no admin:write held
+	rec := httptest.NewRecorder()
+
+	s.handleCreateAPIKey(rec, req)
+	assert.Equal(t, http.StatusForbidden, rec.Code, "must not grant admin:write the caller lacks")
+}
+
+// A caller may mint a key with scopes it holds.
+func TestCreateAPIKey_CanGrantHeldScope(t *testing.T) {
+	s, _ := setupTestServer(t)
+
+	body := `{"name":"ok","scopes":["proxy:fetch"]}`
+	req := httptest.NewRequest("POST", "/api/v1/api-keys", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = withUser(req, "op@example.com", "Op")
+	req = withScopes(req, model.ScopeProxyFetch, model.ScopeKeysManage)
+	rec := httptest.NewRecorder()
+
+	s.handleCreateAPIKey(rec, req)
+	assert.Equal(t, http.StatusCreated, rec.Code)
 }
 
 func TestCreateAPIKey_MissingName_Returns400(t *testing.T) {

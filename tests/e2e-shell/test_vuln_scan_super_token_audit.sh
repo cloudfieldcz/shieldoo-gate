@@ -15,7 +15,7 @@ test_vuln_scan_super_token_audit() {
     # cleanest, doesn't depend on per_page. per_page=1 keeps the response tiny.
     _count_audit() {
         local resp
-        resp=$(curl -sf "${E2E_ADMIN_URL}/api/v1/audit?event_type=super_token_used&per_page=1" \
+        resp=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/audit?event_type=super_token_used&per_page=1" \
             -H "Authorization: Bearer ${SGW_PROXY_TOKEN}" 2>/dev/null) || { echo 0; return; }
         echo "$resp" | jq -r '.total // 0'
     }
@@ -24,7 +24,7 @@ test_vuln_scan_super_token_audit() {
     before_bearer=$(_count_audit)
 
     # 1. Bearer path: hit any admin endpoint with the super-token.
-    curl -sf -o /dev/null \
+    admin_curl -sf -o /dev/null \
         "${E2E_ADMIN_URL}/api/v1/vulnerabilities/summary" \
         -H "Authorization: Bearer ${SGW_PROXY_TOKEN}"
     sleep 1

@@ -81,6 +81,19 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Subset enforcement: a caller may not mint a key with scopes it does not itself
+	// hold (prevents privilege escalation / persistence). The global super-token ("*")
+	// and OIDC operators (admin:read+write+keys:manage) hold everything they can grant.
+	held := auth.ScopesFromContext(r.Context())
+	for _, sc := range scopes {
+		if !auth.ScopeSatisfiedBy(held, sc) {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "cannot grant scope you do not hold: " + sc,
+			})
+			return
+		}
+	}
+
 	id, err := s.db.CreateAPIKeyWithScopes(hash, req.Name, ownerEmail, strings.Join(scopes, ","))
 	if err != nil {
 		log.Error().Err(err).Msg("api: failed to create api key")

@@ -44,7 +44,7 @@ test_proxy_auth() {
     # 4. Create PAT via admin API (if admin API has API key endpoints)
     # ------------------------------------------------------------------
     local create_resp
-    create_resp=$(curl -sf -X POST "${E2E_ADMIN_URL}/api/v1/api-keys" \
+    create_resp=$(admin_curl -sf -X POST "${E2E_ADMIN_URL}/api/v1/api-keys" \
         -H "Content-Type: application/json" \
         -d '{"name":"e2e-test-key"}' 2>/dev/null) || true
 
@@ -85,7 +85,7 @@ test_proxy_auth() {
             pat_id=$(echo "$create_resp" | jq -r '.id // empty')
             if [ -n "$pat_id" ]; then
                 local revoke_status
-                revoke_status=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+                revoke_status=$(admin_curl -s -o /dev/null -w "%{http_code}" -X DELETE \
                     "${E2E_ADMIN_URL}/api/v1/api-keys/${pat_id}")
                 assert_eq "Proxy auth: revoke PAT returns 204" "204" "$revoke_status"
 

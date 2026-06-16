@@ -7,7 +7,7 @@ test_vuln_scan_npm() {
 
     # Skip when feature is disabled.
     local pre_status
-    pre_status=$(curl -s -o /dev/null -w "%{http_code}" \
+    pre_status=$(admin_curl -s -o /dev/null -w "%{http_code}" \
         "${E2E_ADMIN_URL}/api/v1/vulnerabilities/summary")
     if [ "$pre_status" = "503" ]; then
         log_skip "Vuln-scan: feature disabled"
@@ -52,7 +52,7 @@ test_vuln_scan_npm() {
     local i
     for i in {1..30}; do
         sleep 1
-        status=$(curl -sf "${E2E_ADMIN_URL}/api/v1/vulnerabilities/scan-runs/${scan_run_id}" \
+        status=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/vulnerabilities/scan-runs/${scan_run_id}" \
             "${bearer[@]}" | jq -r '.status // "unknown"')
         case "$status" in
             done|failed) break ;;
@@ -66,7 +66,7 @@ test_vuln_scan_npm() {
 
     # Findings should be non-empty for lodash@4.17.10 (CVE-2019-10744) etc.
     local findings
-    findings=$(curl -sf "${E2E_ADMIN_URL}/api/v1/vulnerabilities/scan-runs/${scan_run_id}/findings" \
+    findings=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/vulnerabilities/scan-runs/${scan_run_id}/findings" \
         "${bearer[@]}" | jq '.items | length')
     if [ "${findings:-0}" -gt 0 ]; then
         log_pass "Vuln-scan npm: ${findings} findings reported (>0 expected)"

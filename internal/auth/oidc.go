@@ -1,109 +1,52 @@
 package auth
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
-
-	"github.com/coreos/go-oidc/v3/oidc"
-	"github.com/rs/zerolog/log"
 )
 
-// OIDCMiddleware validates JWT Bearer tokens from the Authorization header
-// using OIDC discovery and JWKS verification.
+// OIDCMiddleware authenticates admin-UI requests using the server-side session cookie.
+//
+// It does NOT accept OIDC ID tokens on the Authorization header. API clients must use
+// a PAT (see PATBearerMiddleware); the ID token is an authentication assertion, not an
+// API access token, so accepting it as a bearer was token-type confusion. The cookie
+// now carries an opaque session ID (not the raw ID token), validated against the store.
 type OIDCMiddleware struct {
-	verifier *oidc.IDTokenVerifier
-	clientID string
+	store *SessionStore
 }
 
-// NewOIDCMiddleware creates a new middleware that discovers OIDC configuration
-// from the issuer URL and verifies tokens against the provider's JWKS.
-func NewOIDCMiddleware(ctx context.Context, issuerURL, clientID string) (*OIDCMiddleware, error) {
-	provider, err := oidc.NewProvider(ctx, issuerURL)
-	if err != nil {
-		return nil, err
-	}
-
-	verifier := provider.Verifier(&oidc.Config{
-		ClientID: clientID,
-	})
-
-	return &OIDCMiddleware{
-		verifier: verifier,
-		clientID: clientID,
-	}, nil
+// NewOIDCMiddleware creates middleware that validates the session cookie against store.
+func NewOIDCMiddleware(store *SessionStore) *OIDCMiddleware {
+	return &OIDCMiddleware{store: store}
 }
 
-// Authenticate returns HTTP middleware that validates Bearer JWT tokens.
-// On success, the verified user identity is stored in the request context.
-// On failure, it returns 401 Unauthorized with a JSON error body.
+// Authenticate returns HTTP middleware that requires a valid session cookie.
+// Browser requests without a session are redirected to login; API clients get 401 JSON.
 func (m *OIDCMiddleware) Authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// First try Authorization header (API clients).
-		rawToken := extractBearerToken(r)
-
-		// Fall back to session cookie (UI flow).
-		if rawToken == "" {
-			if cookie, err := r.Cookie(sessionCookieName); err == nil {
-				rawToken = cookie.Value
-			}
-		}
-
-		if rawToken == "" {
-			// Browser requests get redirected to login; API clients get 401 JSON.
-			if isBrowserRequest(r) {
-				http.Redirect(w, r, "/auth/login", http.StatusFound)
-			} else {
-				writeAuthError(w, http.StatusUnauthorized, "missing bearer token or session cookie")
-			}
+		cookie, err := r.Cookie(sessionCookieName)
+		if err != nil || cookie.Value == "" {
+			m.deny(w, r)
 			return
 		}
-
-		idToken, err := m.verifier.Verify(r.Context(), rawToken)
-		if err != nil {
-			log.Debug().Err(err).Msg("auth: token verification failed")
-			if isBrowserRequest(r) {
-				http.Redirect(w, r, "/auth/login", http.StatusFound)
-			} else {
-				writeAuthError(w, http.StatusUnauthorized, "invalid or expired token")
-			}
+		user, ok := m.store.Validate(cookie.Value)
+		if !ok {
+			m.deny(w, r)
 			return
 		}
-
-		// Extract standard claims.
-		var claims struct {
-			Email string `json:"email"`
-			Name  string `json:"name"`
-		}
-		if err := idToken.Claims(&claims); err != nil {
-			log.Warn().Err(err).Msg("auth: failed to parse token claims")
-			writeAuthError(w, http.StatusUnauthorized, "invalid token claims")
-			return
-		}
-
-		user := &UserInfo{
-			Subject: idToken.Subject,
-			Email:   claims.Email,
-			Name:    claims.Name,
-		}
-
 		ctx := ContextWithUser(r.Context(), user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-// extractBearerToken extracts the token from "Authorization: Bearer <token>".
-func extractBearerToken(r *http.Request) string {
-	auth := r.Header.Get("Authorization")
-	if auth == "" {
-		return ""
+// deny redirects browsers to login and returns 401 JSON to API clients.
+func (m *OIDCMiddleware) deny(w http.ResponseWriter, r *http.Request) {
+	if isBrowserRequest(r) {
+		http.Redirect(w, r, "/auth/login", http.StatusFound)
+		return
 	}
-	parts := strings.SplitN(auth, " ", 2)
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
-		return ""
-	}
-	return strings.TrimSpace(parts[1])
+	writeAuthError(w, http.StatusUnauthorized, "missing or invalid session")
 }
 
 // isBrowserRequest returns true when the request likely comes from a web browser

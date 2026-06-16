@@ -2,28 +2,16 @@ package auth
 
 import (
 	"regexp"
-
-	"github.com/rs/zerolog"
 )
 
-// LogRedactorHook is a zerolog Hook that scrubs Authorization, Cookie, X-Api-Key
-// and similar header values from any line emission. Used to protect against
-// secret leakage in panic-recovery stacks and ad-hoc Debug() lines that include
-// http.Request dumps.
-type LogRedactorHook struct{}
-
-// Run implements zerolog.Hook.
-func (LogRedactorHook) Run(e *zerolog.Event, level zerolog.Level, msg string) {
-	// zerolog's built-in field scrubbing happens at field write time. The hook
-	// runs before the event is emitted so we redact via msg substitution.
-	if msg == "" {
-		return
-	}
-	// Hooks cannot mutate the message in-place; we swap via Discard + Str.
-	if redacted := RedactBytes([]byte(msg)); string(redacted) != msg {
-		e.Discard()
-	}
-}
+// RedactBytes/RedactString mask secret-bearing header values in free text. They are
+// applied at known leak points (e.g. panic-recovery stack dumps in recoverer.go).
+//
+// Note: a zerolog Hook cannot rewrite an event's message, only discard it — so there
+// is intentionally NO global redaction hook here. A hook that silently dropped whole
+// log lines on a regex match would be both lossy and a false sense of security. The
+// real defense is not logging secrets in the first place; these helpers are the
+// belt-and-suspenders for the few places that dump untrusted text.
 
 // authPatterns lists regex patterns to scrub in panic-stack and free-text logs.
 var authPatterns = []*regexp.Regexp{

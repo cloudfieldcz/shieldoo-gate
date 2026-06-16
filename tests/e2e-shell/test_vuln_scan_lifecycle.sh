@@ -6,7 +6,7 @@ test_vuln_scan_lifecycle() {
     log_section "Vuln-scan: lifecycle (upload → list → ignore → rescan)"
 
     local pre_status
-    pre_status=$(curl -s -o /dev/null -w "%{http_code}" \
+    pre_status=$(admin_curl -s -o /dev/null -w "%{http_code}" \
         "${E2E_ADMIN_URL}/api/v1/vulnerabilities/summary")
     if [ "$pre_status" = "503" ]; then
         log_skip "Vuln-scan: feature disabled, skipping lifecycle tests"
@@ -63,7 +63,7 @@ test_vuln_scan_lifecycle() {
     # 2. Component appears in the cross-project list.
     # ------------------------------------------------------------------
     local list_resp
-    list_resp=$(curl -sf -X GET "${E2E_ADMIN_URL}/api/v1/vulnerabilities/components?project=default" \
+    list_resp=$(admin_curl -sf -X GET "${E2E_ADMIN_URL}/api/v1/vulnerabilities/components?project=default" \
         "${admin_auth[@]}" 2>/dev/null) || true
     if [[ "$list_resp" == *"$component_name"* ]]; then
         log_pass "Vuln-scan: uploaded component visible in /vulnerabilities/components"
@@ -84,7 +84,7 @@ test_vuln_scan_lifecycle() {
     # 3. Create an ignore against a fake CVE — exercises POST /ignores.
     # ------------------------------------------------------------------
     local ignore_resp
-    ignore_resp=$(curl -sf -X POST \
+    ignore_resp=$(admin_curl -sf -X POST \
         "${E2E_ADMIN_URL}/api/v1/vulnerabilities/components/${component_id}/ignores" \
         "${admin_auth[@]}" \
         -H "Content-Type: application/json" \
@@ -101,7 +101,7 @@ test_vuln_scan_lifecycle() {
     # 4. List ignores — both active and (?include=expired) views.
     # ------------------------------------------------------------------
     local active_list
-    active_list=$(curl -sf -X GET \
+    active_list=$(admin_curl -sf -X GET \
         "${E2E_ADMIN_URL}/api/v1/vulnerabilities/components/${component_id}/ignores" \
         "${admin_auth[@]}" 2>/dev/null) || true
     if [[ "$active_list" == *"CVE-2024-9999"* ]]; then
@@ -111,7 +111,7 @@ test_vuln_scan_lifecycle() {
     fi
 
     local with_expired
-    with_expired=$(curl -sf -X GET \
+    with_expired=$(admin_curl -sf -X GET \
         "${E2E_ADMIN_URL}/api/v1/vulnerabilities/components/${component_id}/ignores?include=expired" \
         "${admin_auth[@]}" 2>/dev/null) || true
     if [[ "$with_expired" == *'"items"'* ]] && [[ "$with_expired" == *'"expired"'* ]]; then
@@ -125,7 +125,7 @@ test_vuln_scan_lifecycle() {
     # ------------------------------------------------------------------
     if [ -n "$ignore_id" ] && [ "$ignore_id" != "null" ]; then
         local revoke_status
-        revoke_status=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+        revoke_status=$(admin_curl -s -o /dev/null -w "%{http_code}" -X DELETE \
             "${E2E_ADMIN_URL}/api/v1/vulnerabilities/components/${component_id}/ignores/${ignore_id}" \
             "${admin_auth[@]}")
         # Accept 200 (with body) or 204 (no body) — handler choice.
@@ -147,7 +147,7 @@ test_vuln_scan_lifecycle() {
     local poll
     for poll in 1 2 3 4 5 6 7 8 9 10; do
         local comp_resp
-        comp_resp=$(curl -sf -X GET \
+        comp_resp=$(admin_curl -sf -X GET \
             "${E2E_ADMIN_URL}/api/v1/vulnerabilities/components/${component_id}" \
             "${admin_auth[@]}" 2>/dev/null) || true
         local last_scan
@@ -158,7 +158,7 @@ test_vuln_scan_lifecycle() {
         sleep 1
     done
     local rescan_resp
-    rescan_resp=$(curl -sf -X POST \
+    rescan_resp=$(admin_curl -sf -X POST \
         "${E2E_ADMIN_URL}/api/v1/vulnerabilities/components/${component_id}/rescan" \
         "${admin_auth[@]}" 2>/dev/null) || true
     rescan_run_id=$(echo "$rescan_resp" | jq -r '.scan_run_id // empty' 2>/dev/null)
@@ -176,7 +176,7 @@ test_vuln_scan_lifecycle() {
     # 7. Cursor pagination on /scans — first page + next_cursor round-trip.
     # ------------------------------------------------------------------
     local scans_resp
-    scans_resp=$(curl -sf -X GET \
+    scans_resp=$(admin_curl -sf -X GET \
         "${E2E_ADMIN_URL}/api/v1/vulnerabilities/components/${component_id}/scans?limit=1" \
         "${admin_auth[@]}" 2>/dev/null) || true
     local item_count next_cursor
@@ -193,7 +193,7 @@ test_vuln_scan_lifecycle() {
     # NOT that pagination is broken.
     if [ -n "$next_cursor" ] && [ "$next_cursor" != "null" ]; then
         local page2
-        page2=$(curl -sf -X GET \
+        page2=$(admin_curl -sf -X GET \
             "${E2E_ADMIN_URL}/api/v1/vulnerabilities/components/${component_id}/scans?limit=1&cursor=${next_cursor}" \
             "${admin_auth[@]}" 2>/dev/null) || true
         local page2_count page2_next

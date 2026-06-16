@@ -140,7 +140,7 @@ test_docker_registry() {
 
     # Tag Management API (admin port — no proxy auth needed)
     local registries_status
-    registries_status=$(curl -s -o /dev/null -w "%{http_code}" \
+    registries_status=$(admin_curl -s -o /dev/null -w "%{http_code}" \
         "${E2E_ADMIN_URL}/api/v1/docker/registries")
     assert_eq "Docker Registry: /api/v1/docker/registries returns 200" "200" "$registries_status"
 
@@ -243,7 +243,7 @@ test_docker_registry() {
         if [ -n "$repo_id" ] && [ "$repo_id" != "null" ]; then
             # Create a tag via API
             local create_tag_status
-            create_tag_status=$(curl -s -o /dev/null -w "%{http_code}" \
+            create_tag_status=$(admin_curl -s -o /dev/null -w "%{http_code}" \
                 -X POST -H "Content-Type: application/json" \
                 -d '{"tag": "e2e-test-tag", "manifest_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}' \
                 "${E2E_ADMIN_URL}/api/v1/docker/repositories/${repo_id}/tags")
@@ -255,7 +255,7 @@ test_docker_registry() {
 
             # Delete the tag
             local delete_tag_status
-            delete_tag_status=$(curl -s -o /dev/null -w "%{http_code}" \
+            delete_tag_status=$(admin_curl -s -o /dev/null -w "%{http_code}" \
                 -X DELETE "${E2E_ADMIN_URL}/api/v1/docker/repositories/${repo_id}/tags/e2e-test-tag")
             if [ "$delete_tag_status" = "204" ] || [ "$delete_tag_status" = "200" ]; then
                 log_pass "Docker Registry: tag deletion via API (HTTP ${delete_tag_status})"
@@ -265,7 +265,7 @@ test_docker_registry() {
 
             # Manual sync trigger
             local sync_status
-            sync_status=$(curl -s -o /dev/null -w "%{http_code}" \
+            sync_status=$(admin_curl -s -o /dev/null -w "%{http_code}" \
                 -X POST "${E2E_ADMIN_URL}/api/v1/docker/sync/${repo_id}")
             if [ "$sync_status" = "202" ] || [ "$sync_status" = "200" ]; then
                 log_pass "Docker Registry: manual sync trigger accepted (HTTP ${sync_status})"

@@ -16,6 +16,8 @@ Configuration is loaded by `internal/config/config.go` using [Viper](https://git
 # ─── Server ────────────────────────────────────────────────────────
 server:
   host: "0.0.0.0"             # Bind address for all listeners
+  trusted_proxies: []         # CIDRs/IPs whose X-Forwarded-For/X-Real-IP are trusted for client IP
+                              # resolution (audit + rate limiting). Empty = trust no proxy (use real peer).
 
 # ─── Ports ─────────────────────────────────────────────────────────
 # Each ecosystem adapter and the admin API run on separate ports
@@ -283,11 +285,14 @@ auth:
   issuer_url: ""                       # OIDC provider URL (e.g. "https://accounts.google.com")
   client_id: ""                        # OAuth2 client ID from your OIDC provider
   client_secret_env: "SGW_OIDC_CLIENT_SECRET"  # Env var name holding client secret
-  redirect_url: ""                     # Redirect URL (e.g. "https://gate.example.com:8080/auth/callback")
+  redirect_url: ""                     # MUST be https:// in production; validation rejects http unless cookie_insecure=true
   scopes:                              # OIDC scopes to request
     - "openid"
     - "email"
     - "profile"
+  session_ttl: "15m"                   # Admin UI session lifetime (opaque server-side session; see ADR-011)
+  cookie_insecure: false               # Local-HTTP-dev ONLY opt-out; default false → auth cookies are Secure
+  allowed_origins: []                  # Optional CSRF Origin allowlist for cookie-auth mutations (empty = same-origin)
 
 # ─── Alerts (v1.1) ────────────────────────────────────────────────
 # Real-time notifications for security events.
@@ -425,7 +430,7 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 | Struct | Config Section | Key Fields |
 |---|---|---|
 | `Config` | root | Top-level container for all sections |
-| `ServerConfig` | `server` | `Host` |
+| `ServerConfig` | `server` | `Host`, `TrustedProxies` |
 | `PortsConfig` | `ports` | `PyPI`, `NPM`, `NuGet`, `Docker`, `Maven`, `RubyGems`, `GoMod`, `Admin` |
 | `UpstreamsConfig` | `upstreams` | `PyPI`, `NPM`, `NuGet`, `Docker` (struct), `Maven`, `RubyGems`, `GoMod` |
 | `DockerUpstreamConfig` | `upstreams.docker` | `DefaultRegistry`, `AllowedRegistries`, `Sync`, `Push` |
@@ -458,6 +463,7 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 | `AuthConfig` | `auth` | `Enabled`, `IssuerURL`, `ClientID`, `ClientSecretEnv`, `RedirectURL`, `Scopes` |
 | `PublicURLsConfig` | `public_urls` | `PyPI`, `NPM`, `NuGet`, `Docker`, `Maven`, `RubyGems`, `GoMod` |
 | `ProxyAuthConfig` | `proxy_auth` | `Enabled`, `GlobalTokenEnv` |
+| `AuthConfig` | `auth` | `Enabled`, `IssuerURL`, `ClientID`, `ClientSecretEnv`, `RedirectURL`, `Scopes`, `SessionTTL`, `CookieInsecure`, `AllowedOrigins` |
 | `AlertsConfig` | `alerts` | `Webhook`, `Slack`, `Email` |
 | `WebhookAlertConfig` | `alerts.webhook` | `Enabled`, `URL`, `SecretEnv`, `AllowInsecure`, `On` |
 | `SlackAlertConfig` | `alerts.slack` | `Enabled`, `WebhookEnv`, `On` |
@@ -478,6 +484,9 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 - When `rescan.enabled` is `true`: `rescan.interval` must be a valid Go duration, `rescan.batch_size` >= 0, `rescan.max_concurrent` >= 0
 - When `auth.enabled` is `true`: `auth.issuer_url` and `auth.client_id` must be non-empty
 - When `proxy_auth.enabled` is `true`: at least one auth method must be available — either `global_token_env` references a set env var, or `auth.enabled` is `true` (for PAT support via admin API). If neither is available, startup fails. When both `auth` and `proxy_auth` are enabled, users can generate Personal Access Tokens (PATs) from the **Profile** page in the admin UI (`/profile`).
+- When `auth.enabled` is `true`: `auth.redirect_url`, if set, must use `https://` unless `auth.cookie_insecure=true` (local-HTTP-dev opt-out) — the session cookie is a credential and must not traverse cleartext. `auth.session_ttl`, if set, must be a valid Go duration.
+- **Admin API auth fails closed.** Scope enforcement is active whenever `auth` **or** `proxy_auth` is enabled; the admin API is open only in the fully unauthenticated dev mode (neither enabled). In proxy-auth-only mode, administer via the global token as `Authorization: Bearer <token>` (scope `*`). See [ADR-011](adr/ADR-011-auth-surface-hardening.md).
+- **API-key management** requires the `keys:manage` scope (OIDC operator sessions have it); a key cannot be minted with scopes the caller does not hold.
 
 ## Rescan Scheduler (v1.1)
 

@@ -9,7 +9,7 @@ test_vuln_scan_negative() {
     # Pre-flight: vuln-scan must be enabled. Without it every endpoint returns
     # 503 and the matrix below is meaningless — skip cleanly.
     local pre_status
-    pre_status=$(curl -s -o /dev/null -w "%{http_code}" \
+    pre_status=$(admin_curl -s -o /dev/null -w "%{http_code}" \
         "${E2E_ADMIN_URL}/api/v1/vulnerabilities/summary")
     if [ "$pre_status" = "503" ]; then
         log_skip "Vuln-scan: feature disabled in this run, skipping all negative tests"
@@ -23,6 +23,8 @@ test_vuln_scan_negative() {
     # ------------------------------------------------------------------
     if [ "${SGW_PROXY_AUTH_ENABLED:-false}" = "true" ]; then
         local s_noauth
+        # NOTE: plain curl (NOT admin_curl) — this case deliberately sends NO
+        # credential to assert the scope-protected route rejects it.
         s_noauth=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
             "${E2E_ADMIN_URL}${upload_path}" \
             -H "Content-Type: application/vnd.cyclonedx+json" \
@@ -36,6 +38,8 @@ test_vuln_scan_negative() {
         # 403 with random Bearer (not the super-token, not a known PAT) — the
         # PAT lookup fails → 401, which is also acceptable here.
         local s_invalid
+        # NOTE: plain curl (NOT admin_curl) — must carry ONLY the bogus Bearer so
+        # the PAT lookup fails; admin_curl would prepend the valid super-token.
         s_invalid=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
             "${E2E_ADMIN_URL}${upload_path}" \
             -H "Authorization: Bearer not-a-real-token" \

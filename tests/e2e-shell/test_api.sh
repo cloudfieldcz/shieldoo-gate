@@ -60,7 +60,7 @@ test_api() {
         "${E2E_ADMIN_URL}/metrics"
 
     local metrics_body
-    metrics_body=$(curl -sf "${E2E_ADMIN_URL}/metrics")
+    metrics_body=$(admin_curl -sf "${E2E_ADMIN_URL}/metrics")
     assert_contains "API: /metrics contains 'go_goroutines'" \
         "go_goroutines" \
         "$metrics_body"

@@ -11,12 +11,13 @@ info:
     Every credential carries a scope set:
 
     - **PAT** (`Authorization: Bearer <token>` on the admin API, or the Basic-auth
-      password on the proxy) — scopes from the key's `scopes` column.
-    - **OIDC session** (cookie) — implicitly granted `admin:read,admin:write`
-      (a valid operator session is full admin; scopes are **not** read from the
-      JWT, they are injected by the auth chain).
+      password on the proxy) — scopes from the key's `scopes` column. The session
+      cookie holds an opaque server-side session ID, **not** a JWT; OIDC ID tokens
+      are no longer accepted on the `Authorization` header (use a PAT for API access).
+    - **OIDC session** (cookie) — implicitly granted `admin:read,admin:write,keys:manage`
+      (a valid operator session is full admin; scopes are injected by the auth chain).
     - **Global super-token** — scope `*`, bypasses every check (always audited
-      via `super_token_used`).
+      via `super_token_used`; the request is rejected if that audit row cannot be written).
 
     Enforcement:
 
@@ -24,8 +25,14 @@ info:
       method — `GET`/`HEAD`/`OPTIONS` require `admin:read`; `POST`/`PUT`/`PATCH`/
       `DELETE` require `admin:write`. `admin:write` implies `admin:read`.
       Insufficient scope → **403** `{"error":"forbidden","message":"missing scope …"}`.
+      The admin API fails closed: scope enforcement is active whenever `auth` **or**
+      `proxy_auth` is enabled; only the fully unauthenticated dev mode leaves it open.
+    - **API-key management** (`/api/v1/api-keys`): additionally requires `keys:manage`,
+      and a key cannot be minted with scopes the caller does not itself hold.
     - **Proxy** (package pulls): require `proxy:fetch`.
     - **Scan-upload**: requires `scan:upload`.
+    - **CSRF**: cookie-authenticated mutations must be same-origin (or carry the
+      `X-Shieldoo-CSRF` header); token-authenticated requests are exempt.
 
     Scopes are orthogonal least-privilege roles: only `admin:write ⇒ admin:read`;
     no other implication. A `proxy:fetch`-only token cannot perform admin actions.
@@ -739,7 +746,8 @@ paths:
       description: |
         Creates a new per-user API key (PAT) for proxy authentication.
         The plaintext token is returned only once in the response.
-        Requires OIDC authentication on the admin API.
+        Requires the `keys:manage` scope (OIDC operator sessions have it).
+        A key cannot be granted scopes the caller does not itself hold (403).
         Only available when both `auth.enabled` and `proxy_auth.enabled` are true.
       requestBody:
         required: true
@@ -760,7 +768,8 @@ paths:
                     Optional list of scopes granted to this key. Empty list defaults
                     to `[proxy:fetch]` for backwards compatibility. Unknown scopes
                     return 400. Duplicates are deduplicated and reordered into the
-                    canonical order (proxy:fetch, scan:upload, admin:read, admin:write).
+                    canonical order (proxy:fetch, scan:upload, admin:read, admin:write,
+                    keys:manage). A scope the caller does not hold returns 403.
                   example: ["proxy:fetch", "scan:upload"]
       responses:
         "201":
@@ -771,6 +780,8 @@ paths:
                 $ref: "#/components/schemas/APIKeyCreateResponse"
         "400":
           description: Invalid request (missing name, name too long, or invalid scope)
+        "403":
+          description: Missing keys:manage scope, or attempt to grant a scope the caller does not hold
 
     get:
       summary: List API keys owned by the authenticated user
@@ -1846,12 +1857,14 @@ components:
         - scan:upload
         - admin:read
         - admin:write
+        - keys:manage
       description: |
         Canonical capability tokens used by `RequireScope` middleware.
         - `proxy:fetch` — required for Basic-auth proxy traffic (pip/npm/docker/etc).
         - `scan:upload` — POST CycloneDX SBOMs to `/api/v1/projects/{label}/components/{name}/scans`.
         - `admin:read` — read-only admin API (artifacts, vulnerabilities, audit log).
         - `admin:write` — write admin API (overrides, ignores, deletes, rescan).
+        - `keys:manage` — create/list/revoke API keys (`/api/v1/api-keys`).
 
     APIKeyCreateResponse:
       type: object

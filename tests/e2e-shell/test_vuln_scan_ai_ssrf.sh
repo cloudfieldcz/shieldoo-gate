@@ -7,7 +7,7 @@ test_vuln_scan_ai_ssrf() {
 
     # Preconditions: vuln-scan + AI features both enabled.
     local pre_status
-    pre_status=$(curl -s -o /dev/null -w "%{http_code}" \
+    pre_status=$(admin_curl -s -o /dev/null -w "%{http_code}" \
         "${E2E_ADMIN_URL}/api/v1/vulnerabilities/summary")
     if [ "$pre_status" = "503" ]; then
         log_skip "Vuln-scan AI SSRF: feature disabled"
@@ -27,7 +27,7 @@ test_vuln_scan_ai_ssrf() {
     local component="e2e-aissrf-$$"
     local sbom='{"bomFormat":"CycloneDX","specVersion":"1.5","components":[{"type":"library","name":"requests","version":"2.31.0","purl":"pkg:pypi/requests@2.31.0"}]}'
     local upload_resp
-    upload_resp=$(curl -sf -X POST \
+    upload_resp=$(admin_curl -sf -X POST \
         "${E2E_ADMIN_URL}/api/v1/projects/default/components/${component}/scans?ecosystem=pypi" \
         "${bearer[@]}" \
         -H "Content-Type: application/vnd.cyclonedx+json" \
@@ -53,7 +53,7 @@ test_vuln_scan_ai_ssrf() {
     for url in "${malicious[@]}"; do
         # Enable AI on the component + set repo_url. The Component edit endpoint
         # is PATCH /api/v1/vulnerabilities/components/{id} with JSON body.
-        curl -sf -X PATCH \
+        admin_curl -sf -X PATCH \
             "${E2E_ADMIN_URL}/api/v1/vulnerabilities/components/${component_id}" \
             "${bearer[@]}" \
             -H "Content-Type: application/json" \
@@ -61,7 +61,7 @@ test_vuln_scan_ai_ssrf() {
             >/dev/null 2>&1 || true
 
         local code
-        code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+        code=$(admin_curl -s -o /dev/null -w "%{http_code}" -X POST \
             "${E2E_ADMIN_URL}/api/v1/ai/draft-ignore-reason" \
             "${bearer[@]}" \
             -H "Content-Type: application/json" \

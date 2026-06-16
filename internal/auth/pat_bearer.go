@@ -47,14 +47,21 @@ func (m *PATBearerMiddleware) Authenticate(next http.Handler) http.Handler {
 			ctx = ContextWithUser(ctx, &UserInfo{Email: "", Name: "global-token"})
 			ctx = WithScopes(ctx, []string{"*"})
 			ctx = WithScopeKey(ctx, "global-token")
+			// Security Invariant 6: fail CLOSED if the super-token use cannot be audited.
 			if m.auditWriter != nil {
-				_ = m.auditWriter.WriteVulnEvent(ctx, model.AuditEntry{
+				if err := m.auditWriter.WriteVulnEvent(ctx, model.AuditEntry{
 					EventType:    model.EventSuperTokenUsed,
 					Reason:       "admin endpoint accessed via global token",
 					ClientIP:     r.RemoteAddr,
 					UserAgent:    r.UserAgent(),
 					MetadataJSON: `{"name":"global-token"}`,
-				})
+				}); err != nil {
+					log.Error().Err(err).Msg("auth: failed to audit super_token_used (failing closed)")
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusInternalServerError)
+					_, _ = w.Write([]byte(`{"error":"audit_error"}`))
+					return
+				}
 			}
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return

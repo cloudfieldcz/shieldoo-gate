@@ -20,14 +20,18 @@ type APIKey struct {
 
 // Scope constants for least-privilege PAT enforcement.
 const (
-	ScopeProxyFetch  = "proxy:fetch"
-	ScopeScanUpload  = "scan:upload"
-	ScopeAdminRead   = "admin:read"
-	ScopeAdminWrite  = "admin:write"
+	ScopeProxyFetch = "proxy:fetch"
+	ScopeScanUpload = "scan:upload"
+	ScopeAdminRead  = "admin:read"
+	ScopeAdminWrite = "admin:write"
+	// ScopeKeysManage authorizes API-key management (create/list/revoke). It is
+	// separate from admin:write so a general admin token cannot mint or revoke API
+	// keys (token self-replication / privilege persistence) unless explicitly granted.
+	ScopeKeysManage = "keys:manage"
 )
 
 // AllScopes lists every recognized scope (used by the token-creation handler).
-var AllScopes = []string{ScopeProxyFetch, ScopeScanUpload, ScopeAdminRead, ScopeAdminWrite}
+var AllScopes = []string{ScopeProxyFetch, ScopeScanUpload, ScopeAdminRead, ScopeAdminWrite, ScopeKeysManage}
 
 // HasScope returns true when scopes (comma-separated) contains needle. Empty list
 // is treated as legacy proxy:fetch only.

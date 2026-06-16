@@ -51,7 +51,7 @@ test_integrity() {
                 assert_eq "$desc — INTEGRITY_VIOLATION audit event" "INTEGRITY_VIOLATION" "$event"
 
                 # 7. Cleanup: delete artifact.
-                curl -s -X DELETE "${E2E_CURL_AUTH[@]}" "${E2E_ADMIN_URL}/api/v1/artifacts/${artifact_id}" > /dev/null
+                admin_curl -s -X DELETE "${E2E_CURL_AUTH[@]}" "${E2E_ADMIN_URL}/api/v1/artifacts/${artifact_id}" > /dev/null
             fi
         fi
     fi
@@ -106,7 +106,7 @@ test_integrity() {
             db_exec "UPDATE artifacts SET sha256 = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef' WHERE id = '${artifact_id}'"
 
             # 8. Trigger rescan via API.
-            http_code=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_CURL_AUTH[@]}" \
+            http_code=$(admin_curl -s -o /dev/null -w "%{http_code}" "${E2E_CURL_AUTH[@]}" \
                 -X POST "${E2E_ADMIN_URL}/api/v1/artifacts/${artifact_id}/rescan")
             assert_eq "$desc — rescan API" "202" "$http_code"
 
@@ -123,7 +123,7 @@ test_integrity() {
             assert_eq "$desc — rescan INTEGRITY_VIOLATION audit" "INTEGRITY_VIOLATION" "$event"
 
             # 12. Cleanup: delete artifact.
-            curl -s -X DELETE "${E2E_CURL_AUTH[@]}" "${E2E_ADMIN_URL}/api/v1/artifacts/${artifact_id}" > /dev/null
+            admin_curl -s -X DELETE "${E2E_CURL_AUTH[@]}" "${E2E_ADMIN_URL}/api/v1/artifacts/${artifact_id}" > /dev/null
         fi
     fi
 
@@ -160,7 +160,7 @@ test_integrity() {
             assert_eq "$desc — blocked after tamper" "403" "$http_code"
 
             # 4. Delete artifact via API.
-            http_code=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_CURL_AUTH[@]}" \
+            http_code=$(admin_curl -s -o /dev/null -w "%{http_code}" "${E2E_CURL_AUTH[@]}" \
                 -X DELETE "${E2E_ADMIN_URL}/api/v1/artifacts/${artifact_id}")
             assert_eq "$desc — delete API" "200" "$http_code"
 

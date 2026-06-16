@@ -65,6 +65,13 @@ func scopeSatisfies(held []string, required string) bool {
 	return false
 }
 
+// ScopeSatisfiedBy reports whether the held scope list satisfies required (honoring
+// the "*" wildcard and admin:write⇒admin:read). Exported for callers that need to
+// check scope possession outside middleware (e.g. API-key minting subset checks).
+func ScopeSatisfiedBy(held []string, required string) bool {
+	return scopeSatisfies(held, required)
+}
+
 // RequireScope returns an http middleware that 403s any request whose held scopes
 // do not satisfy scope. Global-super-token ("*") requests always pass, and
 // admin:write satisfies an admin:read requirement (see scopeSatisfies).

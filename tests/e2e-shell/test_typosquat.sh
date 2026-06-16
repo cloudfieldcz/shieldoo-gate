@@ -138,7 +138,7 @@ test_typosquat() {
     # ------------------------------------------------------------------
     if [ "$lodsah_status" = "QUARANTINED" ]; then
         local release_response
-        release_response=$(curl -sf -X POST "${E2E_ADMIN_URL}/api/v1/artifacts/${lodsah_artifact_id_enc}/release" 2>/dev/null || echo "")
+        release_response=$(admin_curl -sf -X POST "${E2E_ADMIN_URL}/api/v1/artifacts/${lodsah_artifact_id_enc}/release" 2>/dev/null || echo "")
         if [ -n "$release_response" ]; then
             log_pass "Typosquat override: release endpoint accepted POST"
         else
@@ -209,7 +209,7 @@ test_typosquat() {
 
         # Release the block.
         local pypi_release_response
-        pypi_release_response=$(curl -sf -X POST \
+        pypi_release_response=$(admin_curl -sf -X POST \
             "${E2E_ADMIN_URL}/api/v1/artifacts/${pypi_typo_id_enc}/release" 2>/dev/null || echo "")
         if [ -n "$pypi_release_response" ]; then
             log_pass "Typosquat regression (pypi): release endpoint accepted POST"
@@ -276,7 +276,7 @@ test_typosquat() {
         assert_eq "Typosquat: NuGet synthetic row persisted as QUARANTINED (version=*)" \
             "QUARANTINED" "$nuget_status_persist"
         # Release and verify it sticks.
-        curl -sf -X POST "${E2E_ADMIN_URL}/api/v1/artifacts/${nuget_id_enc}/release" >/dev/null 2>&1 || true
+        admin_curl -sf -X POST "${E2E_ADMIN_URL}/api/v1/artifacts/${nuget_id_enc}/release" >/dev/null 2>&1 || true
         local nuget_after_release
         nuget_after_release=$(api_jq "/api/v1/artifacts/${nuget_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
         assert_eq "Typosquat: NuGet status CLEAN after release" "CLEAN" "$nuget_after_release"
@@ -299,7 +299,7 @@ test_typosquat() {
         maven_status_persist=$(api_jq "/api/v1/artifacts/${maven_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
         assert_eq "Typosquat: Maven 4-segment synthetic row persisted as QUARANTINED" \
             "QUARANTINED" "$maven_status_persist"
-        curl -sf -X POST "${E2E_ADMIN_URL}/api/v1/artifacts/${maven_id_enc}/release" >/dev/null 2>&1 || true
+        admin_curl -sf -X POST "${E2E_ADMIN_URL}/api/v1/artifacts/${maven_id_enc}/release" >/dev/null 2>&1 || true
         local maven_after_release
         maven_after_release=$(api_jq "/api/v1/artifacts/${maven_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
         assert_eq "Typosquat: Maven status CLEAN after release" "CLEAN" "$maven_after_release"
@@ -321,7 +321,7 @@ test_typosquat() {
         rubygems_status_persist=$(api_jq "/api/v1/artifacts/${rubygems_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
         assert_eq "Typosquat: RubyGems synthetic row persisted as QUARANTINED" \
             "QUARANTINED" "$rubygems_status_persist"
-        curl -sf -X POST "${E2E_ADMIN_URL}/api/v1/artifacts/${rubygems_id_enc}/release" >/dev/null 2>&1 || true
+        admin_curl -sf -X POST "${E2E_ADMIN_URL}/api/v1/artifacts/${rubygems_id_enc}/release" >/dev/null 2>&1 || true
         local rubygems_after_release
         rubygems_after_release=$(api_jq "/api/v1/artifacts/${rubygems_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
         assert_eq "Typosquat: RubyGems status CLEAN after release" "CLEAN" "$rubygems_after_release"
@@ -346,7 +346,7 @@ test_typosquat() {
         gomod_status_persist=$(api_jq "/api/v1/artifacts/${gomod_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
         assert_eq "Typosquat: gomod synthetic row persisted as QUARANTINED" \
             "QUARANTINED" "$gomod_status_persist"
-        curl -sf -X POST "${E2E_ADMIN_URL}/api/v1/artifacts/${gomod_id_enc}/release" >/dev/null 2>&1 || true
+        admin_curl -sf -X POST "${E2E_ADMIN_URL}/api/v1/artifacts/${gomod_id_enc}/release" >/dev/null 2>&1 || true
         local gomod_after_release
         gomod_after_release=$(api_jq "/api/v1/artifacts/${gomod_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
         assert_eq "Typosquat: gomod status CLEAN after release" "CLEAN" "$gomod_after_release"
@@ -380,7 +380,7 @@ test_typosquat() {
         docker_status_persist=$(api_jq "/api/v1/artifacts/${docker_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
         assert_eq "Typosquat: Docker synthetic row persisted as QUARANTINED" \
             "QUARANTINED" "$docker_status_persist"
-        curl -sf -X POST "${E2E_ADMIN_URL}/api/v1/artifacts/${docker_id_enc}/release" >/dev/null 2>&1 || true
+        admin_curl -sf -X POST "${E2E_ADMIN_URL}/api/v1/artifacts/${docker_id_enc}/release" >/dev/null 2>&1 || true
         local docker_after_release
         docker_after_release=$(api_jq "/api/v1/artifacts/${docker_id_enc}" '.status.status' 2>/dev/null || echo "MISSING")
         assert_eq "Typosquat: Docker status CLEAN after release" "CLEAN" "$docker_after_release"

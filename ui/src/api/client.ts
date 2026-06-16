@@ -28,12 +28,20 @@ import type {
   ArtifactLicenses,
 } from './types'
 
+// Custom header asserting the request is same-origin. The backend CSRF guard accepts
+// a cookie-authenticated mutation when this header is present (cross-site forms and
+// cross-site fetches cannot set custom headers without a CORS preflight we never allow).
+const csrfHeaders = { 'X-Shieldoo-CSRF': '1' }
+
 const api = axios.create({
   baseURL: '/api/v1',
+  headers: csrfHeaders,
 })
 
 // Axios instance for auth endpoints (no /api/v1 prefix).
-const authApi = axios.create({})
+const authApi = axios.create({
+  headers: csrfHeaders,
+})
 
 // Redirect to OIDC login on 401 (unauthenticated).
 const on401 = (error: unknown) => {

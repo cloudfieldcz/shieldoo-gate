@@ -89,14 +89,22 @@ func (m *APIKeyMiddleware) Authenticate(next http.Handler) http.Handler {
 			}
 			identity = "global-token"
 			scopes = []string{"*"} // super-token bypasses every RequireScope check
+			// Security Invariant 6: global super-token use MUST be audited. Fail
+			// CLOSED — if the audit row cannot be written, reject the request rather
+			// than authenticate a privileged token with no trace.
 			if m.auditWriter != nil {
-				_ = m.auditWriter.WriteVulnEvent(r.Context(), model.AuditEntry{
+				if err := m.auditWriter.WriteVulnEvent(r.Context(), model.AuditEntry{
 					EventType:    model.EventSuperTokenUsed,
 					Reason:       "proxy endpoint accessed via global token",
 					ClientIP:     r.RemoteAddr,
 					UserAgent:    r.UserAgent(),
 					MetadataJSON: `{"name":"global-token","path":"basic-auth"}`,
-				})
+				}); err != nil {
+					log.Error().Err(err).Msg("auth: failed to audit super_token_used (failing closed)")
+					writeProxyError(w, http.StatusInternalServerError, "audit_error",
+						"Failed to record privileged token use")
+					return
+				}
 			}
 		} else {
 			// 2. Check PAT via SHA-256 hash lookup.

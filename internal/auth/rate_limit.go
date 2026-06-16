@@ -1,11 +1,24 @@
 package auth
 
 import (
+	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/time/rate"
+)
+
+// Bucket-eviction defaults. Buckets idle longer than defaultIdleTTL are reclaimed
+// by the janitor; the map is also hard-capped at defaultMaxBuckets to bound memory
+// under adversarial load (e.g. spoofed source identities). Evicting an idle bucket
+// is safe: a bucket untouched for longer than its refill window has refilled to full,
+// so recreating it on the next request is equivalent to keeping it.
+const (
+	defaultIdleTTL    = 10 * time.Minute
+	defaultMaxBuckets = 50_000
+	janitorInterval   = time.Minute
 )
 
 // dimensionLimit overrides the default rate / burst for a specific bucket
@@ -15,18 +28,34 @@ type dimensionLimit struct {
 	burst int
 }
 
+// bucket is a token-bucket limiter plus the last time it was consulted, used for
+// idle eviction.
+type bucket struct {
+	lim      *rate.Limiter
+	lastSeen time.Time
+}
+
 // RateLimiter holds per-key token-bucket limiters with optional per-dimension
 // overrides. Bucket keys are namespaced by dimension so the same scope key can
 // have independent buckets for, say, "scan-upload" vs "ignore-create".
+//
+// The buckets map is bounded: a background janitor evicts idle buckets and the map
+// is hard-capped, so a flood of distinct keys cannot exhaust memory.
 type RateLimiter struct {
-	mu       sync.Mutex
-	buckets  map[string]*rate.Limiter
-	limit    rate.Limit
-	burst    int
-	overrides map[string]dimensionLimit
+	mu         sync.Mutex
+	buckets    map[string]*bucket
+	limit      rate.Limit
+	burst      int
+	overrides  map[string]dimensionLimit
+	idleTTL    time.Duration
+	maxBuckets int
+	now        func() time.Time // injectable clock for tests
+	stop       chan struct{}
+	stopOnce   sync.Once
 }
 
 // NewRateLimiter constructs a rate limiter with the supplied tokens-per-second + burst.
+// A background janitor goroutine is started to evict idle buckets; call Stop to end it.
 func NewRateLimiter(perSecond float64, burst int) *RateLimiter {
 	if perSecond <= 0 {
 		return nil
@@ -34,12 +63,18 @@ func NewRateLimiter(perSecond float64, burst int) *RateLimiter {
 	if burst <= 0 {
 		burst = 1
 	}
-	return &RateLimiter{
-		buckets:   make(map[string]*rate.Limiter),
-		limit:     rate.Limit(perSecond),
-		burst:     burst,
-		overrides: map[string]dimensionLimit{},
+	r := &RateLimiter{
+		buckets:    make(map[string]*bucket),
+		limit:      rate.Limit(perSecond),
+		burst:      burst,
+		overrides:  map[string]dimensionLimit{},
+		idleTTL:    defaultIdleTTL,
+		maxBuckets: defaultMaxBuckets,
+		now:        time.Now,
+		stop:       make(chan struct{}),
 	}
+	go r.janitorLoop()
+	return r
 }
 
 // WithDimensionLimit registers a per-dimension override. perSecond≤0 is rejected
@@ -55,6 +90,57 @@ func (r *RateLimiter) WithDimensionLimit(dimension string, perSecond float64, bu
 	r.overrides[dimension] = dimensionLimit{limit: rate.Limit(perSecond), burst: burst}
 	r.mu.Unlock()
 	return r
+}
+
+// Stop ends the janitor goroutine. Safe to call multiple times and on a nil receiver.
+func (r *RateLimiter) Stop() {
+	if r == nil {
+		return
+	}
+	r.stopOnce.Do(func() { close(r.stop) })
+}
+
+// janitorLoop periodically sweeps idle buckets.
+func (r *RateLimiter) janitorLoop() {
+	ticker := time.NewTicker(janitorInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			r.sweep()
+		case <-r.stop:
+			return
+		}
+	}
+}
+
+// sweep removes buckets that have been idle longer than idleTTL.
+func (r *RateLimiter) sweep() {
+	cutoff := r.now().Add(-r.idleTTL)
+	r.mu.Lock()
+	for k, b := range r.buckets {
+		if b.lastSeen.Before(cutoff) {
+			delete(r.buckets, k)
+		}
+	}
+	r.mu.Unlock()
+}
+
+// evictOldestLocked drops the single least-recently-seen bucket. Caller holds r.mu.
+// Used as a backstop when the map hits maxBuckets between janitor runs; the oldest
+// bucket is the least active and thus the safest to reclaim.
+func (r *RateLimiter) evictOldestLocked() {
+	var oldestKey string
+	var oldest time.Time
+	first := true
+	for k, b := range r.buckets {
+		if first || b.lastSeen.Before(oldest) {
+			oldestKey, oldest, first = k, b.lastSeen, false
+		}
+	}
+	if !first {
+		delete(r.buckets, oldestKey)
+	}
 }
 
 // limitFor returns (limit, burst) for the given dimension, falling back to the
@@ -75,18 +161,25 @@ func (r *RateLimiter) allowDim(dimension, key string) bool {
 		return true
 	}
 	r.mu.Lock()
-	l, ok := r.buckets[key]
+	b, ok := r.buckets[key]
 	if !ok {
-		dl, hasOverride := r.overrides[dimension]
-		if hasOverride {
-			l = rate.NewLimiter(dl.limit, dl.burst)
-		} else {
-			l = rate.NewLimiter(r.limit, r.burst)
+		if len(r.buckets) >= r.maxBuckets {
+			r.evictOldestLocked()
 		}
-		r.buckets[key] = l
+		dl, hasOverride := r.overrides[dimension]
+		var lim *rate.Limiter
+		if hasOverride {
+			lim = rate.NewLimiter(dl.limit, dl.burst)
+		} else {
+			lim = rate.NewLimiter(r.limit, r.burst)
+		}
+		b = &bucket{lim: lim}
+		r.buckets[key] = b
 	}
+	b.lastSeen = r.now()
+	allowed := b.lim.Allow()
 	r.mu.Unlock()
-	return l.Allow()
+	return allowed
 }
 
 // Allow returns true when the bucket for key has a token available. Uses the
@@ -98,7 +191,7 @@ func (r *RateLimiter) Allow(key string) bool {
 
 // Middleware returns an http middleware that 429s requests whose bucket is empty.
 // The bucket key is derived from the request context's ScopeKey (PAT hash, OIDC email,
-// or "anonymous"). Pass distinct dimension to scope the limiter to a specific endpoint
+// or the client IP). Pass distinct dimension to scope the limiter to a specific endpoint
 // (e.g. "scan-upload", "ignore-create"). Per-dimension limits override the default
 // rate when registered via WithDimensionLimit.
 func (r *RateLimiter) Middleware(dimension string) func(http.Handler) http.Handler {
@@ -110,7 +203,7 @@ func (r *RateLimiter) Middleware(dimension string) func(http.Handler) http.Handl
 			}
 			id := ScopeKeyFromContext(req.Context())
 			if id == "" {
-				id = req.RemoteAddr
+				id = clientIPKey(req.RemoteAddr)
 			}
 			key := dimension + ":" + id
 			if !r.allowDim(dimension, key) {
@@ -135,7 +228,7 @@ func (r *RateLimiter) MiddlewareByPath(dimension, pathParam string) func(http.Ha
 			}
 			id := ScopeKeyFromContext(req.Context())
 			if id == "" {
-				id = req.RemoteAddr
+				id = clientIPKey(req.RemoteAddr)
 			}
 			pv := chi.URLParam(req, pathParam)
 			key := dimension + ":" + id + ":" + pv
@@ -146,6 +239,16 @@ func (r *RateLimiter) MiddlewareByPath(dimension, pathParam string) func(http.Ha
 			next.ServeHTTP(w, req)
 		})
 	}
+}
+
+// clientIPKey normalizes a request RemoteAddr ("ip:port") to just the IP so that
+// anonymous rate-limit buckets are keyed per host, not per ephemeral source port
+// (which would let a single host create unbounded buckets and evade limiting).
+func clientIPKey(remoteAddr string) string {
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	return remoteAddr
 }
 
 func writeRateLimited(w http.ResponseWriter) {

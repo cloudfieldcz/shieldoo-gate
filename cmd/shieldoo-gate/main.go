@@ -514,9 +514,12 @@ func main() {
 	apiServer := api.NewServer(db, cacheStore, scanEngine, policyEngine)
 	apiServer.SetDockerConfig(cfg.Upstreams.Docker)
 	apiServer.SetPublicURLs(cfg.PublicURLs)
+	apiServer.SetTrustedProxies(cfg.Server.TrustedProxies)
+	apiServer.SetCSRFAllowedOrigins(cfg.Auth.AllowedOrigins)
 
 	// Init OIDC authentication (if enabled).
 	var oidcMw *auth.OIDCMiddleware
+	var sessionStore *auth.SessionStore
 	if cfg.Auth.Enabled {
 		authCfg := auth.AuthConfig{
 			Enabled:         true,
@@ -525,13 +528,13 @@ func main() {
 			ClientSecretEnv: cfg.Auth.ClientSecretEnv,
 			RedirectURL:     cfg.Auth.RedirectURL,
 			Scopes:          cfg.Auth.Scopes,
+			CookieInsecure:  cfg.Auth.CookieInsecure,
 		}
-		mw, err := auth.NewOIDCMiddleware(context.Background(), cfg.Auth.IssuerURL, cfg.Auth.ClientID)
-		if err != nil {
-			log.Fatal().Err(err).Msg("failed to initialize OIDC middleware")
-		}
-		oidcMw = mw
-		authHandlers, err := auth.NewAuthHandlers(authCfg)
+		// Server-side session store: the cookie carries an opaque session ID, so
+		// logout/expiry are enforced server-side and a captured cookie can be revoked.
+		sessionStore = auth.NewSessionStore(db, parseDuration(cfg.Auth.SessionTTL, 15*time.Minute))
+		oidcMw = auth.NewOIDCMiddleware(sessionStore)
+		authHandlers, err := auth.NewAuthHandlers(authCfg, sessionStore)
 		if err != nil {
 			log.Fatal().Err(err).Msg("failed to initialize auth handlers")
 		}
@@ -637,16 +640,23 @@ func main() {
 
 	// Wire admin-API auth chain: Authorization Bearer <PAT> first, OIDC cookie fallback.
 	// Always-on so CI tokens authenticate even when OIDC is disabled.
+	//
+	// The chain fails CLOSED by default. It is opened (AllowUnauthenticated) ONLY in
+	// the genuine no-auth dev mode where neither OIDC auth nor proxy_auth is enabled.
+	// In proxy-auth-only mode (proxy_auth on, OIDC off) an anonymous request must be
+	// rejected — admins authenticate with the global token as `Authorization: Bearer`
+	// (it carries scope "*"). This closes the "open admin API" footgun where enabling
+	// proxy_auth alone left release/quarantine/policy-mode reachable without credentials.
+	noAuthDevMode := !cfg.Auth.Enabled && !cfg.ProxyAuth.Enabled
 	adminPATMw := auth.NewPATBearerMiddleware(db, globalToken, adminAudit)
-	apiServer.SetAdminAuthChain(auth.NewAdminAuthChain(adminPATMw, oidcMw), adminPATMw)
-	// Enforce admin-API scopes only when OIDC auth is enabled. That is the only
-	// mode where the admin API authenticates users (OIDC sessions / PAT bearer)
-	// and where PATs can exist at all — the /api/v1/api-keys endpoints are gated
-	// on proxy_auth && auth, so without OIDC no PAT can be minted to escalate.
-	// In no-auth or proxy-auth-only (global-token) mode the admin API is not
-	// OIDC-protected; enforcing scopes there would only 403 the open/dev path
-	// without adding security (the global token carries "*" regardless).
-	apiServer.SetAdminScopeEnforcement(cfg.Auth.Enabled)
+	adminChain := auth.NewAdminAuthChain(adminPATMw, oidcMw).AllowUnauthenticated(noAuthDevMode)
+	apiServer.SetAdminAuthChain(adminChain, adminPATMw)
+	// Enforce admin-API scopes whenever ANY auth mechanism is active (OIDC auth or
+	// proxy_auth). Only the fully open no-auth dev mode skips the scope gate. In
+	// proxy-auth-only mode the global token ("*") still satisfies every scope, while
+	// an anonymous request is now 403'd at the scope gate (defense-in-depth behind the
+	// fail-closed chain above).
+	apiServer.SetAdminScopeEnforcement(!noAuthDevMode)
 
 	host := cfg.Server.Host
 	if host == "" {
@@ -814,6 +824,10 @@ func main() {
 	if apiKeyMw != nil {
 		apiKeyMw.Stop()
 	}
+	// Stop the rate-limiter janitor goroutine.
+	apiRateLimiter.Stop()
+	// Stop the session-store janitor goroutine.
+	sessionStore.Stop()
 
 	log.Info().Msg("shieldoo-gate stopped")
 }

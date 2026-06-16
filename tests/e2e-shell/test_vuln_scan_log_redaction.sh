@@ -7,7 +7,7 @@ test_vuln_scan_log_redaction() {
     log_section "Vuln-scan: log redaction (no Authorization in gate logs)"
 
     local pre_status
-    pre_status=$(curl -s -o /dev/null -w "%{http_code}" \
+    pre_status=$(admin_curl -s -o /dev/null -w "%{http_code}" \
         "${E2E_ADMIN_URL}/api/v1/vulnerabilities/summary")
     if [ "$pre_status" = "503" ]; then
         log_skip "Vuln-scan log_redaction: feature disabled"
@@ -21,7 +21,7 @@ test_vuln_scan_log_redaction() {
 
     # Send a request with the canary as the bearer. We don't care about the
     # response body — just that the redactor processed the request.
-    curl -s -o /dev/null -X GET "${E2E_ADMIN_URL}/api/v1/vulnerabilities/summary" \
+    admin_curl -s -o /dev/null -X GET "${E2E_ADMIN_URL}/api/v1/vulnerabilities/summary" \
         -H "Authorization: Bearer ${marker}" >/dev/null
 
     # Give the log line time to land.

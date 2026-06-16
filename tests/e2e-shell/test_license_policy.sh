@@ -49,7 +49,7 @@ _lic_create_project() {
     local unknown_action="${3:-allow}"
 
     local create_status
-    create_status=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${E2E_ADMIN_URL}/api/v1/projects" \
+    create_status=$(admin_curl -s -o /dev/null -w "%{http_code}" -X POST "${E2E_ADMIN_URL}/api/v1/projects" \
         -H "Content-Type: application/json" \
         -d "{\"label\":\"${label}\",\"display_name\":\"License E2E ${label}\"}")
     case "$create_status" in
@@ -58,7 +58,7 @@ _lic_create_project() {
     esac
 
     local pid
-    pid=$(curl -sf "${E2E_ADMIN_URL}/api/v1/projects" \
+    pid=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/projects" \
         | jq -r --arg l "$label" '.projects[] | select(.label == $l) | .id')
     if [ -z "$pid" ] || [ "$pid" = "null" ]; then
         echo "lookup-failed" >&2
@@ -74,7 +74,7 @@ _lic_create_project() {
         '{mode:"override", blocked:$b, warned:[], allowed:[], unknown_action:$ua}')
 
     local put_status
-    put_status=$(curl -s -o /dev/null -w "%{http_code}" \
+    put_status=$(admin_curl -s -o /dev/null -w "%{http_code}" \
         -X PUT "${E2E_ADMIN_URL}/api/v1/projects/${pid}/license-policy" \
         -H "Content-Type: application/json" \
         -d "$body")
@@ -117,7 +117,7 @@ _lic_audit_block_present() {
 
     sleep 2  # debounced audit writer
     local count
-    count=$(curl -sf "${E2E_ADMIN_URL}/api/v1/audit?per_page=200" \
+    count=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/audit?per_page=200" \
         | jq --arg pid "$pid" '[.data[]
             | select((.project_id // 0 | tostring) == $pid)
             | select(.event_type == "LICENSE_BLOCKED" or .event_type == "BLOCKED")
@@ -152,7 +152,7 @@ test_license_policy() {
     # second don't collide.
     local label="lic-api-$$-$(date +%s)"
     local create_status
-    create_status=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${E2E_ADMIN_URL}/api/v1/projects" \
+    create_status=$(admin_curl -s -o /dev/null -w "%{http_code}" -X POST "${E2E_ADMIN_URL}/api/v1/projects" \
         -H "Content-Type: application/json" \
         -d "{\"label\":\"${label}\",\"display_name\":\"License E2E\"}")
     if [ "$create_status" != "201" ]; then
@@ -162,7 +162,7 @@ test_license_policy() {
     log_pass "License: test project '${label}' created"
 
     local pid
-    pid=$(curl -sf "${E2E_ADMIN_URL}/api/v1/projects" | jq -r --arg l "$label" '.projects[] | select(.label == $l) | .id')
+    pid=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/projects" | jq -r --arg l "$label" '.projects[] | select(.label == $l) | .id')
     if [ -z "$pid" ] || [ "$pid" = "null" ]; then
         log_fail "License: could not resolve project id"
         return
@@ -170,7 +170,7 @@ test_license_policy() {
 
     # Default per-project mode == inherit.
     local lp mode
-    lp=$(curl -sf "${E2E_ADMIN_URL}/api/v1/projects/${pid}/license-policy")
+    lp=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/projects/${pid}/license-policy")
     mode=$(echo "$lp" | jq -r '.mode')
     assert_eq "License: default per-project mode is 'inherit'" "inherit" "$mode"
 
@@ -180,7 +180,7 @@ test_license_policy() {
     # which is independent of the PAT/proxy-traffic auth boundary that
     # `projects.mode` controls.
     local put_status
-    put_status=$(curl -s -o /dev/null -w "%{http_code}" \
+    put_status=$(admin_curl -s -o /dev/null -w "%{http_code}" \
         -X PUT "${E2E_ADMIN_URL}/api/v1/projects/${pid}/license-policy" \
         -H "Content-Type: application/json" \
         -d '{"mode":"override","blocked":["GPL-3.0-only"]}')
@@ -188,7 +188,7 @@ test_license_policy() {
 
     # Round-trip: PUT mode=inherit must always succeed (no projects.mode gating).
     local inherit_status
-    inherit_status=$(curl -s -o /dev/null -w "%{http_code}" \
+    inherit_status=$(admin_curl -s -o /dev/null -w "%{http_code}" \
         -X PUT "${E2E_ADMIN_URL}/api/v1/projects/${pid}/license-policy" \
         -H "Content-Type: application/json" \
         -d '{"mode":"inherit"}')
@@ -196,7 +196,7 @@ test_license_policy() {
 
     # GET surfaces strict_required when override is ineffective.
     local strict_req
-    strict_req=$(curl -sf "${E2E_ADMIN_URL}/api/v1/projects/${pid}/license-policy" | jq -r '.strict_required')
+    strict_req=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/projects/${pid}/license-policy" | jq -r '.strict_required')
     case "$strict_req" in
         true|false|null) log_pass "License: GET annotates 'strict_required' (value=${strict_req})" ;;
         *) log_fail "License: 'strict_required' field missing or invalid (got '${strict_req}')" ;;
@@ -204,7 +204,7 @@ test_license_policy() {
 
     # GET unknown project returns 200 (default-inherit semantics) or 404.
     local ghost_status
-    ghost_status=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_ADMIN_URL}/api/v1/projects/999999/license-policy")
+    ghost_status=$(admin_curl -s -o /dev/null -w "%{http_code}" "${E2E_ADMIN_URL}/api/v1/projects/999999/license-policy")
     if [ "$ghost_status" = "200" ] || [ "$ghost_status" = "404" ]; then
         log_pass "License: GET policy for missing project returns 200/404 (default-inherit semantics)"
     else
@@ -213,11 +213,11 @@ test_license_policy() {
 
     # DELETE override returns to inherit.
     local del_status
-    del_status=$(curl -s -o /dev/null -w "%{http_code}" \
+    del_status=$(admin_curl -s -o /dev/null -w "%{http_code}" \
         -X DELETE "${E2E_ADMIN_URL}/api/v1/projects/${pid}/license-policy")
     assert_eq "License: DELETE per-project override returns 200" "200" "$del_status"
     local mode_after
-    mode_after=$(curl -sf "${E2E_ADMIN_URL}/api/v1/projects/${pid}/license-policy" | jq -r '.mode')
+    mode_after=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/projects/${pid}/license-policy" | jq -r '.mode')
     assert_eq "License: mode reverts to 'inherit' after DELETE" "inherit" "$mode_after"
 }
 
@@ -453,7 +453,7 @@ test_license_cache_hit() {
     # a non-empty blocked list for the jq JSON builder).
     local label="lic-cache-$$-$(date +%s)"
     local create_status
-    create_status=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${E2E_ADMIN_URL}/api/v1/projects" \
+    create_status=$(admin_curl -s -o /dev/null -w "%{http_code}" -X POST "${E2E_ADMIN_URL}/api/v1/projects" \
         -H "Content-Type: application/json" \
         -d "{\"label\":\"${label}\",\"display_name\":\"License Cache-Hit E2E\"}")
     if [ "$create_status" != "201" ] && [ "$create_status" != "409" ]; then
@@ -461,7 +461,7 @@ test_license_cache_hit() {
         return
     fi
     local pid
-    pid=$(curl -sf "${E2E_ADMIN_URL}/api/v1/projects" \
+    pid=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/projects" \
         | jq -r --arg l "$label" '.projects[] | select(.label == $l) | .id')
     if [ -z "$pid" ] || [ "$pid" = "null" ]; then
         log_fail "CacheHit: could not resolve project id"
@@ -479,7 +479,7 @@ test_license_cache_hit() {
 
     # Verify SBOM metadata has MIT.
     local licenses
-    licenses=$(curl -sf "${E2E_ADMIN_URL}/api/v1/artifacts/npm:chalk:5.4.1/licenses" \
+    licenses=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/artifacts/npm:chalk:5.4.1/licenses" \
         | jq -r '.licenses // [] | join(",")' 2>/dev/null)
     if [[ "$licenses" == *"MIT"* ]]; then
         log_pass "CacheHit: SBOM metadata has MIT license"
@@ -492,7 +492,7 @@ test_license_cache_hit() {
 
     # 2. Block MIT globally.
     local put_status
-    put_status=$(curl -s -o /dev/null -w "%{http_code}" \
+    put_status=$(admin_curl -s -o /dev/null -w "%{http_code}" \
         -X PUT "${E2E_ADMIN_URL}/api/v1/policy/licenses" \
         -H "Content-Type: application/json" \
         -d '{"enabled":true,"blocked":["MIT"],"warned":[],"allowed":[],"unknown_action":"allow","on_sbom_error":"allow","or_semantics":"any_allowed"}')
@@ -505,12 +505,12 @@ test_license_cache_hit() {
     # 4. Verify artifact was quarantined by async re-evaluation (Fix B).
     sleep 3
     local status
-    status=$(curl -sf "${E2E_ADMIN_URL}/api/v1/artifacts/npm:chalk:5.4.1" \
+    status=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/artifacts/npm:chalk:5.4.1" \
         | jq -r '.status.status' 2>/dev/null)
     assert_eq "CacheHit: artifact QUARANTINED by re-evaluation" "QUARANTINED" "$status"
 
     # 5. Unblock MIT globally.
-    curl -sf -X DELETE "${E2E_ADMIN_URL}/api/v1/policy/licenses" > /dev/null
+    admin_curl -sf -X DELETE "${E2E_ADMIN_URL}/api/v1/policy/licenses" > /dev/null
 
     # 6. Download chalk — should be 200 again.
     sleep 2
@@ -518,7 +518,7 @@ test_license_cache_hit() {
         "step 6: MIT 'chalk' allowed after global unblock"
 
     # 7. Verify artifact was released back to CLEAN.
-    status=$(curl -sf "${E2E_ADMIN_URL}/api/v1/artifacts/npm:chalk:5.4.1" \
+    status=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/artifacts/npm:chalk:5.4.1" \
         | jq -r '.status.status' 2>/dev/null)
     assert_eq "CacheHit: artifact released to CLEAN after unblock" "CLEAN" "$status"
 
@@ -527,7 +527,7 @@ test_license_cache_hit() {
     # 8. Block MIT on this project only.
     local body
     body=$(jq -n '{mode:"override", blocked:["MIT"], warned:[], allowed:[], unknown_action:"allow"}')
-    put_status=$(curl -s -o /dev/null -w "%{http_code}" \
+    put_status=$(admin_curl -s -o /dev/null -w "%{http_code}" \
         -X PUT "${E2E_ADMIN_URL}/api/v1/projects/${pid}/license-policy" \
         -H "Content-Type: application/json" \
         -d "$body")
@@ -539,7 +539,7 @@ test_license_cache_hit() {
         "step 9: MIT 'chalk' BLOCKED on cache-hit (per-project policy)"
 
     # 10. Delete project policy (revert to global = no blocks).
-    curl -sf -X DELETE "${E2E_ADMIN_URL}/api/v1/projects/${pid}/license-policy" > /dev/null
+    admin_curl -sf -X DELETE "${E2E_ADMIN_URL}/api/v1/projects/${pid}/license-policy" > /dev/null
 
     # 11. Download chalk — should be 200.
     sleep 1

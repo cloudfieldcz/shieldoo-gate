@@ -2,6 +2,14 @@
 
 server:
   host: "0.0.0.0"
+  # CIDRs (or bare IPs) of reverse proxies / load balancers whose
+  # X-Forwarded-For / X-Real-IP headers may be trusted to resolve the client IP
+  # (used for audit logging and rate limiting). Empty (default) trusts NO proxy —
+  # the real TCP peer is always used, which prevents clients from spoofing their IP.
+  # Set this to your ingress subnet when running behind a trusted proxy.
+  trusted_proxies: []
+  #   - "10.0.0.0/8"
+  #   - "192.168.1.10"
 
 ports:
   pypi: 5000
@@ -295,8 +303,16 @@ auth:
   issuer_url: ""                     # OIDC provider URL, e.g. "https://accounts.google.com"
   client_id: ""                      # OAuth2 client ID from your OIDC provider
   client_secret_env: "SGW_OIDC_CLIENT_SECRET"  # Env var holding the client secret
-  redirect_url: ""                   # e.g. "https://shieldoo-gate.example.com:8080/auth/callback"
+  redirect_url: ""                   # MUST be https:// in production (e.g. "https://shieldoo-gate.example.com/auth/callback").
+                                     # Validation rejects a non-https redirect_url unless cookie_insecure=true.
   scopes: ["openid", "email", "profile"]
+  session_ttl: "15m"                 # Admin UI session lifetime. The cookie holds an opaque
+                                     # server-side session ID (not the raw ID token), so logout
+                                     # and expiry are enforced server-side and a stolen cookie can be revoked.
+  cookie_insecure: false             # Local-HTTP-dev ONLY opt-out. Default false → auth cookies are Secure.
+  allowed_origins: []                # Optional explicit Origin allowlist for the CSRF guard on
+                                     # cookie-authenticated mutations. Empty (default) requires same-origin.
+                                     #   - "https://shieldoo-gate.example.com"
 
 # API key authentication for proxy endpoints (pip, npm, docker, nuget, gem, go).
 # When disabled (default), proxy endpoints are open — protected by network segmentation only.

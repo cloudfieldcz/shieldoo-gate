@@ -52,7 +52,7 @@ test_sbom() {
     local waited=0
     local max_wait=30
     while [ "$waited" -lt "$max_wait" ]; do
-        artifact_id=$(curl -sf "${E2E_ADMIN_URL}/api/v1/artifacts?ecosystem=pypi&name=six&limit=5" \
+        artifact_id=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/artifacts?ecosystem=pypi&name=six&limit=5" \
             | jq -r '.data // .artifacts // [] | .[0].id // empty' 2>/dev/null)
         if [ -n "$artifact_id" ] && [ "$artifact_id" != "null" ]; then
             break
@@ -78,7 +78,7 @@ test_sbom() {
         log_skip "SBOM: /sbom blob endpoint — skipped on Azure backend (Azurite version mismatch)"
     else
         local sbom_body
-        sbom_body=$(curl -sf -H "Accept: application/vnd.cyclonedx+json" \
+        sbom_body=$(admin_curl -sf -H "Accept: application/vnd.cyclonedx+json" \
             "${E2E_ADMIN_URL}/api/v1/artifacts/${artifact_id}/sbom" 2>/dev/null || true)
 
         if [ -z "$sbom_body" ]; then
@@ -110,7 +110,7 @@ test_sbom() {
     # 3. GET /api/v1/artifacts/{id}/licenses returns SPDX IDs
     # ------------------------------------------------------------------
     local licenses_body
-    licenses_body=$(curl -sf "${E2E_ADMIN_URL}/api/v1/artifacts/${artifact_id}/licenses" 2>/dev/null || true)
+    licenses_body=$(admin_curl -sf "${E2E_ADMIN_URL}/api/v1/artifacts/${artifact_id}/licenses" 2>/dev/null || true)
     if [ -z "$licenses_body" ]; then
         log_fail "SBOM: /licenses endpoint returned empty body"
         return
