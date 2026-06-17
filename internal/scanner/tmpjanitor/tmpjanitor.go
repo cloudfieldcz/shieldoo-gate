@@ -6,8 +6,7 @@
 // The leak it backstops is *missing cleanup*, not where the data lives: the
 // happy-path defer/RemoveAll handles ordinary completion, and this janitor is
 // the defence-in-depth backstop for the one case a defer cannot cover — a hard
-// kill of the whole process. See docs/scanners.md ("Scratch cleanup") and the
-// plan at docs/plans/2026-06-14-scratch-temp-cleanup.md.
+// kill of the whole process. See docs/scanners.md ("Scratch cleanup").
 //
 // Safety is by construction (no scan-activity tracking, no locks, no races):
 // the janitor deletes only entries whose name matches a Shieldoo-owned prefix
