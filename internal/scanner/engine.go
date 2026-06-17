@@ -2,66 +2,151 @@ package scanner
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
 	"golang.org/x/sync/semaphore"
 )
 
-// Engine orchestrates multiple scanners in parallel with timeout and fail-open semantics.
-// MaxConcurrentScans limits how many artifacts can be scanned simultaneously to avoid
-// overwhelming the scanner bridge with too many concurrent gRPC calls.
+// Engine orchestrates multiple scanners in parallel with timeout, bounded
+// retry, and per-scanner circuit breaking. Scanner failures are reported
+// explicitly in ScanReport so that required-scanner outages can fail closed at
+// the policy layer instead of silently degrading to a clean verdict.
+// MaxConcurrentScans limits how many artifacts can be scanned simultaneously to
+// avoid overwhelming the scanner bridge with too many concurrent gRPC calls.
 type Engine struct {
 	scanners []Scanner
 	timeout  time.Duration
 	sem      *semaphore.Weighted
+
+	retryMaxAttempts int
+	retryBackoff     time.Duration
+	criticality      map[string]Criticality
+	breakers         map[string]*scanCircuit
+}
+
+// EngineOption customizes an Engine at construction time.
+type EngineOption func(*Engine)
+
+// WithRetry sets the bounded retry budget for retryable scanner errors.
+func WithRetry(maxAttempts int, backoff time.Duration) EngineOption {
+	return func(e *Engine) {
+		if maxAttempts > 0 {
+			e.retryMaxAttempts = maxAttempts
+		}
+		if backoff > 0 {
+			e.retryBackoff = backoff
+		}
+	}
+}
+
+// WithCriticality declares which scanners are required vs best-effort, keyed by
+// scanner Name(). Required scanners cannot be excluded from a scan.
+func WithCriticality(criticality map[string]Criticality) EngineOption {
+	return func(e *Engine) {
+		e.criticality = make(map[string]Criticality, len(criticality))
+		for name, value := range criticality {
+			e.criticality[name] = value
+		}
+	}
 }
 
 // NewEngine creates a new Engine with the given scanners and per-scan timeout.
 // maxConcurrentScans limits how many ScanAll calls can run in parallel (0 = unlimited).
-func NewEngine(scanners []Scanner, timeout time.Duration, maxConcurrentScans int64) *Engine {
+func NewEngine(scanners []Scanner, timeout time.Duration, maxConcurrentScans int64, opts ...EngineOption) *Engine {
 	var sem *semaphore.Weighted
 	if maxConcurrentScans > 0 {
 		sem = semaphore.NewWeighted(maxConcurrentScans)
 	}
-	return &Engine{
-		scanners: scanners,
-		timeout:  timeout,
-		sem:      sem,
+	e := &Engine{
+		scanners:         scanners,
+		timeout:          timeout,
+		sem:              sem,
+		retryMaxAttempts: 1,
+		retryBackoff:     200 * time.Millisecond,
+		criticality:      map[string]Criticality{},
+		breakers:         map[string]*scanCircuit{},
 	}
+	for _, opt := range opts {
+		opt(e)
+	}
+	for _, sc := range scanners {
+		e.breakers[sc.Name()] = newScanCircuit(5, time.Minute)
+	}
+	return e
 }
 
-// ScanAll runs all scanners that support the artifact's ecosystem in parallel.
-// It applies a per-scan timeout and uses fail-open semantics: scanner errors or
-// timeouts result in VerdictClean with the error recorded, never VerdictMalicious.
-// Optional excludeNames allows skipping specific scanners by name.
-func (e *Engine) ScanAll(ctx context.Context, artifact Artifact, excludeNames ...string) ([]ScanResult, error) {
+// RegisteredScannerNames returns the names of all registered scanners.
+func (e *Engine) RegisteredScannerNames() []string {
+	names := make([]string, 0, len(e.scanners))
+	for _, s := range e.scanners {
+		names = append(names, s.Name())
+	}
+	return names
+}
+
+func (e *Engine) criticalityFor(name string) Criticality {
+	if e.criticality[name] == CriticalityRequired {
+		return CriticalityRequired
+	}
+	return CriticalityBestEffort
+}
+
+// ScanAll runs all scanners that support the artifact's ecosystem in parallel
+// and returns a ScanReport describing scan completeness. Retryable errors are
+// retried per the engine's retry budget; failures are recorded in
+// report.Errored rather than degraded to a clean verdict. Optional excludeNames
+// skips best-effort scanners (recorded in report.Skipped); required scanners
+// cannot be excluded.
+func (e *Engine) ScanAll(ctx context.Context, artifact Artifact, excludeNames ...string) (ScanReport, error) {
 	excludeSet := make(map[string]struct{}, len(excludeNames))
 	for _, n := range excludeNames {
 		excludeSet[n] = struct{}{}
 	}
 
 	var applicable []Scanner
+	report := ScanReport{Errored: map[string]*ScanError{}}
 	for _, s := range e.scanners {
-		if _, excluded := excludeSet[s.Name()]; excluded {
-			continue
-		}
+		supports := false
 		for _, eco := range s.SupportedEcosystems() {
 			if eco == artifact.Ecosystem {
-				applicable = append(applicable, s)
+				supports = true
 				break
 			}
 		}
+		if !supports {
+			continue
+		}
+		if _, excluded := excludeSet[s.Name()]; excluded && e.criticalityFor(s.Name()) != CriticalityRequired {
+			report.Skipped = append(report.Skipped, s.Name())
+			continue
+		}
+		applicable = append(applicable, s)
+		report.Expected = append(report.Expected, s.Name())
 	}
 
 	if len(applicable) == 0 {
-		return nil, nil
+		if len(artifact.ExtraLicenses) > 0 {
+			report.Results = append(report.Results, ScanResult{
+				Verdict:   VerdictClean,
+				ScannerID: "extra-licenses",
+				ScannedAt: time.Now(),
+				Licenses:  artifact.ExtraLicenses,
+			})
+		}
+		return report, nil
 	}
 
 	// Limit concurrent artifact scans to avoid overwhelming the scanner bridge.
 	if e.sem != nil {
 		if err := e.sem.Acquire(ctx, 1); err != nil {
-			return nil, err
+			scanErr := ClassifyScanError(err)
+			for _, sc := range applicable {
+				report.Errored[sc.Name()] = scanErr
+				scannerErrorsTotal.WithLabelValues(sc.Name(), scanErr.Kind.String()).Inc()
+			}
+			return report, err
 		}
 		defer e.sem.Release(1)
 	}
@@ -70,37 +155,23 @@ func (e *Engine) ScanAll(ctx context.Context, artifact Artifact, excludeNames ..
 	defer cancel()
 
 	var mu sync.Mutex
-	results := make([]ScanResult, 0, len(applicable))
 	var wg sync.WaitGroup
 
 	for _, s := range applicable {
 		wg.Add(1)
 		go func(sc Scanner) {
 			defer wg.Done()
-			start := time.Now()
-			result, err := sc.Scan(scanCtx, artifact)
-			if err != nil {
-				result = ScanResult{
-					Verdict:   VerdictClean,
-					ScannerID: sc.Name(),
-					Error:     err,
-				}
-			}
-			result.Duration = time.Since(start)
-			result.ScannedAt = start
-			if result.ScannerID == "" {
-				result.ScannerID = sc.Name()
-			}
-			if result.ScannerVersion == "" {
-				result.ScannerVersion = sc.Version()
-			}
-
+			result, scanErr := e.scanOne(scanCtx, sc, artifact)
 			mu.Lock()
-			results = append(results, result)
-			mu.Unlock()
+			defer mu.Unlock()
+			if scanErr != nil {
+				report.Errored[sc.Name()] = scanErr
+				scannerErrorsTotal.WithLabelValues(sc.Name(), scanErr.Kind.String()).Inc()
+				return
+			}
+			report.Results = append(report.Results, result)
 		}(s)
 	}
-
 	wg.Wait()
 
 	// Merge ExtraLicenses provided by the adapter (e.g. Maven effective-POM
@@ -109,16 +180,78 @@ func (e *Engine) ScanAll(ctx context.Context, artifact Artifact, excludeNames ..
 	// engine can evaluate them. Adapters must pre-normalize ExtraLicenses
 	// via sbom.NameAliasToID before setting them on the artifact.
 	if len(artifact.ExtraLicenses) > 0 {
-		extraResult := ScanResult{
+		report.Results = append(report.Results, ScanResult{
 			Verdict:   VerdictClean,
 			ScannerID: "extra-licenses",
 			ScannedAt: time.Now(),
 			Licenses:  artifact.ExtraLicenses,
-		}
-		results = append(results, extraResult)
+		})
 	}
 
-	return results, nil
+	return report, nil
+}
+
+// scanOne runs a single scanner with circuit-breaker gating and bounded retry
+// of retryable errors. It returns either a successful result or a classified
+// *ScanError.
+func (e *Engine) scanOne(ctx context.Context, sc Scanner, artifact Artifact) (ScanResult, *ScanError) {
+	breaker := e.breakers[sc.Name()]
+	if breaker != nil && breaker.isOpen() {
+		circuitBreakerState.WithLabelValues(sc.Name()).Set(1)
+		return ScanResult{}, NewScanError(ErrKindOverload, fmt.Errorf("%s scanner circuit open", sc.Name()))
+	}
+	circuitBreakerState.WithLabelValues(sc.Name()).Set(0)
+
+	attempts := e.retryMaxAttempts
+	if attempts < 1 {
+		attempts = 1
+	}
+	backoff := e.retryBackoff
+	if backoff <= 0 {
+		backoff = 200 * time.Millisecond
+	}
+
+	var lastErr *ScanError
+	for attempt := 1; attempt <= attempts; attempt++ {
+		start := time.Now()
+		result, err := sc.Scan(ctx, artifact)
+		if err == nil && result.Error != nil {
+			err = result.Error
+		}
+		if err == nil {
+			if result.ScannerID == "" {
+				result.ScannerID = sc.Name()
+			}
+			if result.ScannerVersion == "" {
+				result.ScannerVersion = sc.Version()
+			}
+			result.Duration = time.Since(start)
+			result.ScannedAt = start
+			if breaker != nil {
+				breaker.recordSuccess()
+			}
+			return result, nil
+		}
+
+		lastErr = ClassifyScanError(err)
+		if !lastErr.Retryable() || attempt == attempts {
+			break
+		}
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			lastErr = ClassifyScanError(ctx.Err())
+			attempt = attempts
+		case <-timer.C:
+		}
+		backoff *= 2
+	}
+
+	if breaker != nil {
+		breaker.recordFailure()
+	}
+	return ScanResult{}, lastErr
 }
 
 // AsyncScanner is implemented by scanners that run outside the synchronous

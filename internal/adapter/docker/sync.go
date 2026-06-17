@@ -238,25 +238,39 @@ func (s *SyncService) syncTag(ctx context.Context, repo DockerRepository, tag Do
 		UpstreamURL: upstreamURL + "/v2/" + repo.Name + "/manifests/" + tag.Tag,
 	}
 
-	// Scan. Failure fails open (log error, don't quarantine).
-	scanResults, scanErr := s.scanEngine.ScanAll(ctx, scanArtifact)
+	// Scan. Best-effort scanner failures fail open; required scanner failures
+	// are surfaced by the policy engine and must NOT become clean/servable.
+	scanReport, scanErr := s.scanEngine.ScanAll(ctx, scanArtifact)
 	if scanErr != nil {
 		log.Error().Err(scanErr).
 			Str("artifact", artifactID).
-			Msg("docker sync: scan engine error, failing open")
-		scanResults = nil
+			Msg("docker sync: scan engine error")
 	}
+	scanResults := scanReport.Results
 
 	// Policy evaluation.
-	policyResult := s.policyEng.Evaluate(ctx, scanArtifact, scanResults)
+	policyResult := s.policyEng.EvaluateReport(ctx, scanArtifact, scanReport)
+	if len(policyResult.ScanUnavailable) > 0 {
+		adapter.AuditScanUnavailable(ctx, s.db, policyResult, artifactID, "sync", "", "")
+	}
 	log.Info().
 		Str("artifact", artifactID).
 		Str("action", string(policyResult.Action)).
 		Str("reason", policyResult.Reason).
 		Msg("docker sync: policy decision")
 
-	// Persist artifact and update tag.
+	// Persist artifact and update tag. ActionRetryLater and ActionBlock must
+	// never persist a clean status or update the served tag.
 	switch policyResult.Action {
+	case policy.ActionRetryLater:
+		return
+	case policy.ActionBlock:
+		_ = adapter.WriteAuditLog(s.db, model.AuditEntry{
+			EventType:  model.EventBlocked,
+			ArtifactID: artifactID,
+			Reason:     policyResult.Reason,
+		})
+		return
 	case policy.ActionQuarantine:
 		now := time.Now().UTC()
 		_ = s.persistArtifact(artifactID, scanArtifact, manifestSHA, manifestBytes,
@@ -274,33 +288,36 @@ func (s *SyncService) syncTag(ctx context.Context, repo DockerRepository, tag Do
 			ArtifactID: artifactID,
 			Reason:     policyResult.Reason,
 		})
-	default:
-		// ActionAllow or ActionBlock (block from sync just logs, doesn't quarantine)
+	case policy.ActionAllow:
 		_ = s.persistArtifact(artifactID, scanArtifact, manifestSHA, manifestBytes,
 			model.StatusClean, "", nil, scanResults)
+	default:
+		return
 	}
 
-	// Update the tag digest (even if quarantined, we track the latest digest).
-	if digestChanged {
-		artIDPtr := artifactID
-		_ = UpsertTag(s.db, repo.ID, tag.Tag, upstreamDigest, artIDPtr)
-	}
+	// Tag update and cache write happen only for allowed artifacts so that a
+	// blocked or retry-later decision can never become servable.
+	if policyResult.Action == policy.ActionAllow || policyResult.Action == policy.ActionAllowWithWarning {
+		if digestChanged {
+			artIDPtr := artifactID
+			_ = UpsertTag(s.db, repo.ID, tag.Tag, upstreamDigest, artIDPtr)
+		}
 
-	// Cache the manifest if allowed and cache is available.
-	if (policyResult.Action == policy.ActionAllow || policyResult.Action == policy.ActionAllowWithWarning) && s.cache != nil {
-		cacheTmp, err := writeManifestToTemp(manifestBytes)
-		if err == nil {
-			defer os.Remove(cacheTmp)
-			cacheArtifact := scanner.Artifact{
-				ID:        artifactID,
-				Ecosystem: scanner.EcosystemDocker,
-				Name:      safeName,
-				Version:   tag.Tag,
-				LocalPath: cacheTmp,
-				SHA256:    manifestSHA,
-				SizeBytes: int64(len(manifestBytes)),
+		if s.cache != nil {
+			cacheTmp, err := writeManifestToTemp(manifestBytes)
+			if err == nil {
+				defer os.Remove(cacheTmp)
+				cacheArtifact := scanner.Artifact{
+					ID:        artifactID,
+					Ecosystem: scanner.EcosystemDocker,
+					Name:      safeName,
+					Version:   tag.Tag,
+					LocalPath: cacheTmp,
+					SHA256:    manifestSHA,
+					SizeBytes: int64(len(manifestBytes)),
+				}
+				_ = s.cache.Put(ctx, cacheArtifact, cacheTmp)
 			}
-			_ = s.cache.Put(ctx, cacheArtifact, cacheTmp)
 		}
 	}
 }

@@ -23,10 +23,18 @@ Policy evaluation follows a strict priority order — **first match wins**:
    ↓ no match
 2. Static allowlist entries
    ↓ no match
-3. Verdict-based rules
+3. License policy (authoritative block)
+   ↓ no block
+4. Required scanner availability (on_scan_error)
+   ↓ all required scanners completed
+5. Verdict-based rules
    ↓ no match
-4. Default: ALLOW
+6. Default: ALLOW
 ```
+
+Overrides (allow/deny) and allowlist entries intentionally bypass the required
+scanner availability check; a required scanner outage only gates artifacts that
+would otherwise reach verdict aggregation.
 
 ### Step 1: Database Overrides
 
@@ -90,7 +98,7 @@ Before policy evaluation, the aggregator (`internal/policy/aggregator.go`) combi
 
 1. **Threat feed fast-path** — If any result from scanner `builtin-threat-feed` has verdict `MALICIOUS`, return `MALICIOUS` immediately. No confidence check applied. This ensures known-malicious packages from the community feed are blocked without delay.
 
-2. **Skip errored results** — Results where `Error != nil` are treated as `CLEAN` (fail-open).
+2. **Skip errored results** — By the time aggregation runs, required scanner failures have already been handled by the scanner-availability step (see [Scanner Failure Policy](#scanner-failure-policy)); only best-effort scanner errors reach aggregation and are skipped.
 
 3. **Skip low-confidence results** — Results with `Confidence < MinConfidence` (default 0.7) are ignored.
 
@@ -105,6 +113,16 @@ The `policy.minimum_confidence` setting (default `0.7`) filters out scanner resu
 **Behavioral scanners** (guarddog, ai-scanner, exfil-detector, install-hook-analyzer, pth-inspector, obfuscation-detector) use a lower threshold configured via `policy.behavioral_minimum_confidence` (default: half of `minimum_confidence`). These scanners detect novel supply chain attack patterns where even moderate confidence warrants review. This is consistent with the behavioral severity floor (findings from these scanners are elevated to at least HIGH).
 
 The threat feed checker is exempt from this threshold — it bypasses confidence checks entirely.
+
+### Scanner Failure Policy
+
+`policy.on_scan_error` controls what happens when a **required** scanner (see [scanner criticality](scanners.md#scan-engine)) fails to produce a verdict:
+
+- `quarantine` (default): pull requests receive HTTP 503 with `Retry-After`, Docker pushes are rejected with 5xx, and Docker sync skips the artifact. Nothing is persisted, cached, or marked clean.
+- `block`: policy returns a block decision. Pull/push requests are rejected and Docker sync does not mark the artifact clean.
+- `fail_open`: preserves legacy availability behavior (verdict aggregation proceeds on the partial results), but still emits `SCAN_UNAVAILABLE` audit events and the `scan_error_mode_applied_total` Prometheus metric so the bypass is never silent.
+
+In every mode a required-scanner failure emits a `SCAN_UNAVAILABLE` audit row (mirroring the `super_token_used` invariant). Explicit allow overrides and static allowlist entries bypass scanner availability checks; deny overrides still block. Best-effort scanner failures never trigger this path.
 
 ## Policy Actions
 

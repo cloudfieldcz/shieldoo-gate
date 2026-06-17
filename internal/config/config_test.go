@@ -389,3 +389,56 @@ func TestValidate_EmptyBackend_DefaultsToSQLite(t *testing.T) {
 	err := cfg.Validate()
 	assert.NoError(t, err)
 }
+
+func TestLoad_ScanErrorPolicyDefaults(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`
+cache:
+  backend: "local"
+  local:
+    path: "/tmp/cache"
+database:
+  backend: "sqlite"
+  sqlite:
+    path: "/tmp/gate.db"
+`), 0o644))
+
+	cfg, err := Load(cfgPath)
+	require.NoError(t, err)
+
+	assert.Equal(t, "quarantine", cfg.Policy.OnScanError)
+	assert.Equal(t, "30s", cfg.Policy.RetryAfter)
+	assert.Equal(t, 3, cfg.Scanners.Retry.MaxAttempts)
+	assert.Equal(t, "200ms", cfg.Scanners.Retry.Backoff)
+}
+
+func TestValidate_InvalidOnScanError_ReturnsError(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.Policy.OnScanError = "permit"
+
+	err := cfg.Validate()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "policy.on_scan_error")
+}
+
+func TestValidate_InvalidScannerCriticality_ReturnsError(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.Scanners.Criticality = map[string]string{"guarddog": "mandatory"}
+
+	err := cfg.Validate()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scanners.criticality.guarddog")
+}
+
+func TestValidate_InvalidScannerRetryBackoff_ReturnsError(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.Scanners.Retry.Backoff = "soon"
+
+	err := cfg.Validate()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scanners.retry.backoff")
+}

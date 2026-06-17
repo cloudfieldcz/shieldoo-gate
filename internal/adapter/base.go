@@ -2,12 +2,14 @@ package adapter
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -290,8 +292,8 @@ func PipelineContext() (context.Context, context.CancelFunc) {
 // license overrides during scan/policy evaluation. Cancellation is still
 // independent of the originating request.
 //
-// Use this from any adapter that calls policyEngine.Evaluate(...) — without
-// it, the engine sees projectID=0 and always falls back to the global
+// Use this from any adapter that calls policyEngine.EvaluateReport(...) —
+// without it, the engine sees projectID=0 and always falls back to the global
 // policy, silently breaking per-project enforcement.
 func PipelineContextFrom(parent context.Context) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithTimeout(context.Background(), PipelineTimeout)
@@ -362,6 +364,78 @@ func WriteJSONError(w http.ResponseWriter, status int, resp ErrorResponse) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// WriteRetryLater writes an HTTP 503 with a Retry-After header for the pull
+// path when a required scanner is unavailable. A small jitter is added to the
+// retryAfter hint so clients don't retry in lockstep.
+func WriteRetryLater(w http.ResponseWriter, artifactID, reason string, retryAfter time.Duration) {
+	if retryAfter <= 0 {
+		retryAfter = 30 * time.Second
+	}
+	value := retryAfter + retryAfterJitter(retryAfter)
+	w.Header().Set("Retry-After", fmt.Sprintf("%.0f", value.Seconds()))
+	WriteJSONError(w, http.StatusServiceUnavailable, ErrorResponse{
+		Error:    "scanner unavailable",
+		Artifact: artifactID,
+		Reason:   reason,
+	})
+}
+
+// retryAfterJitter returns a random duration in [0, base/5) so concurrent
+// clients spread their retries. Returns 0 on any RNG error.
+func retryAfterJitter(base time.Duration) time.Duration {
+	maxJitter := base / 5
+	if maxJitter <= 0 {
+		return 0
+	}
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(maxJitter)))
+	if err != nil {
+		return 0
+	}
+	return time.Duration(n.Int64())
+}
+
+// AuditScanUnavailable writes a SCAN_UNAVAILABLE audit row and increments
+// scan_error_mode_applied_total for each required scanner that failed. It must
+// be called once after EvaluateReport whenever PolicyResult.ScanUnavailable is
+// non-empty — independent of the final action — so the fail_open bypass is
+// never silent (mirrors the super_token_used invariant).
+func AuditScanUnavailable(
+	ctx context.Context,
+	db *config.GateDB,
+	result policy.PolicyResult,
+	artifactID string,
+	path string,
+	clientIP string,
+	userAgent string,
+) {
+	for _, unavailable := range result.ScanUnavailable {
+		meta, err := json.Marshal(struct {
+			Scanner string `json:"scanner"`
+			Kind    string `json:"kind"`
+			Mode    string `json:"mode"`
+			Path    string `json:"path"`
+		}{
+			Scanner: unavailable.Scanner,
+			Kind:    unavailable.Kind,
+			Mode:    unavailable.Mode,
+			Path:    path,
+		})
+		if err != nil {
+			log.Warn().Err(err).Str("artifact", artifactID).Msg("adapter: failed to marshal scanner unavailable audit metadata")
+			continue
+		}
+		_ = WriteAuditLogCtx(ctx, db, model.AuditEntry{
+			EventType:    model.EventScanUnavailable,
+			ArtifactID:   artifactID,
+			ClientIP:     clientIP,
+			UserAgent:    userAgent,
+			Reason:       result.Reason,
+			MetadataJSON: string(meta),
+		})
+		scanErrorModeAppliedTotal.WithLabelValues(unavailable.Mode, path).Inc()
+	}
 }
 
 // WriteAuditLogCtx inserts an AuditEntry with project_id extracted from ctx

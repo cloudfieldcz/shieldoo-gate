@@ -2,8 +2,10 @@ package docker_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -217,4 +219,85 @@ func TestDockerPush_Disabled_Returns403(t *testing.T) {
 	w := httptest.NewRecorder()
 	a.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+// --- Fail-closed scanner error tests ---
+
+type dockerTestScanner struct {
+	name       string
+	ecosystems []scanner.Ecosystem
+	scanFn     func(context.Context, scanner.Artifact) (scanner.ScanResult, error)
+}
+
+func (m *dockerTestScanner) Name() string                             { return m.name }
+func (m *dockerTestScanner) Version() string                          { return "test" }
+func (m *dockerTestScanner) SupportedEcosystems() []scanner.Ecosystem { return m.ecosystems }
+func (m *dockerTestScanner) Scan(ctx context.Context, artifact scanner.Artifact) (scanner.ScanResult, error) {
+	return m.scanFn(ctx, artifact)
+}
+func (m *dockerTestScanner) HealthCheck(context.Context) error { return nil }
+
+func setupTestDockerWithPushAndEngines(
+	t *testing.T,
+	scanEngine *scanner.Engine,
+	policyEngine *policy.Engine,
+) (*docker.DockerAdapter, *config.GateDB) {
+	t.Helper()
+
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	cacheStore, err := local.NewLocalCacheStore(t.TempDir(), 10)
+	require.NoError(t, err)
+
+	cfg := config.DockerUpstreamConfig{
+		DefaultRegistry: "https://registry-1.docker.io",
+		AllowedRegistries: []config.DockerRegistryEntry{
+			{Host: "ghcr.io", URL: "https://ghcr.io"},
+		},
+		Push: config.DockerPushConfig{Enabled: true},
+	}
+	blobBackend, err := local.NewLocalCacheStore(t.TempDir(), 0)
+	require.NoError(t, err)
+	blobStore := docker.NewBlobStore(blobBackend, "docker-push")
+	return docker.NewDockerAdapterWithPush(db, cacheStore, scanEngine, policyEngine, cfg, blobStore), db
+}
+
+func TestDockerPush_RequiredScannerError_RejectsManifest(t *testing.T) {
+	required := &dockerTestScanner{
+		name:       "guarddog",
+		ecosystems: []scanner.Ecosystem{scanner.EcosystemDocker},
+		scanFn: func(_ context.Context, _ scanner.Artifact) (scanner.ScanResult, error) {
+			return scanner.ScanResult{}, scanner.NewScanError(scanner.ErrKindRetryable, errors.New("bridge down"))
+		},
+	}
+	criticality := map[string]scanner.Criticality{"guarddog": scanner.CriticalityRequired}
+	scanEngine := scanner.NewEngine(
+		[]scanner.Scanner{required},
+		time.Second,
+		0,
+		scanner.WithRetry(1, time.Millisecond),
+		scanner.WithCriticality(criticality),
+	)
+	policyEngine := policy.NewEngine(policy.EngineConfig{
+		OnScanError:        policy.ScanErrorModeQuarantine,
+		ScannerCriticality: criticality,
+	}, nil)
+	a, db := setupTestDockerWithPushAndEngines(t, scanEngine, policyEngine)
+
+	manifestBody := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.docker.distribution.manifest.v2+json"}`)
+	req := httptest.NewRequest(http.MethodPut, "/v2/myteam/myapp/manifests/v1.0", bytes.NewReader(manifestBody))
+	req.Header.Set("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	var count int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM artifact_status WHERE status = 'CLEAN'`).Scan(&count))
+	assert.Equal(t, 0, count)
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM docker_tags WHERE tag = 'v1.0'`).Scan(&count))
+	assert.Equal(t, 0, count)
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE event_type = 'SCAN_UNAVAILABLE'`).Scan(&count))
+	assert.Equal(t, 1, count)
 }

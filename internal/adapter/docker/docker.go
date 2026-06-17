@@ -469,14 +469,17 @@ func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request
 	// Detach from the HTTP request context so client disconnect doesn't cancel the pipeline.
 	pctx, pcancel := adapter.PipelineContextFrom(r.Context())
 	defer pcancel()
-	scanResults, scanErr := a.scanEngine.ScanAll(pctx, scanArtifact)
+	scanReport, scanErr := a.scanEngine.ScanAll(pctx, scanArtifact)
 	if scanErr != nil {
-		log.Error().Err(scanErr).Str("artifact", artifactID).Msg("docker push: scan engine error, failing open")
-		scanResults = nil
+		log.Error().Err(scanErr).Str("artifact", artifactID).Msg("docker push: scan engine error")
 	}
+	scanResults := scanReport.Results
 
 	// Policy evaluation.
-	policyResult := a.policyEng.Evaluate(pctx, scanArtifact, scanResults)
+	policyResult := a.policyEng.EvaluateReport(pctx, scanArtifact, scanReport)
+	if len(policyResult.ScanUnavailable) > 0 {
+		adapter.AuditScanUnavailable(r.Context(), a.db, policyResult, artifactID, "push", r.RemoteAddr, r.UserAgent())
+	}
 	log.Info().
 		Str("artifact", artifactID).
 		Str("action", string(policyResult.Action)).
@@ -484,6 +487,14 @@ func (a *DockerAdapter) handleManifestPut(w http.ResponseWriter, r *http.Request
 		Msg("docker push: policy decision")
 
 	switch policyResult.Action {
+	case policy.ActionRetryLater:
+		adapter.WriteJSONError(w, http.StatusServiceUnavailable, adapter.ErrorResponse{
+			Error:    "scanner unavailable",
+			Artifact: artifactID,
+			Reason:   policyResult.Reason,
+		})
+		return
+
 	case policy.ActionBlock:
 		now := time.Now().UTC()
 		_ = a.persistArtifact(artifactID, scanArtifact, hex.EncodeToString(h[:]), body, model.StatusQuarantined, policyResult.Reason, &now, scanResults)
@@ -993,11 +1004,11 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 
 	// 7. Scan via scan engine.
 	log.Info().Str("artifact", artifactID).Str("client", r.RemoteAddr).Msg("docker: starting scan pipeline")
-	scanResults, err := a.scanEngine.ScanAll(pctx, scanArtifact)
+	scanReport, err := a.scanEngine.ScanAll(pctx, scanArtifact)
 	if err != nil {
-		log.Error().Err(err).Str("artifact", artifactID).Msg("docker: scan engine error, failing open")
-		scanResults = nil
+		log.Error().Err(err).Str("artifact", artifactID).Msg("docker: scan engine error")
 	}
+	scanResults := scanReport.Results
 	for _, sr := range scanResults {
 		l := log.Info().
 			Str("artifact", artifactID).
@@ -1015,7 +1026,10 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 	}
 
 	// 8. Policy evaluation.
-	policyResult := a.policyEng.Evaluate(pctx, scanArtifact, scanResults)
+	policyResult := a.policyEng.EvaluateReport(pctx, scanArtifact, scanReport)
+	if len(policyResult.ScanUnavailable) > 0 {
+		adapter.AuditScanUnavailable(r.Context(), a.db, policyResult, artifactID, "pull", r.RemoteAddr, r.UserAgent())
+	}
 	log.Info().
 		Str("artifact", artifactID).
 		Str("action", string(policyResult.Action)).
@@ -1024,6 +1038,10 @@ func (a *DockerAdapter) handleManifest(w http.ResponseWriter, r *http.Request, r
 
 	// 9. Act on policy result.
 	switch policyResult.Action {
+	case policy.ActionRetryLater:
+		adapter.WriteRetryLater(w, artifactID, policyResult.Reason, a.policyEng.RetryAfter())
+		return
+
 	case policy.ActionBlock:
 		now := time.Now().UTC()
 		_ = a.persistArtifact(artifactID, scanArtifact, manifestSHA, manifestBytes, model.StatusQuarantined, policyResult.Reason, &now, scanResults)

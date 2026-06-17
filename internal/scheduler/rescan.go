@@ -227,12 +227,13 @@ func (s *RescanScheduler) rescanArtifact(ctx context.Context, art artifactRow) {
 
 	// 3. Scan with all applicable scanners, excluding AI scanner (its results
 	// are deterministic for the same artifact content — no value in re-running).
-	results, scanErr := s.scanEngine.ScanAll(ctx, scanArtifact, "ai-scanner")
+	scanReport, scanErr := s.scanEngine.ScanAll(ctx, scanArtifact, "ai-scanner")
 	if scanErr != nil {
 		log.Error().Err(scanErr).Str("artifact", art.ID).Msg("rescan scheduler: scan error, preserving current status")
 		s.updateRescanDueAt(art.ID, time.Now().UTC().Add(s.interval))
 		return
 	}
+	results := scanReport.Results
 
 	// Log individual scanner results for observability.
 	for _, sr := range results {
@@ -252,13 +253,24 @@ func (s *RescanScheduler) rescanArtifact(ctx context.Context, art artifactRow) {
 	}
 
 	// 4. Policy evaluation (only when scan succeeded).
-	decision := s.policyEngine.Evaluate(ctx, scanArtifact, results)
+	decision := s.policyEngine.EvaluateReport(ctx, scanArtifact, scanReport)
 
 	log.Info().
 		Str("artifact", art.ID).
 		Str("action", string(decision.Action)).
 		Str("reason", decision.Reason).
 		Msg("rescan scheduler: policy decision")
+
+	// A required scanner was unavailable. The scan is incomplete, so preserve
+	// the current status (never downgrade to clean) and reschedule. Emit
+	// SCAN_UNAVAILABLE so the outage is never silent.
+	if len(decision.ScanUnavailable) > 0 {
+		adapter.AuditScanUnavailable(ctx, s.db, decision, art.ID, "rescan", "", "")
+	}
+	if decision.Action == policy.ActionRetryLater {
+		s.updateRescanDueAt(art.ID, time.Now().UTC().Add(s.interval))
+		return
+	}
 
 	// 5. Update status + scan results + audit log in a transaction.
 	now := time.Now().UTC()

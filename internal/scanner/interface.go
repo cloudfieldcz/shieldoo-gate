@@ -87,3 +87,33 @@ type Scanner interface {
 	Scan(ctx context.Context, artifact Artifact) (ScanResult, error)
 	HealthCheck(ctx context.Context) error
 }
+
+// Criticality declares whether a scanner must produce a verdict before an
+// artifact can become servable. Required scanners fail closed on error;
+// best-effort scanners fail open (logged and counted, never blocking alone).
+type Criticality string
+
+const (
+	CriticalityRequired   Criticality = "required"
+	CriticalityBestEffort Criticality = "best_effort"
+)
+
+// ScanRetryConfig controls bounded retry of retryable scanner errors.
+type ScanRetryConfig struct {
+	MaxAttempts int
+	Backoff     time.Duration
+}
+
+// ScanReport captures scan completeness for one artifact: which scanners were
+// expected to run, their successful results, which ones errored (with the
+// classified error), and which were skipped (best-effort excludes).
+type ScanReport struct {
+	Expected []string
+	Results  []ScanResult
+	Errored  map[string]*ScanError
+	Skipped  []string
+}
+
+func (r ScanReport) SuccessfulResults() []ScanResult {
+	return r.Results
+}

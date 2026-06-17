@@ -8,22 +8,39 @@ The scan engine (`internal/scanner/engine.go`) orchestrates multiple scanners in
 
 1. Filters scanners to those supporting the artifact's ecosystem
 2. Creates a shared `context.WithTimeout` (default 60 seconds)
-3. Runs all applicable scanners concurrently using goroutines
-4. Collects results with `sync.WaitGroup` + `sync.Mutex`
-5. Returns all results — errors are captured as `VerdictClean` (fail-open)
+3. Runs all applicable scanners concurrently using goroutines, retrying retryable errors per `scanners.retry`
+4. Collects a `ScanReport` with `sync.WaitGroup` + `sync.Mutex`
+5. Returns the report: successful results in `Results`, classified failures in `Errored`, best-effort excludes in `Skipped`
 
 ```go
 // Simplified flow
-func (e *Engine) ScanAll(ctx context.Context, artifact Artifact, excludeNames ...string) ([]ScanResult, error) {
+func (e *Engine) ScanAll(ctx context.Context, artifact Artifact, excludeNames ...string) (ScanReport, error) {
     applicable := filterByEcosystem(e.scanners, artifact.Ecosystem)
-    // Optional excludeNames filters out specific scanners (e.g., AI scanner during rescan)
+    // Optional excludeNames filters out best-effort scanners (e.g., AI scanner during
+    // rescan); required scanners cannot be excluded.
     scanCtx, cancel := context.WithTimeout(ctx, e.timeout)
-    // Run each scanner in a goroutine, collect results
-    // Scanner errors → ScanResult{Verdict: VerdictClean, Error: err}
+    // Run each scanner in a goroutine; bounded retry on retryable errors;
+    // successes → report.Results, failures → report.Errored[name] = *ScanError
 }
 ```
 
-**Fail-open semantics:** If a scanner returns an error (network failure, timeout, crash), the engine wraps it as a `VerdictClean` result with the error recorded. Scanner failures never produce `VerdictMalicious`. This ensures that scanner outages do not block all package installations.
+**Completeness reporting, not fail-open:** Inline scanner failures are reported in `ScanReport.Errored` and classified by `ScanError.Kind` (retryable, terminal, overload). Required scanners fail closed according to `policy.on_scan_error`; best-effort scanner failures are logged and counted but do not block artifact serving by themselves. Scanner failures never produce `VerdictMalicious`.
+
+Criticality is keyed by scanner `Name()`; any scanner not listed defaults to `best_effort`:
+
+- `builtin-threat-feed`
+- `hash-verifier`
+- `install-hook-analyzer`
+- `obfuscation-detector`
+- `exfil-detector`
+- `pth-inspector`
+- `builtin-typosquat`
+- `guarddog`
+- `ai-scanner`
+- `version-diff`
+- `builtin-reputation`
+- `trivy`
+- `osv`
 
 ## Scanner Interface
 
@@ -162,7 +179,7 @@ service ScannerBridge {
 
 The Go client sends the artifact's local path, ecosystem, package name, and version. The Python bridge runs GuardDog's analysis and returns verdict, confidence, and findings.
 
-**Failure handling:** If the bridge is unreachable or GuardDog fails, the scanner returns `VerdictClean` (fail-open) and logs the error.
+**Failure handling:** If the bridge is unreachable or GuardDog fails, the scanner returns a `VerdictClean` result with the error recorded in `ScanResult.Error`. The scan engine surfaces this as a classified error in `ScanReport.Errored`. Whether that failure fails closed or fails open is governed by GuardDog's configured [criticality](#scan-engine): there is **no hardcoded default** — any scanner not listed in `scanners.criticality` is `best_effort`. The shipped `config.example.yaml` marks `guarddog: "required"`, so with that config a GuardDog outage fails closed per `policy.on_scan_error` rather than serving the artifact unscanned. A config that enables GuardDog without listing it as `required` leaves it best-effort, and outages fail open — see the startup warning emitted when `on_scan_error` is active but no scanner is marked `required`.
 
 ### Trivy (Subprocess)
 
@@ -398,7 +415,7 @@ After all scanners complete, the **policy aggregator** (`internal/policy/aggrega
 
 2. **Skip low-confidence results** — Results with `confidence < MinConfidence` (default 0.7) are ignored.
 
-3. **Skip errored results** — Results where `Error != nil` are treated as `CLEAN` (fail-open).
+3. **Skip errored results** — Required scanner failures are handled by the policy scanner-availability step before aggregation (see [policy.on_scan_error](policy.md#scanner-failure-policy)); only best-effort scanner errors reach aggregation, where they are skipped.
 
 4. **Highest verdict wins** — Among remaining results: `MALICIOUS > SUSPICIOUS > CLEAN`.
 

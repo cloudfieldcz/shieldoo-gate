@@ -364,13 +364,21 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 
 	// 4. Scan.
 	log.Info().Str("artifact", artifactID).Str("client", r.RemoteAddr).Msg("npm: starting scan pipeline")
-	scanResults, _ := a.scanEngine.ScanAll(pctx, scanArtifact)
+	scanReport, _ := a.scanEngine.ScanAll(pctx, scanArtifact)
+	scanResults := scanReport.Results
 
 	// 5. Policy.
-	policyResult := a.policyEngine.Evaluate(pctx, scanArtifact, scanResults)
+	policyResult := a.policyEngine.EvaluateReport(pctx, scanArtifact, scanReport)
+	if len(policyResult.ScanUnavailable) > 0 {
+		adapter.AuditScanUnavailable(r.Context(), a.db, policyResult, artifactID, "pull", r.RemoteAddr, r.UserAgent())
+	}
 
 	// 6. Act.
 	switch policyResult.Action {
+	case policy.ActionRetryLater:
+		adapter.WriteRetryLater(w, artifactID, policyResult.Reason, a.policyEngine.RetryAfter())
+		return
+
 	case policy.ActionBlock:
 		now := time.Now().UTC()
 		_ = a.persistArtifact(artifactID, scanArtifact, model.StatusQuarantined, policyResult.Reason, &now, scanResults)

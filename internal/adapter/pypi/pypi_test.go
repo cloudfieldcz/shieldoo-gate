@@ -1,6 +1,8 @@
 package pypi_test
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -158,4 +160,117 @@ func TestPyPIAdapter_SimplePackage_InvalidName_Returns400(t *testing.T) {
 	a.ServeHTTP(w, req)
 	// Should proxy through (upstream returns 200) — valid name case.
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// --- Fail-closed scanner error tests ---
+
+func setupTestPyPIWithEngines(
+	t *testing.T,
+	upstreamHandler http.HandlerFunc,
+	scanEngine *scanner.Engine,
+	policyEngine *policy.Engine,
+) (*pypi.PyPIAdapter, *httptest.Server, *config.GateDB) {
+	t.Helper()
+	upstream := httptest.NewServer(upstreamHandler)
+	t.Cleanup(upstream.Close)
+
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+
+	cacheStore, err := local.NewLocalCacheStore(t.TempDir(), 10)
+	require.NoError(t, err)
+
+	a := pypi.NewPyPIAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL, config.TagMutabilityConfig{})
+	a.SetFilesHost(upstream.URL)
+	return a, upstream, db
+}
+
+type pypiTestScanner struct {
+	name       string
+	ecosystems []scanner.Ecosystem
+	scanFn     func(context.Context, scanner.Artifact) (scanner.ScanResult, error)
+}
+
+func (m *pypiTestScanner) Name() string                                 { return m.name }
+func (m *pypiTestScanner) Version() string                              { return "test" }
+func (m *pypiTestScanner) SupportedEcosystems() []scanner.Ecosystem     { return m.ecosystems }
+func (m *pypiTestScanner) Scan(ctx context.Context, artifact scanner.Artifact) (scanner.ScanResult, error) {
+	return m.scanFn(ctx, artifact)
+}
+func (m *pypiTestScanner) HealthCheck(context.Context) error { return nil }
+
+func setupPyPIRequiredScannerError(
+	t *testing.T,
+	mode policy.ScanErrorMode,
+) (*pypi.PyPIAdapter, *config.GateDB) {
+	t.Helper()
+	fileContent := []byte("fake tarball content")
+	required := &pypiTestScanner{
+		name:       "guarddog",
+		ecosystems: []scanner.Ecosystem{scanner.EcosystemPyPI},
+		scanFn: func(_ context.Context, _ scanner.Artifact) (scanner.ScanResult, error) {
+			return scanner.ScanResult{}, scanner.NewScanError(scanner.ErrKindOverload, errors.New("bridge overloaded"))
+		},
+	}
+	criticality := map[string]scanner.Criticality{"guarddog": scanner.CriticalityRequired}
+	scanEngine := scanner.NewEngine(
+		[]scanner.Scanner{required},
+		time.Second,
+		0,
+		scanner.WithRetry(1, time.Millisecond),
+		scanner.WithCriticality(criticality),
+	)
+	policyEngine := policy.NewEngine(policy.EngineConfig{
+		MinimumConfidence:  0.7,
+		OnScanError:        mode,
+		ScannerCriticality: criticality,
+	}, nil)
+
+	a, _, db := setupTestPyPIWithEngines(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(fileContent)
+	}, scanEngine, policyEngine)
+	return a, db
+}
+
+func TestPyPIAdapter_RequiredScannerError_Returns503AndDoesNotPersist(t *testing.T) {
+	a, db := setupPyPIRequiredScannerError(t, policy.ScanErrorModeQuarantine)
+	req := httptest.NewRequest(http.MethodGet, "/packages/re/requests/requests-2.28.0.tar.gz", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.NotEmpty(t, w.Header().Get("Retry-After"))
+
+	var count int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM artifact_status`).Scan(&count))
+	assert.Equal(t, 0, count)
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE event_type = 'SCAN_UNAVAILABLE'`).Scan(&count))
+	assert.Equal(t, 1, count)
+}
+
+func TestPyPIAdapter_RequiredScannerError_BlockModeAuditsScanUnavailable(t *testing.T) {
+	a, db := setupPyPIRequiredScannerError(t, policy.ScanErrorModeBlock)
+	req := httptest.NewRequest(http.MethodGet, "/packages/re/requests/requests-2.28.0.tar.gz", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	var count int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE event_type = 'SCAN_UNAVAILABLE'`).Scan(&count))
+	assert.Equal(t, 1, count)
+}
+
+func TestPyPIAdapter_RequiredScannerError_FailOpenModeAuditsScanUnavailable(t *testing.T) {
+	a, db := setupPyPIRequiredScannerError(t, policy.ScanErrorModeFailOpen)
+	req := httptest.NewRequest(http.MethodGet, "/packages/re/requests/requests-2.28.0.tar.gz", nil)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var count int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE event_type = 'SCAN_UNAVAILABLE'`).Scan(&count))
+	assert.Equal(t, 1, count)
 }

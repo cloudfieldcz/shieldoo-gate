@@ -15,13 +15,34 @@ const (
 	ActionBlock            Action = "block"
 	ActionQuarantine       Action = "quarantine"
 	ActionAllowWithWarning Action = "allow_with_warning"
+	ActionRetryLater       Action = "retry_later"
 )
+
+// ScanErrorMode controls how the policy engine reacts when a required scanner
+// fails to produce a verdict.
+type ScanErrorMode string
+
+const (
+	ScanErrorModeQuarantine ScanErrorMode = "quarantine"
+	ScanErrorModeBlock      ScanErrorMode = "block"
+	ScanErrorModeFailOpen   ScanErrorMode = "fail_open"
+)
+
+// ScanUnavailable records one required scanner that failed, along with the
+// applied policy mode. Carried on PolicyResult so adapters can audit the event
+// regardless of the final action.
+type ScanUnavailable struct {
+	Scanner string
+	Kind    string
+	Mode    string
+}
 
 // PolicyResult is the outcome of evaluating a policy against an artifact.
 type PolicyResult struct {
-	Action   Action
-	Reason   string
-	Warnings []string // non-blocking notes surfaced to audit + response headers
+	Action          Action
+	Reason          string
+	Warnings        []string // non-blocking notes surfaced to audit + response headers
+	ScanUnavailable []ScanUnavailable
 }
 
 // AllowlistEntry represents a parsed allowlist specification.
