@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Bug, Terminal } from 'lucide-react'
 import { vulnApi, type ComponentRow } from '../api/vulnerabilities'
+import { projectsApi } from '../api/client'
 import { CountPill } from '../components/vuln/SeverityCounts'
 import TriggerBadge from '../components/vuln/TriggerBadge'
 import AIAnomalyBanner from '../components/vuln/AIAnomalyBanner'
@@ -29,6 +30,7 @@ export default function Vulnerabilities() {
   })
 
   const { data: summary } = useQuery({ queryKey: ['vuln', 'summary'], queryFn: () => vulnApi.summary() })
+  const { data: projects } = useQuery({ queryKey: ['projects', 'list'], queryFn: () => projectsApi.list() })
 
   const items = data?.items ?? []
   const hasFilters = Boolean(project || ecosystem || severityFloor || hasNew || q)
@@ -51,12 +53,16 @@ export default function Vulnerabilities() {
           onChange={(e) => setQ(e.target.value)}
           className="px-3 py-1.5 rounded-md border border-gray-300 text-sm w-64"
         />
-        <input
-          placeholder="Project"
+        <select
           value={project}
           onChange={(e) => setProject(e.target.value)}
           className="px-3 py-1.5 rounded-md border border-gray-300 text-sm w-40"
-        />
+        >
+          <option value="">All projects</option>
+          {(projects ?? []).map((p) => (
+            <option key={p.label} value={p.label}>{p.display_name || p.label}</option>
+          ))}
+        </select>
         <select value={ecosystem} onChange={(e) => setEcosystem(e.target.value)} className="px-3 py-1.5 rounded-md border border-gray-300 text-sm">
           {ecosystems.map((e) => <option key={e} value={e}>{e || 'All ecosystems'}</option>)}
         </select>
