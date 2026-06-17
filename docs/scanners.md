@@ -26,6 +26,8 @@ func (e *Engine) ScanAll(ctx context.Context, artifact Artifact, excludeNames ..
 
 **Completeness reporting, not fail-open:** Inline scanner failures are reported in `ScanReport.Errored` and classified by `ScanError.Kind` (retryable, terminal, overload). Required scanners fail closed according to `policy.on_scan_error`; best-effort scanner failures are logged and counted but do not block artifact serving by themselves. Scanner failures never produce `VerdictMalicious`.
 
+**Circuit breaker scope:** The per-scanner circuit breaker (5 consecutive failures → 60s cooldown) is consulted **only for `required` scanners**, where an open circuit short-circuits to a fast `overload` error (mapped to 503/quarantine) instead of timing out per attempt. Best-effort scanners are never short-circuited: their verdict is fail-open either way, so skipping them would carry no safety benefit and would only drop the data they produce (SBOM, licenses, vuln findings) for any artifact scanned during the cooldown. Best-effort overload is bounded instead by the bridge concurrency semaphore (`max_concurrent_scans`).
+
 Criticality is keyed by scanner `Name()`; any scanner not listed defaults to `best_effort`:
 
 - `builtin-threat-feed`

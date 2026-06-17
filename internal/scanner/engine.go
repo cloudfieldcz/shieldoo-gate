@@ -194,13 +194,27 @@ func (e *Engine) ScanAll(ctx context.Context, artifact Artifact, excludeNames ..
 // scanOne runs a single scanner with circuit-breaker gating and bounded retry
 // of retryable errors. It returns either a successful result or a classified
 // *ScanError.
+//
+// Circuit breaking applies ONLY to required scanners. For a required scanner an
+// open circuit produces a fast fail-closed decision (an overload error the
+// policy engine maps to 503/quarantine) instead of a per-attempt timeout. A
+// best-effort scanner fails open regardless, so short-circuiting it would have
+// no safety benefit — it would only silently drop the data that scanner carries
+// (SBOM, licenses, vuln findings) for every artifact scanned during the
+// cooldown window. So best-effort scanners are always attempted; the bridge
+// semaphore (MaxConcurrentScans) remains the overload guard for them.
 func (e *Engine) scanOne(ctx context.Context, sc Scanner, artifact Artifact) (ScanResult, *ScanError) {
-	breaker := e.breakers[sc.Name()]
+	var breaker *scanCircuit
+	if e.criticalityFor(sc.Name()) == CriticalityRequired {
+		breaker = e.breakers[sc.Name()]
+	}
 	if breaker != nil && breaker.isOpen() {
 		circuitBreakerState.WithLabelValues(sc.Name()).Set(1)
 		return ScanResult{}, NewScanError(ErrKindOverload, fmt.Errorf("%s scanner circuit open", sc.Name()))
 	}
-	circuitBreakerState.WithLabelValues(sc.Name()).Set(0)
+	if breaker != nil {
+		circuitBreakerState.WithLabelValues(sc.Name()).Set(0)
+	}
 
 	attempts := e.retryMaxAttempts
 	if attempts < 1 {

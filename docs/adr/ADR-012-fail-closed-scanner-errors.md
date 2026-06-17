@@ -14,6 +14,8 @@ Inline scanner failures previously degraded to clean verdicts, allowing artifact
 
 Inline scan completeness is explicit through `scanner.ScanReport` (`Expected`, `Results`, `Errored`, `Skipped`). Scanner errors are classified (`retryable`, `terminal`, `overload`) and retried within a bounded budget with a per-scanner circuit breaker. Scanners configured as `required` (criticality keyed by `Name()`) must produce a verdict before an artifact can become servable, unless `policy.on_scan_error` is explicitly set to `fail_open`.
 
+The per-scanner circuit breaker applies **only to `required` scanners**. For a required scanner an open circuit yields a fast fail-closed decision (an `overload` error the policy engine maps to 503/quarantine) instead of a per-attempt timeout. Best-effort scanners fail open regardless, so short-circuiting them would carry no safety benefit and would only silently drop the data they produce (SBOM, licenses, vuln findings) for every artifact scanned during the cooldown window; they are therefore always attempted, with the bridge concurrency semaphore (`max_concurrent_scans`) remaining their overload guard.
+
 `policy.on_scan_error` maps required scanner failures to adapter behavior:
 
 - Pull paths return HTTP 503 with `Retry-After`.

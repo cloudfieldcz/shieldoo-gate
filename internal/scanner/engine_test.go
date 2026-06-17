@@ -230,3 +230,68 @@ func TestEngine_HealthCheck_PropagatesPerScannerErrors(t *testing.T) {
 	require.Error(t, status["broken"])
 	assert.Contains(t, status["broken"].Error(), "bridge down")
 }
+
+// A best-effort scanner must never be short-circuited by its circuit breaker:
+// its verdict is fail-open regardless, so skipping it only silently drops the
+// data it carries (SBOM, licenses, vuln findings) without any safety benefit.
+// Regression guard for the SBOM-loss bug where an open Trivy breaker (tripped
+// by a burst of heavy concurrent scans) blacked out Trivy — and thus SBOM
+// generation — for unrelated artifacts scanned during the cooldown window.
+func TestEngine_ScanAll_BestEffortScannerNotCircuitBroken(t *testing.T) {
+	calls := 0
+	bestEffort := &mockScanner{
+		name:       "trivy", // unlisted in criticality => best_effort
+		ecosystems: []Ecosystem{EcosystemPyPI},
+		scanFn: func(_ context.Context, _ Artifact) (ScanResult, error) {
+			calls++
+			return ScanResult{Verdict: VerdictClean, ScannerID: "trivy", SBOMContent: []byte("{}")}, nil
+		},
+	}
+
+	engine := NewEngine([]Scanner{bestEffort}, time.Second, 0)
+	// Force the breaker open, as if a prior burst had tripped it.
+	for i := 0; i < 10; i++ {
+		engine.breakers["trivy"].recordFailure()
+	}
+	require.True(t, engine.breakers["trivy"].isOpen(), "precondition: breaker must be open")
+
+	report, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemPyPI})
+	require.NoError(t, err)
+	assert.Equal(t, 1, calls, "best-effort scanner must still be invoked when its breaker is open")
+	require.Len(t, report.Results, 1, "best-effort result must land in Results, not be dropped")
+	assert.NotEmpty(t, report.Results[0].SBOMContent, "SBOM content must survive an open breaker")
+	assert.Empty(t, report.Errored)
+}
+
+// A required scanner, by contrast, must still fail fast when its breaker is
+// open — that is the whole point of fail-closed gating (a quick overload error
+// instead of a per-attempt timeout).
+func TestEngine_ScanAll_RequiredScannerCircuitBreaks(t *testing.T) {
+	calls := 0
+	required := &mockScanner{
+		name:       "guarddog",
+		ecosystems: []Ecosystem{EcosystemPyPI},
+		scanFn: func(_ context.Context, _ Artifact) (ScanResult, error) {
+			calls++
+			return ScanResult{Verdict: VerdictClean, ScannerID: "guarddog"}, nil
+		},
+	}
+
+	engine := NewEngine(
+		[]Scanner{required},
+		time.Second,
+		0,
+		WithCriticality(map[string]Criticality{"guarddog": CriticalityRequired}),
+	)
+	for i := 0; i < 10; i++ {
+		engine.breakers["guarddog"].recordFailure()
+	}
+	require.True(t, engine.breakers["guarddog"].isOpen(), "precondition: breaker must be open")
+
+	report, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemPyPI})
+	require.NoError(t, err)
+	assert.Equal(t, 0, calls, "required scanner must be short-circuited while its breaker is open")
+	require.Contains(t, report.Errored, "guarddog")
+	assert.Equal(t, ErrKindOverload, report.Errored["guarddog"].Kind)
+	assert.Empty(t, report.Results)
+}
