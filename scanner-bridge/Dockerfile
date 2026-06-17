@@ -96,4 +96,21 @@ COPY main.py .
 
 ENV BRIDGE_SOCKET=/tmp/shieldoo-bridge.sock
 
+# Run as a non-root user that MATCHES the gate's sgw (uid 100/gid 101). Two
+# reasons (issue #24):
+#   1. Defence in depth — the bridge runs guarddog + semgrep over *untrusted*
+#      package content; it must not do so as root.
+#   2. Shared-/tmp scratch ownership — /tmp is the shared `bridge-socket` volume,
+#      mounted into both containers and sticky (1777). semgrep writes scratch
+#      there that escapes the TMPDIR redirect; only the file's *owner* may unlink
+#      it under the sticky bit. With the bridge as the same uid as the gate, that
+#      scratch is sgw-owned and the gate's tmpjanitor (sgw) can reclaim it.
+# uid 100 / gid 101 are unused in the python:slim base. HOME must exist and be
+# writable: semgrep creates $HOME/.semgrep on every run (fails closed otherwise).
+RUN groupadd -g 101 sgw \
+ && useradd -u 100 -g 101 -m -d /home/sgw -s /usr/sbin/nologin sgw \
+ && chown -R sgw:sgw /usr/local/lib/python3.13/site-packages/guarddog/analyzer/metadata/resources
+ENV HOME=/home/sgw
+USER sgw
+
 CMD ["python", "main.py"]
