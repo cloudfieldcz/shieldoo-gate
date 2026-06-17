@@ -98,11 +98,26 @@ type Rule struct {
 //     os.CreateTemp; FILES ONLY — never a directory, which keeps the legacy
 //     shieldoo-gate-blobs push blob store (a dir, pending migration) out of
 //     scope.
+//   - shieldoo-{azblob,s3,gcs}-cache-* : cloud cache download-to-temp scratch
+//     (issue #24). Each backend's Get downloads a blob to os.CreateTemp and
+//     returns the path to a consumer (serve + async sandbox scan) that outlives
+//     the call; an in-process 5-min cleanup goroutine handles the happy path but
+//     is abandoned on a hard kill/restart, orphaning the temp (970 MB observed
+//     in prod). Always regular files; FILES ONLY.
+//   - semgrep-*           : scratch left by semgrep, which GuardDog invokes in
+//     the scanner-bridge and which escapes the bridge's TMPDIR redirect into the
+//     shared /tmp (issue #24). semgrep is semgrep's own naming, but only our
+//     scan runs semgrep in that container, so owning the prefix is safe; it
+//     makes both files and dirs.
 func DefaultRules() []Rule {
 	return []Rule{
 		{Prefix: "shieldoo-trivy-", AllowFiles: true, AllowDirs: true},
 		{Prefix: "shieldoo-sbom-", AllowFiles: true, AllowDirs: false},
 		{Prefix: "shieldoo-gate-", AllowFiles: true, AllowDirs: false},
+		{Prefix: "shieldoo-azblob-cache-", AllowFiles: true, AllowDirs: false},
+		{Prefix: "shieldoo-s3-cache-", AllowFiles: true, AllowDirs: false},
+		{Prefix: "shieldoo-gcs-cache-", AllowFiles: true, AllowDirs: false},
+		{Prefix: "semgrep-", AllowFiles: true, AllowDirs: true},
 	}
 }
 

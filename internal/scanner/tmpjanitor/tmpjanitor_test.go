@@ -246,6 +246,61 @@ func TestSweep_SbomTempFilesRemoved(t *testing.T) {
 	}
 }
 
+func TestSweep_CloudCacheTempFilesRemoved(t *testing.T) {
+	dir := t.TempDir()
+	// Download-to-temp scratch left by the cloud cache backends (issue #24).
+	// Each is always a regular file (os.CreateTemp); files-only.
+	azblob := mkStaleFile(t, dir, "shieldoo-azblob-cache-123456", staleAt)
+	s3 := mkStaleFile(t, dir, "shieldoo-s3-cache-abcdef", staleAt)
+	gcs := mkStaleFile(t, dir, "shieldoo-gcs-cache-789xyz", staleAt)
+	// A fresh azblob temp could be a download still being served/scanned.
+	freshAz := mkStaleFile(t, dir, "shieldoo-azblob-cache-inflight", freshAt)
+	// A directory under a cloud-cache prefix must NOT be removed (files-only).
+	azDir := mkStaleDir(t, dir, "shieldoo-azblob-cache-dir", staleAt)
+
+	n := newJanitor(dir).Sweep(now)
+
+	if n != 3 {
+		t.Fatalf("expected 3 deleted, got %d", n)
+	}
+	for _, p := range []string{azblob, s3, gcs} {
+		if exists(p) {
+			t.Errorf("stale cloud-cache temp %s should be removed", filepath.Base(p))
+		}
+	}
+	if !exists(freshAz) {
+		t.Error("fresh cloud-cache temp must be kept (could be an in-flight download)")
+	}
+	if !exists(azDir) {
+		t.Error("a directory under a cloud-cache prefix is files-only and must survive")
+	}
+}
+
+func TestSweep_SemgrepScratchRemoved_FilesAndDirs(t *testing.T) {
+	dir := t.TempDir()
+	// semgrep (invoked by GuardDog in the scanner-bridge) writes both files and
+	// dirs to the shared /tmp; only our scan runs semgrep, so owning the prefix
+	// is safe (issue #24).
+	semFile := mkStaleFile(t, dir, "semgrep-output-123", staleAt)
+	semDir := mkStaleDir(t, dir, "semgrep-core-456", staleAt)
+	semFresh := mkStaleFile(t, dir, "semgrep-inflight", freshAt)
+
+	n := newJanitor(dir).Sweep(now)
+
+	if n != 2 {
+		t.Fatalf("expected 2 deleted, got %d", n)
+	}
+	if exists(semFile) {
+		t.Error("stale semgrep file should be removed")
+	}
+	if exists(semDir) {
+		t.Error("stale semgrep dir should be removed (semgrep makes both files and dirs)")
+	}
+	if !exists(semFresh) {
+		t.Error("fresh semgrep scratch must be kept (could be an in-flight scan)")
+	}
+}
+
 func TestMatchRule(t *testing.T) {
 	j := New(Config{Dir: "/x", MaxAge: testAge})
 	cases := []struct {
@@ -259,6 +314,14 @@ func TestMatchRule(t *testing.T) {
 		{"shieldoo-sbom-dir", true, false}, // files only
 		{"shieldoo-gate-pypi.tmp", false, true},
 		{"shieldoo-gate-blobs", true, false}, // files only -> blob store excluded
+		{"shieldoo-azblob-cache-1", false, true},
+		{"shieldoo-azblob-cache-1", true, false}, // files only
+		{"shieldoo-s3-cache-1", false, true},
+		{"shieldoo-s3-cache-1", true, false}, // files only
+		{"shieldoo-gcs-cache-1", false, true},
+		{"shieldoo-gcs-cache-1", true, false}, // files only
+		{"semgrep-output", false, true},
+		{"semgrep-core", true, true}, // semgrep makes both files and dirs
 		{"sgw-sandbox-1", true, false},
 		{"unrelated", false, false},
 	}
