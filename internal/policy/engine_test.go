@@ -2,6 +2,7 @@ package policy_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
@@ -260,4 +261,79 @@ func TestPermissiveMode_LowSeverity_AllowWithWarning(t *testing.T) {
 	results := []scanner.ScanResult{suspiciousResult("osv", scanner.SeverityLow)}
 	result := engine.Evaluate(context.Background(), pypiArtifact("pkg", "1.0.0"), results)
 	assert.Equal(t, policy.ActionAllowWithWarning, result.Action)
+}
+
+func requiredErroredReport() scanner.ScanReport {
+	return scanner.ScanReport{
+		Expected: []string{"guarddog"},
+		Errored: map[string]*scanner.ScanError{
+			"guarddog": scanner.NewScanError(scanner.ErrKindOverload, errors.New("scanner overloaded")),
+		},
+	}
+}
+
+func TestPolicyEngine_RequiredScannerError_QuarantineModeReturnsRetryLater(t *testing.T) {
+	cfg := defaultEngineConfig()
+	cfg.OnScanError = policy.ScanErrorModeQuarantine
+	cfg.ScannerCriticality = map[string]scanner.Criticality{"guarddog": scanner.CriticalityRequired}
+	engine := policy.NewEngine(cfg, nil)
+
+	result := engine.EvaluateReport(context.Background(), pypiArtifact("pkg", "1.0.0"), requiredErroredReport())
+
+	assert.Equal(t, policy.ActionRetryLater, result.Action)
+	assert.Len(t, result.ScanUnavailable, 1)
+	assert.Equal(t, "guarddog", result.ScanUnavailable[0].Scanner)
+	assert.Equal(t, "overload", result.ScanUnavailable[0].Kind)
+	assert.Equal(t, "retry_later", result.ScanUnavailable[0].Mode)
+}
+
+func TestPolicyEngine_RequiredScannerError_BlockModeReturnsBlock(t *testing.T) {
+	cfg := defaultEngineConfig()
+	cfg.OnScanError = policy.ScanErrorModeBlock
+	cfg.ScannerCriticality = map[string]scanner.Criticality{"guarddog": scanner.CriticalityRequired}
+	engine := policy.NewEngine(cfg, nil)
+
+	result := engine.EvaluateReport(context.Background(), pypiArtifact("pkg", "1.0.0"), requiredErroredReport())
+
+	assert.Equal(t, policy.ActionBlock, result.Action)
+	assert.Contains(t, result.Reason, "required scanner unavailable")
+	require.Len(t, result.ScanUnavailable, 1)
+	assert.Equal(t, "block", result.ScanUnavailable[0].Mode)
+}
+
+func TestPolicyEngine_RequiredScannerError_FailOpenModeAllowsClean(t *testing.T) {
+	cfg := defaultEngineConfig()
+	cfg.OnScanError = policy.ScanErrorModeFailOpen
+	cfg.ScannerCriticality = map[string]scanner.Criticality{"guarddog": scanner.CriticalityRequired}
+	engine := policy.NewEngine(cfg, nil)
+
+	result := engine.EvaluateReport(context.Background(), pypiArtifact("pkg", "1.0.0"), requiredErroredReport())
+
+	assert.Equal(t, policy.ActionAllow, result.Action)
+	assert.Len(t, result.ScanUnavailable, 1)
+	assert.Equal(t, "fail_open", result.ScanUnavailable[0].Mode)
+}
+
+func TestPolicyEngine_AllowlistBypassesRequiredScannerError(t *testing.T) {
+	cfg := defaultEngineConfig()
+	cfg.Allowlist = []string{"pypi:pkg:==1.0.0"}
+	cfg.OnScanError = policy.ScanErrorModeQuarantine
+	cfg.ScannerCriticality = map[string]scanner.Criticality{"guarddog": scanner.CriticalityRequired}
+	engine := policy.NewEngine(cfg, nil)
+
+	result := engine.EvaluateReport(context.Background(), pypiArtifact("pkg", "1.0.0"), requiredErroredReport())
+
+	assert.Equal(t, policy.ActionAllow, result.Action)
+	assert.Empty(t, result.ScanUnavailable)
+}
+
+func TestPolicyEngine_BestEffortScannerErrorStillAllowsClean(t *testing.T) {
+	cfg := defaultEngineConfig()
+	cfg.OnScanError = policy.ScanErrorModeQuarantine
+	cfg.ScannerCriticality = map[string]scanner.Criticality{"guarddog": scanner.CriticalityBestEffort}
+	engine := policy.NewEngine(cfg, nil)
+
+	result := engine.EvaluateReport(context.Background(), pypiArtifact("pkg", "1.0.0"), requiredErroredReport())
+
+	assert.Equal(t, policy.ActionAllow, result.Action)
 }

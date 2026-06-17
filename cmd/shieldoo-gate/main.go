@@ -316,7 +316,23 @@ func main() {
 
 	// Init scanner engine
 	scanTimeout := parseDuration(cfg.Scanners.Timeout, 60*time.Second)
-	scanEngine := scanner.NewEngine(scanners, scanTimeout, 32)
+	scanErrorMode := scanErrorModeFromConfig(cfg.Policy.OnScanError)
+	scannerCriticality := scannerCriticalityFromConfig(cfg.Scanners.Criticality)
+	if err := validateScannerCriticality(scanners, scannerCriticality, scanErrorMode); err != nil {
+		log.Fatal().Err(err).Msg("invalid scanner criticality configuration")
+	}
+	retryAttempts := cfg.Scanners.Retry.MaxAttempts
+	if retryAttempts == 0 {
+		retryAttempts = 3
+	}
+	retryBackoff := parseDuration(cfg.Scanners.Retry.Backoff, 200*time.Millisecond)
+	scanEngine := scanner.NewEngine(
+		scanners,
+		scanTimeout,
+		32,
+		scanner.WithRetry(retryAttempts, retryBackoff),
+		scanner.WithCriticality(scannerCriticality),
+	)
 	log.Info().Int("scanner_count", len(scanners)).Int64("max_concurrent_scans", 32).Msg("scanner engine initialized")
 
 	// Optional: Sandbox scanner (async, runs outside the synchronous scan path)
@@ -416,6 +432,9 @@ func main() {
 		BehavioralMinimumConfidence: cfg.Policy.BehavioralMinimumConfidence,
 		Allowlist:                   cfg.Policy.Allowlist,
 		AITriage:                    cfg.Policy.AITriage,
+		OnScanError:                 scanErrorMode,
+		RetryAfter:                  parseDuration(cfg.Policy.RetryAfter, 30*time.Second),
+		ScannerCriticality:          scannerCriticality,
 	}, db, engineOpts...)
 
 	// Init alerter from config.
@@ -842,6 +861,88 @@ func parseDuration(s string, fallbackDur time.Duration) time.Duration {
 		return fallbackDur
 	}
 	return d
+}
+
+// scanErrorModeFromConfig maps the raw policy.on_scan_error string to the
+// policy enum, defaulting to quarantine.
+func scanErrorModeFromConfig(raw string) policy.ScanErrorMode {
+	switch raw {
+	case "block":
+		return policy.ScanErrorModeBlock
+	case "fail_open":
+		return policy.ScanErrorModeFailOpen
+	default:
+		return policy.ScanErrorModeQuarantine
+	}
+}
+
+// scannerCriticalityFromConfig maps the raw scanners.criticality map to typed
+// scanner criticalities. Any value other than "required" is best-effort.
+func scannerCriticalityFromConfig(raw map[string]string) map[string]scanner.Criticality {
+	out := make(map[string]scanner.Criticality, len(raw))
+	for name, value := range raw {
+		if value == "required" {
+			out[name] = scanner.CriticalityRequired
+		} else {
+			out[name] = scanner.CriticalityBestEffort
+		}
+	}
+	return out
+}
+
+// validateScannerCriticality fails startup when a configured *required* scanner
+// is not registered (unless on_scan_error=fail_open, which downgrades it to a
+// warning so operators can run degraded). A missing *best-effort* scanner is
+// only a warning, never fatal: an unlisted scanner already defaults to
+// best-effort, so a best_effort entry for an absent scanner is a harmless no-op.
+// This keeps the shipped example config — which lists optional, disabled
+// scanners as best_effort — bootable, and lets a single config reference
+// scanners that are not currently enabled.
+func validateScannerCriticality(scanners []scanner.Scanner, criticality map[string]scanner.Criticality, mode policy.ScanErrorMode) error {
+	registered := make(map[string]struct{}, len(scanners))
+	for _, sc := range scanners {
+		registered[sc.Name()] = struct{}{}
+	}
+	for name, value := range criticality {
+		if _, ok := registered[name]; ok {
+			continue
+		}
+		if value != scanner.CriticalityRequired {
+			log.Warn().Str("scanner", name).Msg("best-effort scanner has configured criticality but is not registered (ignored)")
+			continue
+		}
+		if mode == policy.ScanErrorModeFailOpen {
+			log.Warn().Str("scanner", name).Msg("required scanner is not registered, allowed because policy.on_scan_error=fail_open")
+			continue
+		}
+		return fmt.Errorf("required scanner %q is configured but not registered", name)
+	}
+
+	// Warn when fail-closed is configured but inert: on_scan_error is
+	// quarantine/block (the operator wants required-scanner failures to fail
+	// closed) yet no registered scanner is marked `required`, so every scanner
+	// outage silently serves the artifact unscanned. fail_open is the explicit
+	// serve-on-error escape hatch and is therefore exempt.
+	if mode != policy.ScanErrorModeFailOpen && !hasRegisteredRequiredScanner(registered, criticality) {
+		log.Warn().Str("on_scan_error", string(mode)).
+			Msg("policy.on_scan_error is set but no registered scanner is marked 'required'; scanner outages will serve artifacts unscanned. Mark a scanner 'required' in scanners.criticality to fail closed.")
+	}
+	return nil
+}
+
+// hasRegisteredRequiredScanner reports whether at least one scanner is both
+// configured as required and actually registered. Used to detect an inert
+// fail-closed configuration.
+func hasRegisteredRequiredScanner(registered map[string]struct{}, criticality map[string]scanner.Criticality) bool {
+	for name, value := range criticality {
+		if value != scanner.CriticalityRequired {
+			continue
+		}
+		if _, ok := registered[name]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // pathUnderTemp reports whether p is os.TempDir() or a descendant of it. Uses

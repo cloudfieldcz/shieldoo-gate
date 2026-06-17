@@ -8,6 +8,7 @@ const (
 	EventServed          EventType = "SERVED"
 	EventBlocked         EventType = "BLOCKED"
 	EventQuarantined     EventType = "QUARANTINED"
+	EventScanUnavailable EventType = "SCAN_UNAVAILABLE"
 	EventReleased        EventType = "RELEASED"
 	EventScanned         EventType = "SCANNED"
 	EventOverrideCreated EventType = "OVERRIDE_CREATED"

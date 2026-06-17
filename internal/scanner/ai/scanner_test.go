@@ -211,7 +211,7 @@ func TestAIScanner_SuspiciousArtifact_ReturnsSuspicious(t *testing.T) {
 	assert.Equal(t, scanner.SeverityMedium, result.Findings[0].Severity)
 }
 
-func TestAIScanner_UnknownVerdict_FailsOpen(t *testing.T) {
+func TestAIScanner_UnknownVerdict_ReturnsRetryableScanError(t *testing.T) {
 	sock := startMockAIBridge(t, &mockAIBridgeServer{
 		aiScanFn: func(req *pb.AIScanRequest) *pb.AIScanResponse {
 			return &pb.AIScanResponse{
@@ -237,8 +237,12 @@ func TestAIScanner_UnknownVerdict_FailsOpen(t *testing.T) {
 		Version:   "latest",
 		LocalPath: "/tmp/nginx.tar",
 	})
-	require.NoError(t, err)
+	require.Error(t, err)
+	var scanErr *scanner.ScanError
+	require.ErrorAs(t, err, &scanErr)
+	assert.Equal(t, scanner.ErrKindRetryable, scanErr.Kind)
 	assert.Equal(t, scanner.VerdictClean, result.Verdict)
+	assert.Equal(t, err, result.Error)
 }
 
 func TestAIScanner_HealthCheck_Healthy(t *testing.T) {
@@ -263,16 +267,23 @@ func TestMapVerdict(t *testing.T) {
 	tests := []struct {
 		input    string
 		expected scanner.Verdict
+		wantErr  bool
 	}{
-		{"MALICIOUS", scanner.VerdictMalicious},
-		{"SUSPICIOUS", scanner.VerdictSuspicious},
-		{"CLEAN", scanner.VerdictClean},
-		{"UNKNOWN", scanner.VerdictClean},
-		{"", scanner.VerdictClean},
+		{"MALICIOUS", scanner.VerdictMalicious, false},
+		{"SUSPICIOUS", scanner.VerdictSuspicious, false},
+		{"CLEAN", scanner.VerdictClean, false},
+		{"UNKNOWN", scanner.VerdictClean, true},
+		{"", scanner.VerdictClean, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			assert.Equal(t, tt.expected, mapVerdict(tt.input))
+			got, err := mapVerdict(tt.input)
+			assert.Equal(t, tt.expected, got)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
 		})
 	}
 }

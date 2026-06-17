@@ -141,12 +141,17 @@ func (s *VersionDiffScanner) Scan(ctx context.Context, artifact scanner.Artifact
 		return s.cleanResult(start, nil), nil
 	}
 
-	// 2. Compressed-size guard
+	// 2. Compressed-size guard. "Couldn't scan", not "nothing to scan": the diff
+	// is deliberately skipped for resource reasons, but there IS content to vet.
+	// Surface a terminal scanner error (permanent for this artifact — retrying
+	// won't shrink it) so required-mode fails closed. This closes the "pad the
+	// package past the size limit to skip the diff" evasion; best-effort mode
+	// still degrades to fail-open in the engine.
 	maxBytes := int64(s.cfg.MaxArtifactSizeMB) * 1024 * 1024
 	if maxBytes > 0 && artifact.SizeBytes > maxBytes {
 		log.Debug().Str("artifact", artifact.ID).Int64("size", artifact.SizeBytes).
-			Msg("version-diff: skipping large artifact")
-		return s.cleanResult(start, nil), nil
+			Msg("version-diff: artifact exceeds max size, returning terminal error")
+		return s.scanErrorResult(start, scanner.ErrKindTerminal, "artifact exceeds max size")
 	}
 
 	// 3. Sub-timeout
@@ -192,16 +197,19 @@ func (s *VersionDiffScanner) Scan(ctx context.Context, artifact scanner.Artifact
 		return s.cleanResult(start, fmt.Errorf("sha256 mismatch for %s: %w", prevID, err)), nil
 	}
 
-	// 7. Per-package rate limit
+	// 7. Per-package rate limit. Overload, not "nothing to scan": surface a
+	// classified scanner error so operators who mark version-diff `required`
+	// fail closed instead of serving the artifact as silently clean. Best-effort
+	// (the default) still degrades to fail-open in the engine.
 	if !s.rateLimiter.allow(artifact.Name) {
-		log.Debug().Str("package", artifact.Name).Msg("version-diff: rate-limited, returning CLEAN")
-		return s.cleanResult(start, nil), nil
+		log.Debug().Str("package", artifact.Name).Msg("version-diff: rate-limited, returning overload error")
+		return s.scanErrorResult(start, scanner.ErrKindOverload, "rate-limited")
 	}
 
-	// 8. Circuit breaker
+	// 8. Circuit breaker — same overload semantics as the rate-limit guard.
 	if !s.breaker.allow(time.Now()) {
-		log.Debug().Str("artifact", artifact.ID).Msg("version-diff: circuit open, returning CLEAN")
-		return s.cleanResult(start, nil), nil
+		log.Debug().Str("artifact", artifact.ID).Msg("version-diff: circuit open, returning overload error")
+		return s.scanErrorResult(start, scanner.ErrKindOverload, "circuit open")
 	}
 
 	// 9. Coalesce concurrent same-pair scans through singleflight, then call
@@ -237,6 +245,21 @@ func (s *VersionDiffScanner) Scan(ctx context.Context, artifact scanner.Artifact
 
 	// 10. Verdict mapping
 	mapping := s.mapVerdict(resp)
+
+	// UNKNOWN (or unexpected) verdicts are scanner errors — return before any
+	// persistence so required-scanner fail-closed handling applies and the
+	// idempotency cache never stores an UNKNOWN row.
+	if mapping.scanErr != nil {
+		return scanner.ScanResult{
+			Verdict:        scanner.VerdictClean,
+			Confidence:     0,
+			ScannerID:      scannerName,
+			ScannerVersion: scannerVersion,
+			Duration:       time.Since(start),
+			ScannedAt:      start,
+			Error:          mapping.scanErr,
+		}, mapping.scanErr
+	}
 
 	// Observability: surface successful AI verdicts at INFO level so operators
 	// (and e2e tests) can confirm the bridge actually reached the LLM. UNKNOWN
@@ -334,6 +357,7 @@ type verdictMapping struct {
 	persistRow      bool
 	auditDowngrade  bool
 	auditReason     string
+	scanErr         *scanner.ScanError
 }
 
 func (s *VersionDiffScanner) mapVerdict(resp *pb.DiffScanResponse) verdictMapping {
@@ -383,10 +407,13 @@ func (s *VersionDiffScanner) mapVerdict(resp *pb.DiffScanResponse) verdictMappin
 	case "UNKNOWN":
 		fallthrough
 	default:
-		// Fail-open: do NOT persist. Idempotency cache must not store UNKNOWN.
+		// UNKNOWN is a scanner error, not a clean result. Do NOT persist — the
+		// idempotency cache must never store UNKNOWN — and surface a retryable
+		// error so required-scanner fail-closed handling applies.
 		mp.originalVerdict = scanner.VerdictClean
 		mp.finalVerdict = scanner.VerdictClean
 		mp.persistRow = false
+		mp.scanErr = scanner.NewScanError(scanner.ErrKindRetryable, fmt.Errorf("version-diff returned unknown verdict %q", resp.Verdict))
 	}
 	return mp
 }
@@ -539,6 +566,27 @@ func (s *VersionDiffScanner) cleanResult(start time.Time, err error) scanner.Sca
 		ScannedAt:      start,
 		Error:          err,
 	}
+}
+
+// scanErrorResult builds a classified scanner error for "couldn't scan"
+// conditions: transient overload (circuit open, rate limited) and the terminal
+// size guard (artifact too large to ever diff). Unlike cleanResult's fail-open
+// path, the error lands in ScanReport.Errored so required-mode fails closed
+// (e.g. closing the "pad the package past the size limit to skip the diff"
+// evasion); the result still carries VerdictClean so best-effort mode keeps
+// degrading to fail-open in the engine. The error is returned via both
+// ScanResult.Error and the second return value, mirroring the UNKNOWN path.
+func (s *VersionDiffScanner) scanErrorResult(start time.Time, kind scanner.ScanErrorKind, reason string) (scanner.ScanResult, error) {
+	scanErr := scanner.NewScanError(kind, fmt.Errorf("version-diff: %s", reason))
+	return scanner.ScanResult{
+		Verdict:        scanner.VerdictClean,
+		Confidence:     0,
+		ScannerID:      scannerName,
+		ScannerVersion: scannerVersion,
+		Duration:       time.Since(start),
+		ScannedAt:      start,
+		Error:          scanErr,
+	}, scanErr
 }
 
 func (s *VersionDiffScanner) isAllowlisted(name string) bool {

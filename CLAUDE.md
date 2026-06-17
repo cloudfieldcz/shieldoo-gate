@@ -123,7 +123,7 @@ var _ adapter.Adapter = (*pypi.PyPIAdapter)(nil)
 ### Error Handling
 
 - Wrap all errors with context: `fmt.Errorf("trivy scanner: scanning %s: %w", artifact.ID, err)`
-- Scanner failures fail open (return `VerdictClean` + log error), never escalate to `MALICIOUS`
+- Required scanner failures fail closed according to `policy.on_scan_error`; `fail_open` is an explicit operator escape hatch and must emit `SCAN_UNAVAILABLE`. Best-effort scanner failures fail open (logged + counted, never escalate to `MALICIOUS`)
 - Policy violations return structured errors, never panic
 
 ### Testing

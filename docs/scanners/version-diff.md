@@ -14,14 +14,23 @@ as `CLEAN`, `SUSPICIOUS`, or `MALICIOUS`. The Go side maps the verdict to a
 ## When does it run?
 
 - Per-artifact, in parallel with all other enabled scanners.
-- Skipped (returns CLEAN) when:
+- Skipped (returns CLEAN, no error — genuinely "nothing to scan") when:
   - The package name is in the configured `allowlist`.
-  - Compressed artifact size exceeds `max_artifact_size_mb` (default 50 MB).
   - No previous CLEAN/SUSPICIOUS version exists in the artifacts table.
   - An idempotent cache hit is found in `version_diff_results` for the
     `(new artifact, previous artifact, model, prompt version)` tuple.
-  - The per-package rate limiter has exhausted the hourly quota.
-  - The consecutive-failure circuit breaker is open.
+- "Couldn't scan" (returns CLEAN **with a classified scanner error**) when:
+  - The per-package rate limiter has exhausted the hourly quota — `overload`.
+  - The consecutive-failure circuit breaker is open — `overload`.
+  - Compressed artifact size exceeds `max_artifact_size_mb` (default 50 MB) —
+    `terminal` (permanent for that artifact; not retried).
+
+  The error lands in `ScanReport.Errored`, so if an operator marks
+  `version-diff` as `required` (see [Scanners](../scanners.md#scan-engine)),
+  these conditions fail closed per `policy.on_scan_error` instead of serving
+  the artifact as silently clean — in particular, the size guard closes the
+  "pad the package past the limit to skip the diff" evasion. In the default
+  best-effort mode the engine still degrades them to fail-open.
 
 ## Deployment requirement: shared cache mount
 

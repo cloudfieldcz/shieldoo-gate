@@ -122,21 +122,27 @@ func (s *AIScanner) Scan(ctx context.Context, artifact scanner.Artifact) (scanne
 	if err != nil {
 		log.Warn().Err(err).
 			Str("artifact", artifact.ID).
-			Msg("ai scanner: all retries exhausted, failing open")
+			Msg("ai scanner: all retries exhausted")
+		scanErr := scanner.NewScanError(scanner.ErrKindRetryable, fmt.Errorf("ai scanner: %s: %w", artifact.ID, err))
 		return scanner.ScanResult{
 			Verdict:    scanner.VerdictClean,
 			Confidence: 0,
 			ScannerID:  s.Name(),
 			ScannedAt:  time.Now(),
-			Error:      fmt.Errorf("ai scanner: %s: %w", artifact.ID, err),
-		}, nil
+			Error:      scanErr,
+		}, scanErr
 	}
 
+	verdict, verdictErr := mapVerdict(resp.Verdict)
 	result := scanner.ScanResult{
-		Verdict:    mapVerdict(resp.Verdict),
+		Verdict:    verdict,
 		Confidence: resp.Confidence,
 		ScannerID:  s.Name(),
 		ScannedAt:  time.Now(),
+		Error:      verdictErr,
+	}
+	if verdictErr != nil {
+		return result, verdictErr
 	}
 
 	for _, f := range resp.Findings {
@@ -170,18 +176,20 @@ func (s *AIScanner) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-// mapVerdict converts the string verdict from the AI response to a scanner.Verdict.
-func mapVerdict(v string) scanner.Verdict {
+// mapVerdict converts the string verdict from the AI response to a
+// scanner.Verdict. UNKNOWN or unexpected values are a scan error (retryable) so
+// required-scanner fail-closed handling applies instead of silently degrading
+// to clean.
+func mapVerdict(v string) (scanner.Verdict, error) {
 	switch v {
 	case "MALICIOUS":
-		return scanner.VerdictMalicious
+		return scanner.VerdictMalicious, nil
 	case "SUSPICIOUS":
-		return scanner.VerdictSuspicious
+		return scanner.VerdictSuspicious, nil
 	case "CLEAN":
-		return scanner.VerdictClean
+		return scanner.VerdictClean, nil
 	default:
-		// UNKNOWN or unexpected values → treat as clean (fail-open).
-		return scanner.VerdictClean
+		return scanner.VerdictClean, scanner.NewScanError(scanner.ErrKindRetryable, fmt.Errorf("ai scanner returned unknown verdict %q", v))
 	}
 }
 

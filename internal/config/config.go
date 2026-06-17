@@ -193,6 +193,7 @@ var knownEventTypes = map[string]bool{
 	"SERVED":           true,
 	"BLOCKED":          true,
 	"QUARANTINED":      true,
+	"SCAN_UNAVAILABLE": true,
 	"RELEASED":         true,
 	"SCANNED":          true,
 	"OVERRIDE_CREATED": true,
@@ -344,16 +345,24 @@ type PostgresConfig struct {
 }
 
 type ScannersConfig struct {
-	Parallel  bool            `mapstructure:"parallel"`
-	Timeout   string          `mapstructure:"timeout"`
-	GuardDog  GuardDogConfig  `mapstructure:"guarddog"`
-	Trivy     TrivyConfig     `mapstructure:"trivy"`
-	OSV       OSVConfig       `mapstructure:"osv"`
-	Sandbox   SandboxConfig   `mapstructure:"sandbox"`
-	AI        AIConfig        `mapstructure:"ai"`
-	Typosquat   TyposquatConfig   `mapstructure:"typosquat"`
-	VersionDiff VersionDiffConfig `mapstructure:"version_diff"`
-	Reputation  ReputationConfig  `mapstructure:"reputation"`
+	Parallel    bool               `mapstructure:"parallel"`
+	Timeout     string             `mapstructure:"timeout"`
+	Retry       ScannerRetryConfig `mapstructure:"retry"`
+	Criticality map[string]string  `mapstructure:"criticality"`
+	GuardDog    GuardDogConfig     `mapstructure:"guarddog"`
+	Trivy       TrivyConfig        `mapstructure:"trivy"`
+	OSV         OSVConfig          `mapstructure:"osv"`
+	Sandbox     SandboxConfig      `mapstructure:"sandbox"`
+	AI          AIConfig           `mapstructure:"ai"`
+	Typosquat   TyposquatConfig    `mapstructure:"typosquat"`
+	VersionDiff VersionDiffConfig  `mapstructure:"version_diff"`
+	Reputation  ReputationConfig   `mapstructure:"reputation"`
+}
+
+// ScannerRetryConfig controls bounded retry of retryable scanner errors.
+type ScannerRetryConfig struct {
+	MaxAttempts int    `mapstructure:"max_attempts"`
+	Backoff     string `mapstructure:"backoff"`
 }
 
 // AIConfig holds configuration for the AI (LLM-based) scanner.
@@ -485,6 +494,8 @@ type PolicyConfig struct {
 	QuarantineIfVerdict         string              `mapstructure:"quarantine_if_verdict"`
 	MinimumConfidence           float32             `mapstructure:"minimum_confidence"`
 	BehavioralMinimumConfidence float32             `mapstructure:"behavioral_minimum_confidence"`
+	OnScanError                 string              `mapstructure:"on_scan_error"`
+	RetryAfter                  string              `mapstructure:"retry_after"`
 	AITriage                    AITriageConfig      `mapstructure:"ai_triage"`
 	Allowlist                   []string            `mapstructure:"allowlist"`
 	TagMutability               TagMutabilityConfig `mapstructure:"tag_mutability"`
@@ -585,6 +596,10 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("policy.block_if_verdict", "MALICIOUS")
 	v.SetDefault("policy.quarantine_if_verdict", "SUSPICIOUS")
 	v.SetDefault("policy.minimum_confidence", 0.7)
+	v.SetDefault("policy.on_scan_error", "quarantine")
+	v.SetDefault("policy.retry_after", "30s")
+	v.SetDefault("scanners.retry.max_attempts", 3)
+	v.SetDefault("scanners.retry.backoff", "200ms")
 	v.SetDefault("policy.ai_triage.enabled", false)
 	v.SetDefault("policy.ai_triage.timeout", "5s")
 	v.SetDefault("policy.ai_triage.min_confidence", 0.7)
@@ -720,6 +735,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config: unknown database backend: %s", c.Database.Backend)
 	}
 
+	if err := c.validateScannerFailureConfig(); err != nil {
+		return err
+	}
 	if err := c.validatePolicy(); err != nil {
 		return err
 	}
@@ -888,6 +906,42 @@ func (c *Config) validatePolicy() error {
 		}
 	}
 
+	switch c.Policy.OnScanError {
+	case "", "quarantine", "block", "fail_open":
+		// valid
+	default:
+		return fmt.Errorf("config: policy.on_scan_error must be 'quarantine'|'block'|'fail_open', got %q", c.Policy.OnScanError)
+	}
+	if c.Policy.RetryAfter != "" {
+		d, err := time.ParseDuration(c.Policy.RetryAfter)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("config: policy.retry_after %q is not a positive duration", c.Policy.RetryAfter)
+		}
+	}
+
+	return nil
+}
+
+// validateScannerFailureConfig validates the scanner retry and criticality
+// configuration introduced for fail-closed scanner handling.
+func (c *Config) validateScannerFailureConfig() error {
+	if c.Scanners.Retry.MaxAttempts < 0 {
+		return fmt.Errorf("config: scanners.retry.max_attempts must be >= 0, got %d", c.Scanners.Retry.MaxAttempts)
+	}
+	if c.Scanners.Retry.Backoff != "" {
+		d, err := time.ParseDuration(c.Scanners.Retry.Backoff)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("config: scanners.retry.backoff %q is not a positive duration", c.Scanners.Retry.Backoff)
+		}
+	}
+	for name, value := range c.Scanners.Criticality {
+		switch value {
+		case "required", "best_effort":
+			// valid
+		default:
+			return fmt.Errorf("config: scanners.criticality.%s must be 'required'|'best_effort', got %q", name, value)
+		}
+	}
 	return nil
 }
 

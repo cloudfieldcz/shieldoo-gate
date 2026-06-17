@@ -47,9 +47,9 @@ func TestEngine_ScanAll_RunsAllMatchingScanners(t *testing.T) {
 	}
 
 	engine := NewEngine([]Scanner{s1, s2}, 30*time.Second, 0)
-	results, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemPyPI})
+	report, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemPyPI})
 	require.NoError(t, err)
-	assert.Len(t, results, 2)
+	assert.Len(t, report.Results, 2)
 }
 
 func TestEngine_ScanAll_FiltersUnsupportedEcosystem(t *testing.T) {
@@ -62,48 +62,122 @@ func TestEngine_ScanAll_FiltersUnsupportedEcosystem(t *testing.T) {
 	}
 
 	engine := NewEngine([]Scanner{s}, 30*time.Second, 0)
-	results, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemDocker})
+	report, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemDocker})
 	require.NoError(t, err)
-	assert.Len(t, results, 0)
+	assert.Len(t, report.Results, 0)
 }
 
-func TestEngine_ScanAll_Timeout_ReturnsErrorNotMalicious(t *testing.T) {
-	slow := &mockScanner{
-		name:       "slow",
-		ecosystems: []Ecosystem{EcosystemPyPI},
-		scanFn: func(ctx context.Context, _ Artifact) (ScanResult, error) {
-			select {
-			case <-ctx.Done():
-				return ScanResult{}, ctx.Err()
-			case <-time.After(5 * time.Second):
-				return ScanResult{Verdict: VerdictClean}, nil
-			}
-		},
-	}
-
-	engine := NewEngine([]Scanner{slow}, 50*time.Millisecond, 0)
-	results, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemPyPI})
-	require.NoError(t, err)
-	assert.Len(t, results, 1)
-	assert.Equal(t, VerdictClean, results[0].Verdict)
-	assert.NotNil(t, results[0].Error)
-}
-
-func TestEngine_ScanAll_ScannerError_FailsOpen(t *testing.T) {
+func TestEngine_ScanAll_ScannerError_RecordsErroredScanner(t *testing.T) {
 	failing := &mockScanner{
-		name:       "failing",
+		name:       "guarddog",
 		ecosystems: []Ecosystem{EcosystemPyPI},
 		scanFn: func(_ context.Context, _ Artifact) (ScanResult, error) {
 			return ScanResult{}, errors.New("scanner crashed")
 		},
 	}
 
-	engine := NewEngine([]Scanner{failing}, 30*time.Second, 0)
-	results, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemPyPI})
+	engine := NewEngine(
+		[]Scanner{failing},
+		30*time.Second,
+		0,
+		WithCriticality(map[string]Criticality{"guarddog": CriticalityRequired}),
+	)
+	report, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemPyPI})
 	require.NoError(t, err)
-	assert.Len(t, results, 1)
-	assert.Equal(t, VerdictClean, results[0].Verdict)
-	assert.NotNil(t, results[0].Error)
+	assert.Equal(t, []string{"guarddog"}, report.Expected)
+	assert.Empty(t, report.Results)
+	require.Contains(t, report.Errored, "guarddog")
+	assert.Equal(t, ErrKindRetryable, report.Errored["guarddog"].Kind)
+}
+
+func TestEngine_ScanAll_RetriesRetryableErrors(t *testing.T) {
+	attempts := 0
+	flaky := &mockScanner{
+		name:       "guarddog",
+		ecosystems: []Ecosystem{EcosystemPyPI},
+		scanFn: func(_ context.Context, _ Artifact) (ScanResult, error) {
+			attempts++
+			if attempts == 1 {
+				return ScanResult{}, NewScanError(ErrKindRetryable, errors.New("bridge down"))
+			}
+			return ScanResult{Verdict: VerdictClean, Confidence: 1, ScannerID: "guarddog"}, nil
+		},
+	}
+
+	engine := NewEngine(
+		[]Scanner{flaky},
+		time.Second,
+		0,
+		WithRetry(2, time.Millisecond),
+	)
+	report, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemPyPI})
+	require.NoError(t, err)
+	assert.Equal(t, 2, attempts)
+	require.Len(t, report.Results, 1)
+	assert.Empty(t, report.Errored)
+}
+
+func TestEngine_ScanAll_DoesNotRetryTerminalErrors(t *testing.T) {
+	attempts := 0
+	badArtifact := &mockScanner{
+		name:       "guarddog",
+		ecosystems: []Ecosystem{EcosystemPyPI},
+		scanFn: func(_ context.Context, _ Artifact) (ScanResult, error) {
+			attempts++
+			return ScanResult{}, NewScanError(ErrKindTerminal, errors.New("unsupported archive"))
+		},
+	}
+
+	engine := NewEngine(
+		[]Scanner{badArtifact},
+		time.Second,
+		0,
+		WithRetry(3, time.Millisecond),
+	)
+	report, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemPyPI})
+	require.NoError(t, err)
+	assert.Equal(t, 1, attempts)
+	require.Contains(t, report.Errored, "guarddog")
+	assert.Equal(t, ErrKindTerminal, report.Errored["guarddog"].Kind)
+}
+
+func TestEngine_ScanAll_RequiredScannerCannotBeExcluded(t *testing.T) {
+	required := &mockScanner{
+		name:       "guarddog",
+		ecosystems: []Ecosystem{EcosystemPyPI},
+		scanFn: func(_ context.Context, _ Artifact) (ScanResult, error) {
+			return ScanResult{Verdict: VerdictClean, ScannerID: "guarddog"}, nil
+		},
+	}
+
+	engine := NewEngine(
+		[]Scanner{required},
+		time.Second,
+		0,
+		WithCriticality(map[string]Criticality{"guarddog": CriticalityRequired}),
+	)
+	report, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemPyPI}, "guarddog")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"guarddog"}, report.Expected)
+	require.Len(t, report.Results, 1)
+	assert.Empty(t, report.Skipped)
+}
+
+func TestEngine_ScanAll_BestEffortExcludeIsRecordedAsSkipped(t *testing.T) {
+	bestEffort := &mockScanner{
+		name:       "ai-scanner",
+		ecosystems: []Ecosystem{EcosystemPyPI},
+		scanFn: func(_ context.Context, _ Artifact) (ScanResult, error) {
+			t.Fatal("excluded best-effort scanner should not run")
+			return ScanResult{}, nil
+		},
+	}
+
+	engine := NewEngine([]Scanner{bestEffort}, time.Second, 0)
+	report, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemPyPI}, "ai-scanner")
+	require.NoError(t, err)
+	assert.Empty(t, report.Expected)
+	assert.Equal(t, []string{"ai-scanner"}, report.Skipped)
 }
 
 func TestEngine_HealthCheck_RunsScannersInParallel(t *testing.T) {
@@ -155,4 +229,69 @@ func TestEngine_HealthCheck_PropagatesPerScannerErrors(t *testing.T) {
 	assert.NoError(t, status["healthy"])
 	require.Error(t, status["broken"])
 	assert.Contains(t, status["broken"].Error(), "bridge down")
+}
+
+// A best-effort scanner must never be short-circuited by its circuit breaker:
+// its verdict is fail-open regardless, so skipping it only silently drops the
+// data it carries (SBOM, licenses, vuln findings) without any safety benefit.
+// Regression guard for the SBOM-loss bug where an open Trivy breaker (tripped
+// by a burst of heavy concurrent scans) blacked out Trivy — and thus SBOM
+// generation — for unrelated artifacts scanned during the cooldown window.
+func TestEngine_ScanAll_BestEffortScannerNotCircuitBroken(t *testing.T) {
+	calls := 0
+	bestEffort := &mockScanner{
+		name:       "trivy", // unlisted in criticality => best_effort
+		ecosystems: []Ecosystem{EcosystemPyPI},
+		scanFn: func(_ context.Context, _ Artifact) (ScanResult, error) {
+			calls++
+			return ScanResult{Verdict: VerdictClean, ScannerID: "trivy", SBOMContent: []byte("{}")}, nil
+		},
+	}
+
+	engine := NewEngine([]Scanner{bestEffort}, time.Second, 0)
+	// Force the breaker open, as if a prior burst had tripped it.
+	for i := 0; i < 10; i++ {
+		engine.breakers["trivy"].recordFailure()
+	}
+	require.True(t, engine.breakers["trivy"].isOpen(), "precondition: breaker must be open")
+
+	report, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemPyPI})
+	require.NoError(t, err)
+	assert.Equal(t, 1, calls, "best-effort scanner must still be invoked when its breaker is open")
+	require.Len(t, report.Results, 1, "best-effort result must land in Results, not be dropped")
+	assert.NotEmpty(t, report.Results[0].SBOMContent, "SBOM content must survive an open breaker")
+	assert.Empty(t, report.Errored)
+}
+
+// A required scanner, by contrast, must still fail fast when its breaker is
+// open — that is the whole point of fail-closed gating (a quick overload error
+// instead of a per-attempt timeout).
+func TestEngine_ScanAll_RequiredScannerCircuitBreaks(t *testing.T) {
+	calls := 0
+	required := &mockScanner{
+		name:       "guarddog",
+		ecosystems: []Ecosystem{EcosystemPyPI},
+		scanFn: func(_ context.Context, _ Artifact) (ScanResult, error) {
+			calls++
+			return ScanResult{Verdict: VerdictClean, ScannerID: "guarddog"}, nil
+		},
+	}
+
+	engine := NewEngine(
+		[]Scanner{required},
+		time.Second,
+		0,
+		WithCriticality(map[string]Criticality{"guarddog": CriticalityRequired}),
+	)
+	for i := 0; i < 10; i++ {
+		engine.breakers["guarddog"].recordFailure()
+	}
+	require.True(t, engine.breakers["guarddog"].isOpen(), "precondition: breaker must be open")
+
+	report, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemPyPI})
+	require.NoError(t, err)
+	assert.Equal(t, 0, calls, "required scanner must be short-circuited while its breaker is open")
+	require.Contains(t, report.Errored, "guarddog")
+	assert.Equal(t, ErrKindOverload, report.Errored["guarddog"].Kind)
+	assert.Empty(t, report.Results)
 }

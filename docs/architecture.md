@@ -55,7 +55,7 @@ Shieldoo Gate runs as a single Go binary that exposes **eight HTTP servers** on 
 | Component | Package | Responsibility |
 |---|---|---|
 | **Protocol Adapters** | `internal/adapter/{pypi,npm,nuget,docker,maven,rubygems,gomod}` | Implement native package manager protocols; proxy requests to upstream registries; trigger scan-on-download |
-| **Scan Engine** | `internal/scanner/engine.go` | Orchestrate multiple scanners in parallel with timeout; collect results with fail-open semantics |
+| **Scan Engine** | `internal/scanner/engine.go` | Orchestrate multiple scanners in parallel with timeout and bounded retry; report completeness via `ScanReport` (results, classified errors, skips) |
 | **Built-in Scanners** | `internal/scanner/builtin/` | 6 Go-native scanners: hash verifier, install hook analyzer, obfuscation detector, exfil detector, PTH inspector, threat feed checker |
 | **External Scanners** | `internal/scanner/{guarddog,trivy,osv}` | Integrations with GuardDog (gRPC), Trivy (subprocess), OSV (HTTP API) |
 | **Sandbox Scanner** | `internal/scanner/sandbox/` | Async dynamic analysis via gVisor: executes artifacts in isolated sandbox and monitors syscalls for malicious behavior |
@@ -90,7 +90,7 @@ Shieldoo Gate runs as a single Go binary that exposes **eight HTTP servers** on 
        │
 5. Scan Engine runs all applicable scanners in parallel
        │  Each scanner gets a context with timeout (default 60s, configurable)
-       │  Scanner errors → VerdictClean (fail-open)
+       │  Scanner errors → ScanReport.Errored (classified); required errors fail closed
        │
 6. Policy Engine evaluates aggregated results:
        │  a. Check DB overrides (highest priority)
@@ -174,7 +174,7 @@ The bridge runs as a separate process (separate container in Docker Compose). Th
 See also: [Policy Engine](policy.md)
 
 1. **Scan-before-serve** — Artifacts are never served before scanning completes. The cache write happens only after policy evaluation returns ALLOW.
-2. **Fail-open scanners** — Individual scanner failures produce `VerdictClean` with the error logged. This prevents scanner outages from blocking all package installations.
+2. **Scanner errors are explicit** — Scanner errors are reported in `ScanReport` and handled by policy before verdict aggregation. Required scanner failures fail closed per `policy.on_scan_error`; best-effort scanner failures are logged and counted but do not block serving by themselves.
 3. **Quarantine is final** — Once `artifact_status.status = QUARANTINED`, the artifact is never served regardless of policy engine state. The `IsServable()` method on `ArtifactStatus` enforces this.
 4. **Append-only audit log** — No UPDATE or DELETE operations on the `audit_log` table. Every decision is traceable.
 5. **Input validation** — Package names and versions are validated against `^[a-zA-Z0-9._\-]+$` to prevent path traversal and injection.

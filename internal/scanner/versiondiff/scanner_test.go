@@ -234,7 +234,7 @@ func TestScan_Allowlisted_ReturnsCleanWithoutBridge(t *testing.T) {
 	assert.Equal(t, int32(0), mb.calls.Load(), "bridge must not be called")
 }
 
-func TestScan_Oversized_ReturnsCleanWithoutBridge(t *testing.T) {
+func TestScan_Oversized_ReturnsTerminalErrorWithoutBridge(t *testing.T) {
 	mb := &mockBridge{}
 	sock := startMockBridge(t, mb)
 
@@ -246,11 +246,17 @@ func TestScan_Oversized_ReturnsCleanWithoutBridge(t *testing.T) {
 	s, _ := NewVersionDiffScanner(db, cs, cfg)
 	defer s.Close()
 
-	res, err := s.Scan(context.Background(), scanner.Artifact{
+	res, scanRunErr := s.Scan(context.Background(), scanner.Artifact{
 		ID: "pypi:big:1.0", Ecosystem: scanner.EcosystemPyPI, Name: "big", Version: "1.0",
 		SizeBytes: 10 * 1024 * 1024,
 	})
-	require.NoError(t, err)
+	// Oversized is "couldn't scan", surfaced as a terminal scanner error so
+	// required-mode fails closed (closing the size-padding evasion); the result
+	// stays CLEAN so best-effort mode degrades to fail-open. Terminal, not
+	// overload: the artifact will always be too big, so it must not be retried.
+	var scanErr *scanner.ScanError
+	require.ErrorAs(t, scanRunErr, &scanErr)
+	assert.Equal(t, scanner.ErrKindTerminal, scanErr.Kind)
 	assert.Equal(t, scanner.VerdictClean, res.Verdict)
 	assert.Equal(t, int32(0), mb.calls.Load())
 }
@@ -427,7 +433,7 @@ func TestScan_BridgeReturnsMalicious_DowngradesToSuspicious(t *testing.T) {
 	assert.Equal(t, 1, n)
 }
 
-func TestScan_BridgeReturnsUnknown_NoDBRow(t *testing.T) {
+func TestScan_BridgeReturnsUnknown_ReturnsRetryableScanError(t *testing.T) {
 	prevContent := []byte("p")
 	prevSHA := sha256Hex(prevContent)
 	mb := &mockBridge{
@@ -447,8 +453,12 @@ func TestScan_BridgeReturnsUnknown_NoDBRow(t *testing.T) {
 	res, err := s.Scan(context.Background(), scanner.Artifact{
 		ID: "pypi:x:1.0", Ecosystem: scanner.EcosystemPyPI, Name: "x", Version: "1.0", SHA256: "n",
 	})
-	require.NoError(t, err)
+	require.Error(t, err)
+	var scanErr *scanner.ScanError
+	require.ErrorAs(t, err, &scanErr)
+	assert.Equal(t, scanner.ErrKindRetryable, scanErr.Kind)
 	assert.Equal(t, scanner.VerdictClean, res.Verdict)
+	assert.Equal(t, err, res.Error)
 
 	var n int
 	require.NoError(t, db.Get(&n, "SELECT COUNT(*) FROM version_diff_results"))
@@ -724,9 +734,15 @@ func TestScan_RateLimited_SkipsBridge(t *testing.T) {
 	// Reset cache row so the second scan would otherwise call the bridge.
 	_, err := db.Exec("DELETE FROM version_diff_results WHERE artifact_id = ?", "pypi:rl:1.0")
 	require.NoError(t, err)
-	_, _ = s.Scan(context.Background(), art)
+	res, scanRunErr := s.Scan(context.Background(), art)
 	calls2 := mb.calls.Load()
 	assert.Equal(t, calls1, calls2, "second call within rate window must skip bridge")
+	// Overload is surfaced as a classified scanner error (not silent CLEAN) so
+	// required-mode fails closed; the result itself stays CLEAN for best-effort.
+	var scanErr *scanner.ScanError
+	require.ErrorAs(t, scanRunErr, &scanErr)
+	assert.Equal(t, scanner.ErrKindOverload, scanErr.Kind)
+	assert.Equal(t, scanner.VerdictClean, res.Verdict)
 }
 
 // --- Circuit breaker -------------------------------------------------------
@@ -759,8 +775,14 @@ func TestScan_ConsecutiveBridgeErrors_OpensCircuit(t *testing.T) {
 	}
 	callsAfter2 := mb.calls.Load()
 	// Third call: circuit open, no bridge call.
-	_, _ = s.Scan(context.Background(), art)
+	res, scanRunErr := s.Scan(context.Background(), art)
 	assert.Equal(t, callsAfter2, mb.calls.Load(), "circuit must short-circuit further bridge calls")
+	// Circuit-open is overload, surfaced as a classified scanner error so
+	// required-mode fails closed; the result itself stays CLEAN for best-effort.
+	var scanErr *scanner.ScanError
+	require.ErrorAs(t, scanRunErr, &scanErr)
+	assert.Equal(t, scanner.ErrKindOverload, scanErr.Kind)
+	assert.Equal(t, scanner.VerdictClean, res.Verdict)
 }
 
 // --- SHA256 mismatch -------------------------------------------------------

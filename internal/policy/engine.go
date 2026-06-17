@@ -26,6 +26,9 @@ type EngineConfig struct {
 	BehavioralMinimumConfidence float32
 	Allowlist                   []string
 	AITriage                    config.AITriageConfig
+	OnScanError                 ScanErrorMode
+	RetryAfter                  time.Duration
+	ScannerCriticality          map[string]scanner.Criticality
 }
 
 // TriageClient is the interface for AI triage calls (Phase 3).
@@ -87,6 +90,15 @@ func NewEngine(cfg EngineConfig, db *config.GateDB, opts ...EngineOption) *Engin
 		if err == nil {
 			parsed = append(parsed, entry)
 		}
+	}
+	if cfg.OnScanError == "" {
+		cfg.OnScanError = ScanErrorModeQuarantine
+	}
+	if cfg.RetryAfter <= 0 {
+		cfg.RetryAfter = 30 * time.Second
+	}
+	if cfg.ScannerCriticality == nil {
+		cfg.ScannerCriticality = map[string]scanner.Criticality{}
 	}
 	e := &Engine{cfg: cfg, allowlist: parsed, db: db}
 	for _, opt := range opts {
@@ -335,10 +347,30 @@ func (e *Engine) HasOverride(ctx context.Context, ecosystem scanner.Ecosystem, n
 	return id, true
 }
 
-// Evaluate applies the policy to the given artifact and scan results.
-// DB overrides are checked first, then static allowlist, then verdict rules.
+// RetryAfter returns the configured Retry-After hint for pull-path 503
+// responses. Thread-safe.
+func (e *Engine) RetryAfter() time.Duration {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.cfg.RetryAfter > 0 {
+		return e.cfg.RetryAfter
+	}
+	return 30 * time.Second
+}
+
+// Evaluate applies the policy to the given artifact and scan results. It is a
+// compatibility wrapper over EvaluateReport for callers that only have stored
+// results (cache/license re-evaluation, legacy tests) and therefore cannot
+// distinguish a scanner failure from a clean result.
 func (e *Engine) Evaluate(ctx context.Context, artifact scanner.Artifact, scanResults []scanner.ScanResult) PolicyResult {
-	// DB override check — highest priority.
+	return e.EvaluateReport(ctx, artifact, scanner.ScanReport{Results: scanResults, Errored: map[string]*scanner.ScanError{}})
+}
+
+// EvaluateReport applies the policy to a full ScanReport. DB overrides are
+// checked first, then static allowlist, then license policy, then required
+// scanner availability (per on_scan_error), then verdict rules.
+func (e *Engine) EvaluateReport(ctx context.Context, artifact scanner.Artifact, report scanner.ScanReport) PolicyResult {
+	// DB override check: deny and allow both intentionally bypass scanner availability.
 	if id, kind, ok := e.lookupOverride(ctx, artifact.Ecosystem, artifact.Name, artifact.Version); ok {
 		switch kind {
 		case OverrideKindDeny:
@@ -356,48 +388,103 @@ func (e *Engine) Evaluate(ctx context.Context, artifact scanner.Artifact, scanRe
 
 	// Static allowlist check.
 	if isAllowlisted(artifact, e.allowlist) {
-		return PolicyResult{
-			Action: ActionAllow,
-			Reason: "artifact is in allowlist",
-		}
+		return PolicyResult{Action: ActionAllow, Reason: "artifact is in allowlist"}
 	}
+
+	unavailable := e.requiredScannerUnavailable(report)
 
 	// License policy check (between allowlist and verdict aggregation). License
 	// violations are authoritative — they short-circuit the rest of the policy
-	// evaluation because a legally-blocked license is not something that scan
-	// findings can override. Warnings (non-blocking) are merged into the final
-	// PolicyResult at the end.
-	licResult, licHandled := e.evaluateLicenses(ctx, artifact, scanResults)
+	// evaluation. A scanner outage is still recorded on the result so it is
+	// audited even when license policy blocks first.
+	licResult, licHandled := e.evaluateLicenses(ctx, artifact, report.Results)
 	if licHandled {
+		if len(unavailable) > 0 {
+			licResult.ScanUnavailable = unavailable
+		}
 		return licResult
 	}
 	licWarnings := licResult.Warnings
+
+	if len(unavailable) > 0 {
+		switch e.cfg.OnScanError {
+		case ScanErrorModeBlock:
+			return PolicyResult{
+				Action:          ActionBlock,
+				Reason:          "required scanner unavailable",
+				Warnings:        licWarnings,
+				ScanUnavailable: unavailable,
+			}
+		case ScanErrorModeFailOpen:
+			log.Warn().
+				Str("artifact", artifact.ID).
+				Int("scanner_errors", len(unavailable)).
+				Msg("policy: required scanner unavailable, fail_open mode allows verdict aggregation")
+		default:
+			return PolicyResult{
+				Action:          ActionRetryLater,
+				Reason:          "required scanner unavailable",
+				Warnings:        licWarnings,
+				ScanUnavailable: unavailable,
+			}
+		}
+	}
 
 	aggCfg := AggregationConfig{
 		MinConfidence:           e.cfg.MinimumConfidence,
 		BehavioralMinConfidence: e.cfg.BehavioralMinimumConfidence,
 	}
-	agg := Aggregate(scanResults, aggCfg)
+	agg := Aggregate(report.Results, aggCfg)
 
 	var result PolicyResult
 	switch {
 	case agg.Verdict == scanner.VerdictMalicious:
-		result = PolicyResult{
-			Action: ActionBlock,
-			Reason: fmt.Sprintf("verdict %s meets block threshold", agg.Verdict),
-		}
+		result = PolicyResult{Action: ActionBlock, Reason: fmt.Sprintf("verdict %s meets block threshold", agg.Verdict)}
 	case agg.Verdict == scanner.VerdictSuspicious:
 		result = e.evaluateSuspicious(ctx, artifact, &agg)
 	default:
-		result = PolicyResult{
-			Action: ActionAllow,
-			Reason: fmt.Sprintf("verdict %s is below action thresholds", agg.Verdict),
-		}
+		result = PolicyResult{Action: ActionAllow, Reason: fmt.Sprintf("verdict %s is below action thresholds", agg.Verdict)}
 	}
 	if len(licWarnings) > 0 {
 		result.Warnings = append(licWarnings, result.Warnings...)
 	}
+	if len(unavailable) > 0 {
+		result.ScanUnavailable = unavailable
+	}
 	return result
+}
+
+// requiredScannerUnavailable returns the required scanners that errored in the
+// report, each tagged with the applied policy mode (quarantine surfaces as the
+// retry_later action). Returns nil when no required scanner failed.
+func (e *Engine) requiredScannerUnavailable(report scanner.ScanReport) []ScanUnavailable {
+	if len(report.Errored) == 0 {
+		return nil
+	}
+	mode := e.cfg.OnScanError
+	if mode == "" {
+		mode = ScanErrorModeQuarantine
+	}
+	appliedMode := string(mode)
+	if mode == ScanErrorModeQuarantine {
+		appliedMode = string(ActionRetryLater)
+	}
+	out := make([]ScanUnavailable, 0, len(report.Errored))
+	for scannerName, err := range report.Errored {
+		if e.cfg.ScannerCriticality[scannerName] != scanner.CriticalityRequired {
+			continue
+		}
+		kind := scanner.ErrKindRetryable.String()
+		if err != nil {
+			kind = err.Kind.String()
+		}
+		out = append(out, ScanUnavailable{
+			Scanner: scannerName,
+			Kind:    kind,
+			Mode:    appliedMode,
+		})
+	}
+	return out
 }
 
 // EvaluateLicensesOnly checks stored SBOM licenses against the current policy

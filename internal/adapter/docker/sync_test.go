@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -505,4 +506,98 @@ func TestSyncService_MultipleRepos_ConcurrentSync(t *testing.T) {
 	// Both repos should have been synced (manifests fetched for each tag).
 	assert.GreaterOrEqual(t, atomic.LoadInt64(&requestCount), int64(2),
 		fmt.Sprintf("expected at least 2 requests, got %d", atomic.LoadInt64(&requestCount)))
+}
+
+// --- Fail-closed scanner error tests ---
+
+func TestSyncService_RequiredScannerError_DoesNotPersistClean(t *testing.T) {
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+
+	manifest := []byte(`{"schemaVersion":2,"config":{"digest":"sha256:newdigest"}}`)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(manifest)
+	}))
+	defer ts.Close()
+
+	repo, err := docker.EnsureRepository(db, "docker.io", "library/nginx", false)
+	require.NoError(t, err)
+	require.NoError(t, docker.UpsertTag(db, repo.ID, "latest", "sha256:old", ""))
+
+	required := &dockerTestScanner{
+		name:       "guarddog",
+		ecosystems: []scanner.Ecosystem{scanner.EcosystemDocker},
+		scanFn: func(_ context.Context, _ scanner.Artifact) (scanner.ScanResult, error) {
+			return scanner.ScanResult{}, scanner.NewScanError(scanner.ErrKindRetryable, errors.New("bridge down"))
+		},
+	}
+	criticality := map[string]scanner.Criticality{"guarddog": scanner.CriticalityRequired}
+	scanEngine := scanner.NewEngine([]scanner.Scanner{required}, time.Second, 0, scanner.WithRetry(1, time.Millisecond), scanner.WithCriticality(criticality))
+	policyEngine := policy.NewEngine(policy.EngineConfig{OnScanError: policy.ScanErrorModeQuarantine, ScannerCriticality: criticality}, db)
+
+	resolver := docker.NewRegistryResolver(config.DockerUpstreamConfig{DefaultRegistry: ts.URL})
+	svc := docker.NewSyncService(db, nil, scanEngine, policyEngine, resolver, config.DockerSyncConfig{Enabled: true, Interval: "100ms", MaxConcurrent: 1})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	go svc.Start(ctx)
+	<-ctx.Done()
+
+	var cleanCount int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM artifact_status WHERE status = 'CLEAN'`).Scan(&cleanCount))
+	assert.Equal(t, 0, cleanCount)
+	// The poller may run more than once in the window; each genuine attempt
+	// against an unavailable required scanner must audit (never silent).
+	var auditCount int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE event_type = 'SCAN_UNAVAILABLE'`).Scan(&auditCount))
+	assert.GreaterOrEqual(t, auditCount, 1)
+}
+
+func TestSyncService_ActionBlock_DoesNotPersistClean(t *testing.T) {
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+
+	manifest := []byte(`{"schemaVersion":2,"config":{"digest":"sha256:newdigest"}}`)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(manifest)
+	}))
+	defer ts.Close()
+
+	repo, err := docker.EnsureRepository(db, "docker.io", "library/nginx", false)
+	require.NoError(t, err)
+	require.NoError(t, docker.UpsertTag(db, repo.ID, "latest", "sha256:old", ""))
+
+	required := &dockerTestScanner{
+		name:       "guarddog",
+		ecosystems: []scanner.Ecosystem{scanner.EcosystemDocker},
+		scanFn: func(_ context.Context, _ scanner.Artifact) (scanner.ScanResult, error) {
+			return scanner.ScanResult{}, scanner.NewScanError(scanner.ErrKindRetryable, errors.New("bridge down"))
+		},
+	}
+	criticality := map[string]scanner.Criticality{"guarddog": scanner.CriticalityRequired}
+	scanEngine := scanner.NewEngine([]scanner.Scanner{required}, time.Second, 0, scanner.WithRetry(1, time.Millisecond), scanner.WithCriticality(criticality))
+	policyEngine := policy.NewEngine(policy.EngineConfig{OnScanError: policy.ScanErrorModeBlock, ScannerCriticality: criticality}, db)
+
+	resolver := docker.NewRegistryResolver(config.DockerUpstreamConfig{DefaultRegistry: ts.URL})
+	svc := docker.NewSyncService(db, nil, scanEngine, policyEngine, resolver, config.DockerSyncConfig{Enabled: true, Interval: "100ms", MaxConcurrent: 1})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	go svc.Start(ctx)
+	<-ctx.Done()
+
+	var cleanCount int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM artifact_status WHERE status = 'CLEAN'`).Scan(&cleanCount))
+	assert.Equal(t, 0, cleanCount)
+	// The poller may run more than once in the window; each genuine attempt
+	// against an unavailable required scanner must audit (never silent).
+	var auditCount int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE event_type = 'SCAN_UNAVAILABLE'`).Scan(&auditCount))
+	assert.GreaterOrEqual(t, auditCount, 1)
 }

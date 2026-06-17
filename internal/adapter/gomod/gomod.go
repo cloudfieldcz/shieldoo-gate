@@ -529,11 +529,11 @@ func (a *GoModAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 
 	// 5. Scan.
 	log.Info().Str("artifact", artifactID).Str("client", r.RemoteAddr).Msg("gomod: starting scan pipeline")
-	scanResults, err := a.scanEngine.ScanAll(pctx, scanArtifact)
+	scanReport, err := a.scanEngine.ScanAll(pctx, scanArtifact)
 	if err != nil {
-		log.Error().Err(err).Str("artifact", artifactID).Msg("gomod: scan engine error, failing open")
-		scanResults = nil
+		log.Error().Err(err).Str("artifact", artifactID).Msg("gomod: scan engine error")
 	}
+	scanResults := scanReport.Results
 	for _, sr := range scanResults {
 		l := log.Info().
 			Str("artifact", artifactID).
@@ -551,7 +551,10 @@ func (a *GoModAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 	}
 
 	// 6. Policy evaluation.
-	policyResult := a.policyEngine.Evaluate(pctx, scanArtifact, scanResults)
+	policyResult := a.policyEngine.EvaluateReport(pctx, scanArtifact, scanReport)
+	if len(policyResult.ScanUnavailable) > 0 {
+		adapter.AuditScanUnavailable(r.Context(), a.db, policyResult, artifactID, "pull", r.RemoteAddr, r.UserAgent())
+	}
 	log.Info().
 		Str("artifact", artifactID).
 		Str("action", string(policyResult.Action)).
@@ -560,6 +563,10 @@ func (a *GoModAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 
 	// 7. Act on policy result.
 	switch policyResult.Action {
+	case policy.ActionRetryLater:
+		adapter.WriteRetryLater(w, artifactID, policyResult.Reason, a.policyEngine.RetryAfter())
+		return
+
 	case policy.ActionBlock:
 		now := time.Now().UTC()
 		_ = a.persistArtifact(artifactID, scanArtifact, model.StatusQuarantined, policyResult.Reason, &now, scanResults)

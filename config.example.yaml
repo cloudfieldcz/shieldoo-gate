@@ -95,6 +95,15 @@ scanners:
   timeout: "60s"                          # outer cap per scanner per artifact; default 60s.
                                           # Invariant: must be >= scanners.version_diff.scanner_timeout + 5s buffer
                                           # whenever version_diff is enabled (validated at startup).
+  retry:
+    max_attempts: 3                       # bounded retries for retryable scanner errors
+    backoff: "200ms"                      # initial backoff, doubled per attempt
+  criticality:                            # per-scanner failure mode, keyed by scanner Name(); unlisted => best_effort
+    builtin-threat-feed: "required"
+    guarddog: "required"
+    ai-scanner: "best_effort"
+    version-diff: "best_effort"
+    builtin-reputation: "best_effort"
   guarddog:
     enabled: true
     bridge_socket: "/tmp/shieldoo-bridge.sock"
@@ -242,6 +251,8 @@ policy:
   quarantine_if_verdict: "SUSPICIOUS"  # ignored when mode is set
   minimum_confidence: 0.7              # scanner confidence threshold for aggregator
   behavioral_minimum_confidence: 0.35  # lower threshold for behavioral scanners (default: minimum_confidence / 2)
+  on_scan_error: "quarantine"          # required scanner failure mode: quarantine(503/reject/skip) | block | fail_open
+  retry_after: "30s"                   # Retry-After hint for pull-path 503 responses
   ai_triage:                           # AI-assisted triage for balanced mode
     enabled: false
     timeout: "5s"                      # per-call timeout (no retries)

@@ -73,13 +73,4 @@ var (
 		},
 		[]string{"ecosystem"},
 	)
-
-	// ScannerErrorsTotal counts scanner errors per scanner.
-	ScannerErrorsTotal = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "shieldoo_gate_scanner_errors_total",
-			Help: "Total number of scanner errors.",
-		},
-		[]string{"scanner"},
-	)
 )

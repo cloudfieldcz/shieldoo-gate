@@ -416,7 +416,7 @@ paths:
           description: Filter by event type
           schema:
             type: string
-            enum: [SERVED, BLOCKED, QUARANTINED, RELEASED, SCANNED, OVERRIDE_CREATED, OVERRIDE_REVOKED, TAG_MUTATED, RESCAN_QUEUED, ALLOWED_WITH_WARNING, INTEGRITY_VIOLATION, ARTIFACT_DELETED]
+            enum: [SERVED, BLOCKED, QUARANTINED, SCAN_UNAVAILABLE, RELEASED, SCANNED, OVERRIDE_CREATED, OVERRIDE_REVOKED, TAG_MUTATED, RESCAN_QUEUED, ALLOWED_WITH_WARNING, INTEGRITY_VIOLATION, ARTIFACT_DELETED]
       responses:
         "200":
           description: Paginated list of audit log entries
@@ -2208,7 +2208,7 @@ components:
           format: date-time
         event_type:
           type: string
-          enum: [SERVED, BLOCKED, QUARANTINED, RELEASED, SCANNED, OVERRIDE_CREATED, OVERRIDE_REVOKED, TAG_MUTATED, RESCAN_QUEUED, ALLOWED_WITH_WARNING]
+          enum: [SERVED, BLOCKED, QUARANTINED, SCAN_UNAVAILABLE, RELEASED, SCANNED, OVERRIDE_CREATED, OVERRIDE_REVOKED, TAG_MUTATED, RESCAN_QUEUED, ALLOWED_WITH_WARNING]
         artifact_id:
           type: string
         client_ip:
