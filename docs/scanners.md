@@ -42,6 +42,16 @@ Criticality is keyed by scanner `Name()`; any scanner not listed defaults to `be
 - `trivy`
 - `osv`
 
+There is **no hardcoded default criticality** — a scanner is `required` only if it is listed as such under `scanners.criticality`. The shipped `config.example.yaml` marks `builtin-threat-feed` and `guarddog` as `required`; everything else is best-effort.
+
+### Startup validation
+
+At boot, `scanners.criticality` is validated against the actually-registered (enabled) scanners:
+
+- A **required** scanner that is not registered is **fatal** — startup aborts. The one exception is `policy.on_scan_error=fail_open`, which downgrades it to a warning so an operator can deliberately run degraded.
+- A **best-effort** scanner that is not registered is **tolerated with a warning**. Because an unlisted scanner already defaults to best-effort, an entry for a disabled scanner is a harmless no-op — this lets a single config (or the example config) reference optional scanners that are not currently enabled.
+- When `on_scan_error` is `quarantine` or `block` (i.e. fail-closed is intended) but **no registered scanner is marked `required`**, a warning is logged that fail-closed is effectively inert: every scanner outage will serve the artifact unscanned. Mark a scanner `required` to actually fail closed.
+
 ## Scanner Interface
 
 Every scanner implements this interface (`internal/scanner/interface.go`):

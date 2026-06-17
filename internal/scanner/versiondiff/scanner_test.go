@@ -234,7 +234,7 @@ func TestScan_Allowlisted_ReturnsCleanWithoutBridge(t *testing.T) {
 	assert.Equal(t, int32(0), mb.calls.Load(), "bridge must not be called")
 }
 
-func TestScan_Oversized_ReturnsCleanWithoutBridge(t *testing.T) {
+func TestScan_Oversized_ReturnsTerminalErrorWithoutBridge(t *testing.T) {
 	mb := &mockBridge{}
 	sock := startMockBridge(t, mb)
 
@@ -246,11 +246,17 @@ func TestScan_Oversized_ReturnsCleanWithoutBridge(t *testing.T) {
 	s, _ := NewVersionDiffScanner(db, cs, cfg)
 	defer s.Close()
 
-	res, err := s.Scan(context.Background(), scanner.Artifact{
+	res, scanRunErr := s.Scan(context.Background(), scanner.Artifact{
 		ID: "pypi:big:1.0", Ecosystem: scanner.EcosystemPyPI, Name: "big", Version: "1.0",
 		SizeBytes: 10 * 1024 * 1024,
 	})
-	require.NoError(t, err)
+	// Oversized is "couldn't scan", surfaced as a terminal scanner error so
+	// required-mode fails closed (closing the size-padding evasion); the result
+	// stays CLEAN so best-effort mode degrades to fail-open. Terminal, not
+	// overload: the artifact will always be too big, so it must not be retried.
+	var scanErr *scanner.ScanError
+	require.ErrorAs(t, scanRunErr, &scanErr)
+	assert.Equal(t, scanner.ErrKindTerminal, scanErr.Kind)
 	assert.Equal(t, scanner.VerdictClean, res.Verdict)
 	assert.Equal(t, int32(0), mb.calls.Load())
 }

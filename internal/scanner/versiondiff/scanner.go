@@ -141,12 +141,17 @@ func (s *VersionDiffScanner) Scan(ctx context.Context, artifact scanner.Artifact
 		return s.cleanResult(start, nil), nil
 	}
 
-	// 2. Compressed-size guard
+	// 2. Compressed-size guard. "Couldn't scan", not "nothing to scan": the diff
+	// is deliberately skipped for resource reasons, but there IS content to vet.
+	// Surface a terminal scanner error (permanent for this artifact — retrying
+	// won't shrink it) so required-mode fails closed. This closes the "pad the
+	// package past the size limit to skip the diff" evasion; best-effort mode
+	// still degrades to fail-open in the engine.
 	maxBytes := int64(s.cfg.MaxArtifactSizeMB) * 1024 * 1024
 	if maxBytes > 0 && artifact.SizeBytes > maxBytes {
 		log.Debug().Str("artifact", artifact.ID).Int64("size", artifact.SizeBytes).
-			Msg("version-diff: skipping large artifact")
-		return s.cleanResult(start, nil), nil
+			Msg("version-diff: artifact exceeds max size, returning terminal error")
+		return s.scanErrorResult(start, scanner.ErrKindTerminal, "artifact exceeds max size")
 	}
 
 	// 3. Sub-timeout
@@ -198,13 +203,13 @@ func (s *VersionDiffScanner) Scan(ctx context.Context, artifact scanner.Artifact
 	// (the default) still degrades to fail-open in the engine.
 	if !s.rateLimiter.allow(artifact.Name) {
 		log.Debug().Str("package", artifact.Name).Msg("version-diff: rate-limited, returning overload error")
-		return s.overloadResult(start, "rate-limited")
+		return s.scanErrorResult(start, scanner.ErrKindOverload, "rate-limited")
 	}
 
 	// 8. Circuit breaker — same overload semantics as the rate-limit guard.
 	if !s.breaker.allow(time.Now()) {
 		log.Debug().Str("artifact", artifact.ID).Msg("version-diff: circuit open, returning overload error")
-		return s.overloadResult(start, "circuit open")
+		return s.scanErrorResult(start, scanner.ErrKindOverload, "circuit open")
 	}
 
 	// 9. Coalesce concurrent same-pair scans through singleflight, then call
@@ -563,14 +568,16 @@ func (s *VersionDiffScanner) cleanResult(start time.Time, err error) scanner.Sca
 	}
 }
 
-// overloadResult builds an overload-classified scanner error for transient
-// "couldn't scan" conditions (circuit open, rate limited). Unlike cleanResult's
-// fail-open path, the error lands in ScanReport.Errored so required-mode fails
-// closed; the result still carries VerdictClean so best-effort mode keeps
+// scanErrorResult builds a classified scanner error for "couldn't scan"
+// conditions: transient overload (circuit open, rate limited) and the terminal
+// size guard (artifact too large to ever diff). Unlike cleanResult's fail-open
+// path, the error lands in ScanReport.Errored so required-mode fails closed
+// (e.g. closing the "pad the package past the size limit to skip the diff"
+// evasion); the result still carries VerdictClean so best-effort mode keeps
 // degrading to fail-open in the engine. The error is returned via both
 // ScanResult.Error and the second return value, mirroring the UNKNOWN path.
-func (s *VersionDiffScanner) overloadResult(start time.Time, reason string) (scanner.ScanResult, error) {
-	scanErr := scanner.NewScanError(scanner.ErrKindOverload, fmt.Errorf("version-diff: %s", reason))
+func (s *VersionDiffScanner) scanErrorResult(start time.Time, kind scanner.ScanErrorKind, reason string) (scanner.ScanResult, error) {
+	scanErr := scanner.NewScanError(kind, fmt.Errorf("version-diff: %s", reason))
 	return scanner.ScanResult{
 		Verdict:        scanner.VerdictClean,
 		Confidence:     0,
