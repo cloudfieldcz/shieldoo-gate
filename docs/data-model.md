@@ -449,7 +449,7 @@ API keys for proxy endpoint authentication. Keys are either per-user PATs (gener
 
 **Indexes:** `idx_api_keys_owner_email ON (owner_email)`
 
-**Scope vocabulary** (`model.AllScopes`): `proxy:fetch`, `scan:upload`, `admin:read`, `admin:write`. Enforced by the `auth.RequireScope` middleware. The global super-token (`proxy_auth.global_token_env`) carries an implicit `*` wildcard.
+**Scope vocabulary** (`model.AllScopes`): `proxy:fetch`, `scan:upload`, `admin:read`, `admin:write`, `keys:manage`. Enforced by the `auth.RequireScope` middleware. The global super-token (`proxy_auth.global_token_env`) carries an implicit `*` wildcard; OIDC operator sessions are injected the full explicit `auth.operatorScopes` set (every scope above).
 
 ### `triage_cache`
 

@@ -11,8 +11,9 @@ import (
 // authenticates or returns 401. When no Authorization header is present, the OIDC
 // middleware takes over (cookie-based session).
 //
-// OIDC sessions implicitly receive admin:read,admin:write scopes (the admin UI is the
+// OIDC sessions implicitly receive the operatorScopes set (the admin UI is the
 // canonical OIDC consumer; users with valid sessions are operators by definition).
+// See operatorScopes below for the exact scopes and the rationale for the list.
 type AdminAuthChain struct {
 	PAT  *PATBearerMiddleware
 	OIDC *OIDCMiddleware
@@ -24,6 +25,21 @@ type AdminAuthChain struct {
 	// on, OIDC off) an anonymous request to the admin API is rejected rather than
 	// silently falling through to the handler (CVE-class "open admin API" footgun).
 	allowUnauthenticated bool
+}
+
+// operatorScopes are the scopes an authenticated OIDC operator session implicitly
+// holds. OIDC operators are the admin UI's interactive trust root (PKCE + server-side
+// session + CSRF), so they may mint API keys of any defined scope — including the
+// default proxy:fetch key the UI creates for pip/npm/docker traffic.
+//
+// The list is an explicit literal, NOT model.AllScopes, on purpose: per ADR-011's
+// least-privilege philosophy (keys:manage was split out of admin:write precisely to
+// avoid implicit broad grants), adding a new scope must force a deliberate decision
+// about whether operators should hold it, rather than silently auto-granting it the
+// way an auto-growing list or a "*" wildcard would.
+var operatorScopes = []string{
+	model.ScopeAdminRead, model.ScopeAdminWrite, model.ScopeKeysManage,
+	model.ScopeProxyFetch, model.ScopeScanUpload,
 }
 
 // NewAdminAuthChain constructs the chain. Either PAT or OIDC may be nil. The chain
@@ -68,7 +84,7 @@ func (c *AdminAuthChain) Authenticate(next http.Handler) http.Handler {
 			ctx := r.Context()
 			if u := UserFromContext(ctx); u != nil && len(ScopesFromContext(ctx)) == 0 {
 				// OIDC operators are full admins, including API-key management.
-				ctx = WithScopes(ctx, []string{model.ScopeAdminRead, model.ScopeAdminWrite, model.ScopeKeysManage})
+				ctx = WithScopes(ctx, operatorScopes)
 				ctx = WithScopeKey(ctx, "oidc:"+u.Email)
 			}
 			next.ServeHTTP(w, r.WithContext(ctx))

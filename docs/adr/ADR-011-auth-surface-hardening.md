@@ -84,6 +84,16 @@ A dedicated `keys:manage` scope gates the `/api/v1/api-keys` endpoints, so a gen
 sessions are granted it). Key creation enforces **scope subset**: a caller cannot mint a
 key with scopes it does not itself hold.
 
+Because the subset rule binds the *minter's* held scopes, an OIDC operator session must
+itself hold every scope it is expected to grant. Operator sessions therefore hold the
+explicit set `auth.operatorScopes` (`admin:read`, `admin:write`, `keys:manage`,
+`proxy:fetch`, `scan:upload`) — every currently defined scope — so an interactive admin
+can mint any key from the UI, including the default `proxy:fetch` key for pip/npm/docker.
+The set is an explicit literal rather than an auto-growing "all scopes" list or a `"*"`
+wildcard: consistent with this ADR's least-privilege stance (`keys:manage` was split out
+of `admin:write` for the same reason), introducing a new scope must be a deliberate
+decision about whether operators should hold it, not a silent auto-grant.
+
 ### 9. Audit fail-closed for super-token use (MEDIUM)
 
 Both auth paths previously ignored the `super_token_used` audit-write error. They now fail
