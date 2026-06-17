@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+
+	"github.com/cloudfieldcz/shieldoo-gate/internal/project"
 )
 
 // ServiceConfig holds runtime configuration for the component service.
@@ -126,9 +128,12 @@ func (s *serviceImpl) List(ctx context.Context, filter ListFilter) ([]*ListRow, 
 	WHERE c.enabled = TRUE`
 
 	args := []any{staleCutoff}
-	if filter.ProjectLabel != "" {
+	// Project labels are stored normalized (lowercased+trimmed) on creation, so
+	// normalize the filter value the same way — otherwise a mixed-case or padded
+	// filter from the UI never matches the stored label. See project.NormalizeLabel.
+	if label, _ := project.NormalizeLabel(filter.ProjectLabel, nil); label != "" {
 		q += ` AND p.label = ?`
-		args = append(args, filter.ProjectLabel)
+		args = append(args, label)
 	}
 	if filter.Ecosystem != "" {
 		q += ` AND c.ecosystem = ?`

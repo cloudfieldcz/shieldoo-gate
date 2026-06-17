@@ -1405,6 +1405,10 @@ paths:
       parameters:
         - name: project
           in: query
+          description: >
+            Exact project-label filter. The value is normalized (lowercased and
+            trimmed) before matching, mirroring how labels are stored, so the
+            filter is case-insensitive and whitespace-insensitive.
           schema: { type: string }
         - name: ecosystem
           in: query

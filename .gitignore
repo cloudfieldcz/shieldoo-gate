@@ -68,6 +68,8 @@ examples/python-requests/.venv/
 examples/npm-chalk/node_modules/
 examples/dotnet-json/bin/
 examples/dotnet-json/obj/
+tests/e2e-shell/fixtures/nuget/bin/
+tests/e2e-shell/fixtures/nuget/obj/
 *.lscache
 
 # Helm
