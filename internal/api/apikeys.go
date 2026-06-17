@@ -83,7 +83,8 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 
 	// Subset enforcement: a caller may not mint a key with scopes it does not itself
 	// hold (prevents privilege escalation / persistence). The global super-token ("*")
-	// and OIDC operators (admin:read+write+keys:manage) hold everything they can grant.
+	// satisfies any scope; OIDC operator sessions hold auth.operatorScopes (every
+	// defined scope), so an interactive admin can mint a key of any scope.
 	held := auth.ScopesFromContext(r.Context())
 	for _, sc := range scopes {
 		if !auth.ScopeSatisfiedBy(held, sc) {

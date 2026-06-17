@@ -14,8 +14,10 @@ info:
       password on the proxy) — scopes from the key's `scopes` column. The session
       cookie holds an opaque server-side session ID, **not** a JWT; OIDC ID tokens
       are no longer accepted on the `Authorization` header (use a PAT for API access).
-    - **OIDC session** (cookie) — implicitly granted `admin:read,admin:write,keys:manage`
-      (a valid operator session is full admin; scopes are injected by the auth chain).
+    - **OIDC session** (cookie) — implicitly granted every defined scope
+      (`admin:read,admin:write,keys:manage,proxy:fetch,scan:upload`): a valid operator
+      session is full admin and can mint an API key of any scope. Scopes are injected by
+      the auth chain (`auth.operatorScopes`).
     - **Global super-token** — scope `*`, bypasses every check (always audited
       via `super_token_used`; the request is rejected if that audit row cannot be written).
 
@@ -1768,8 +1770,10 @@ components:
       in: cookie
       name: shieldoo_session
       description: |
-        OIDC session cookie. Implicitly granted `admin:read,admin:write`
-        (scopes are injected by the auth chain, not read from the JWT).
+        OIDC session cookie. The admin auth chain injects the operator scope set
+        (`admin:read,admin:write,keys:manage,proxy:fetch,scan:upload`) — operators
+        are the interactive trust root and may mint an API key of any scope.
+        Scopes are injected by the auth chain, not read from the JWT.
     BasicPAT:
       type: http
       scheme: basic
