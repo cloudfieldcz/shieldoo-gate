@@ -23,8 +23,17 @@ as `CLEAN`, `SUSPICIOUS`, or `MALICIOUS`. The Go side maps the verdict to a
   - An idempotent cache hit is found in `version_diff_results` for the
     `(new artifact, previous artifact, model, prompt version)` tuple.
 - "Couldn't scan" (returns CLEAN **with a classified scanner error**) when:
-  - The per-package rate limiter has exhausted the hourly quota — `overload`.
+  - The per-package rate limiter has exhausted the hourly quota — `throttled`.
+    This is intentional local backpressure on one package, **not** a backend
+    health signal, so (like `terminal`) it is excluded from the scanner-wide
+    health circuit breaker — otherwise a single hot package hammering its quota
+    would open the breaker and fail unrelated, healthy packages as overload.
   - The consecutive-failure circuit breaker is open — `overload`.
+  - The previous-version DB lookup itself fails (lock, timeout, schema) —
+    `retryable`. Only `sql.ErrNoRows` means "no previous version"; any other
+    error leaves the predecessor's existence unknown, so the scan must not
+    assume "nothing to diff" and serve CLEAN (which would also let an oversized
+    update slip past the terminal size guard below).
   - Compressed artifact size exceeds `max_artifact_size_mb` (default 50 MB)
     **and a previous version exists to diff against** — `terminal` (permanent
     for that artifact; not retried). The guard is evaluated only after the
@@ -38,11 +47,12 @@ as `CLEAN`, `SUSPICIOUS`, or `MALICIOUS`. The Go side maps the verdict to a
   "pad an update past the limit to skip the diff" evasion. In the default
   best-effort mode the engine still degrades them to fail-open.
 
-  `terminal` errors fail closed for a `required` scanner but, unlike
-  `overload`/`retryable` errors, are **not** counted against the scanner's
-  health circuit breaker — an artifact that is permanently too large says
-  nothing about backend health, so a burst of oversized uploads cannot open the
-  breaker and fail unrelated, normal-size artifacts.
+  `terminal` and `throttled` errors fail closed for a `required` scanner but,
+  unlike `overload`/`retryable` errors, are **not** counted against the
+  scanner's health circuit breaker — an artifact that is permanently too large,
+  or one package hitting its per-package quota, says nothing about backend
+  health, so a burst of either cannot open the breaker and fail unrelated,
+  healthy artifacts.
 
 ## Deployment requirement: shared cache mount
 

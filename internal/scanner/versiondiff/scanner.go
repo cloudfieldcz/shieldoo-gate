@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -161,9 +162,20 @@ func (s *VersionDiffScanner) Scan(ctx context.Context, artifact scanner.Artifact
 		 ORDER BY a.cached_at DESC LIMIT 1`,
 		string(artifact.Ecosystem), artifact.Name, artifact.ID,
 	).Scan(&prevID, &prevSHA256, &prevVersion)
-	if err != nil {
-		// No previous version — nothing to diff. Do not insert a row.
+	if errors.Is(err, sql.ErrNoRows) {
+		// No previous version — genuinely nothing to diff. Do not insert a row.
 		return s.cleanResult(start, nil), nil
+	}
+	if err != nil {
+		// The lookup itself failed (DB lock, timeout, schema). We cannot tell
+		// whether a previous version exists, so we must NOT assume "nothing to
+		// diff" and silently serve CLEAN — that would also let an oversized update
+		// ride a transient DB error past the terminal size guard below. Surface a
+		// retryable scanner error so a required version-diff fails closed (and a
+		// best-effort one degrades to fail-open in the engine).
+		log.Debug().Err(err).Str("artifact", artifact.ID).
+			Msg("version-diff: previous-version lookup failed, returning retryable error")
+		return s.scanErrorResult(start, scanner.ErrKindRetryable, fmt.Sprintf("previous-version lookup failed: %v", err))
 	}
 
 	// 4. DB idempotency cache lookup. Use the model name we expect plus an
@@ -201,13 +213,17 @@ func (s *VersionDiffScanner) Scan(ctx context.Context, artifact scanner.Artifact
 		return s.cleanResult(start, fmt.Errorf("sha256 mismatch for %s: %w", prevID, err)), nil
 	}
 
-	// 7. Per-package rate limit. Overload, not "nothing to scan": surface a
+	// 7. Per-package rate limit. Throttled, not "nothing to scan": surface a
 	// classified scanner error so operators who mark version-diff `required`
 	// fail closed instead of serving the artifact as silently clean. Best-effort
-	// (the default) still degrades to fail-open in the engine.
+	// (the default) still degrades to fail-open in the engine. Classified
+	// `throttled`, NOT `overload`: this is intentional local backpressure on one
+	// package, so it must not count toward the engine's scanner-wide circuit
+	// breaker — otherwise a single hot package hammering its quota would open the
+	// breaker and fail unrelated, healthy packages.
 	if !s.rateLimiter.allow(artifact.Name) {
-		log.Debug().Str("package", artifact.Name).Msg("version-diff: rate-limited, returning overload error")
-		return s.scanErrorResult(start, scanner.ErrKindOverload, "rate-limited")
+		log.Debug().Str("package", artifact.Name).Msg("version-diff: rate-limited, returning throttled error")
+		return s.scanErrorResult(start, scanner.ErrKindThrottled, "rate-limited")
 	}
 
 	// 8. Circuit breaker — same overload semantics as the rate-limit guard.
@@ -573,8 +589,10 @@ func (s *VersionDiffScanner) cleanResult(start time.Time, err error) scanner.Sca
 }
 
 // scanErrorResult builds a classified scanner error for "couldn't scan"
-// conditions: transient overload (circuit open, rate limited) and the terminal
-// size guard (artifact too large to ever diff). Unlike cleanResult's fail-open
+// conditions: backend overload (circuit open), per-package throttling (rate
+// limit), and the terminal size guard (artifact too large to ever diff). The
+// kind matters downstream — only overload counts toward the engine's
+// scanner-health breaker; throttled and terminal do not. Unlike cleanResult's fail-open
 // path, the error lands in ScanReport.Errored so required-mode fails closed
 // (e.g. closing the "pad the package past the size limit to skip the diff"
 // evasion); the result still carries VerdictClean so best-effort mode keeps

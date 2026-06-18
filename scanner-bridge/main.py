@@ -129,8 +129,13 @@ class ScannerBridgeServicer(scanner_pb2_grpc.ScannerBridgeServicer):
         except Exception as e:
             logger.error("Scan error: %s", e)
             duration_ms = int((time.time() - start) * 1000)
+            # GuardDog failed internally — we did NOT determine the artifact is
+            # clean. Return UNKNOWN (not CLEAN) so the Go side classifies this as
+            # a scanner error and a required guarddog scanner fails closed instead
+            # of the artifact being served unscanned. (CLEAN/0.0 here was a silent
+            # fail-open bypass: the aggregator dropped the 0.0-confidence result.)
             return scanner_pb2.ScanResponse(
-                verdict="CLEAN",
+                verdict="UNKNOWN",
                 confidence=0.0,
                 scanner_version=GUARDDOG_VERSION,
                 duration_ms=duration_ms,

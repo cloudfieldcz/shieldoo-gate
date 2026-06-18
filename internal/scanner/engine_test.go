@@ -172,6 +172,36 @@ func TestEngine_ScanAll_TerminalErrorsDoNotOpenCircuitBreaker(t *testing.T) {
 	assert.Equal(t, scans, attempts, "breaker must never short-circuit terminal-only scanners")
 }
 
+func TestEngine_ScanAll_ThrottleErrorsDoNotOpenCircuitBreaker(t *testing.T) {
+	// A throttle error is intentional local backpressure on ONE package (the
+	// version-diff per-package rate limit), not scanner-health degradation. A hot
+	// package hammering its quota must NOT open the scanner-wide breaker and fail
+	// unrelated, healthy packages as overload. The breaker threshold is 5; we scan
+	// well past it and assert every call still reaches the scanner and still
+	// classifies as throttled (never overload from an open circuit).
+	attempts := 0
+	throttled := &mockScanner{
+		name:       "version-diff",
+		ecosystems: []Ecosystem{EcosystemPyPI},
+		scanFn: func(_ context.Context, _ Artifact) (ScanResult, error) {
+			attempts++
+			return ScanResult{}, NewScanError(ErrKindThrottled, errors.New("rate-limited"))
+		},
+	}
+
+	engine := NewEngine([]Scanner{throttled}, time.Second, 0)
+
+	const scans = 8 // > breaker threshold (5)
+	for i := 0; i < scans; i++ {
+		report, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemPyPI})
+		require.NoError(t, err)
+		require.Contains(t, report.Errored, "version-diff")
+		assert.Equal(t, ErrKindThrottled, report.Errored["version-diff"].Kind,
+			"scan %d: throttle must stay throttled, never become overload from an open circuit", i)
+	}
+	assert.Equal(t, scans, attempts, "breaker must never short-circuit a throttled scanner")
+}
+
 func TestEngine_ScanAll_RetryableErrorsStillOpenCircuitBreaker(t *testing.T) {
 	// Counterpart to the terminal test: retryable/overload errors DO indicate
 	// scanner-health degradation, so they must still open the breaker. After the

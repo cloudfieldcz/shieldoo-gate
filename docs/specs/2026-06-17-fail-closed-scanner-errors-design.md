@@ -314,7 +314,13 @@ client retries after Retry-After → scanner recovered → normal verdict → se
 - Unit: `ScanError` classification + gRPC mapping; retry honours `max_attempts`
   and context deadline; circuit open → `ScanError`; `ScanReport` distinguishes
   errored-required vs best-effort vs no-scanners.
-- Config: unknown `scanners.criticality` key → fatal validation error.
+- Config: a `scanners.criticality` entry naming an unregistered scanner is fatal
+  **only when it is `required`** (and `on_scan_error` is not `fail_open`). A
+  `best_effort` entry for an absent scanner is a harmless no-op (warning, not
+  fatal): an unlisted scanner already defaults to best-effort, so the shipped
+  example config — which lists optional, disabled scanners as `best_effort` —
+  stays bootable. Unknown criticality *values* (anything other than `required`)
+  are treated as `best_effort`.
 - Policy: required-errored × `{quarantine, block, fail_open}` →
   `{ActionRetryLater, ActionBlock, ActionAllow}`; allow-override/allowlist on a
   required-errored artifact → `ActionAllow` (documented bypass); DENY-override →

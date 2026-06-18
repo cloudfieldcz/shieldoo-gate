@@ -262,14 +262,15 @@ func (e *Engine) scanOne(ctx context.Context, sc Scanner, artifact Artifact) (Sc
 		backoff *= 2
 	}
 
-	// A terminal error is a permanent property of THIS artifact (e.g. too large
-	// to scan, unsupported format), not a sign the scanner backend is unhealthy.
-	// Counting it against the breaker would let a handful of such artifacts open
-	// the circuit and fail unrelated, normal artifacts as overload until cooldown.
-	// Terminal errors still fail closed (returned below); they just must not trip
-	// scanner-health breaking. Retryable/overload errors DO indicate degradation
-	// and still count.
-	if breaker != nil && lastErr != nil && !lastErr.Terminal() {
+	// Only errors that signal scanner backend ill-health (retryable transients,
+	// backend overload) count toward the breaker. A terminal error is a permanent
+	// property of THIS artifact (too large, unsupported format); a throttled error
+	// is intentional local backpressure on ONE package (per-package rate limit).
+	// Neither says anything about backend health — counting them would let a burst
+	// of unscannable or rate-limited artifacts open the circuit and fail
+	// unrelated, normal artifacts as overload until cooldown. Both still fail
+	// closed (returned below); they just must not trip scanner-health breaking.
+	if breaker != nil && lastErr != nil && lastErr.CountsTowardBreaker() {
 		breaker.recordFailure()
 	}
 	return ScanResult{}, lastErr

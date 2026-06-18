@@ -115,6 +115,46 @@ func TestGuardDogScanner_MaliciousArtifact_ReturnsMalicious(t *testing.T) {
 	assert.NotEmpty(t, result.Findings)
 }
 
+func TestGuardDogScanner_BridgeUnknownVerdict_ReturnsRetryableError(t *testing.T) {
+	// When GuardDog raises an internal error the bridge returns verdict UNKNOWN
+	// (confidence 0.0) rather than CLEAN. The Go side must treat that as a
+	// scanner error — never a successful clean result — so a required guarddog
+	// scanner fails closed instead of the artifact being served unscanned.
+	sock := startMockBridge(t, &mockBridgeServer{
+		scanFn: func(_ *pb.ScanRequest) *pb.ScanResponse {
+			return &pb.ScanResponse{
+				Verdict:        "UNKNOWN",
+				Confidence:     0.0,
+				ScannerVersion: "0.1.17",
+				DurationMs:     50,
+			}
+		},
+		healthFn: func() *pb.HealthResponse {
+			return &pb.HealthResponse{Healthy: true, Version: "0.1.17"}
+		},
+	})
+
+	s, err := NewGuardDogScanner(sock)
+	require.NoError(t, err)
+	defer s.Close()
+
+	result, scanErr := s.Scan(context.Background(), scanner.Artifact{
+		ID:        "pypi:evil:1.0",
+		Ecosystem: scanner.EcosystemPyPI,
+		LocalPath: "/tmp/evil.whl",
+		Name:      "evil-pkg",
+		Version:   "1.0.0",
+	})
+
+	var classified *scanner.ScanError
+	require.ErrorAs(t, scanErr, &classified)
+	assert.Equal(t, scanner.ErrKindRetryable, classified.Kind)
+	// The result stays CLEAN so best-effort mode keeps degrading to fail-open,
+	// but the error is surfaced via both channels for the engine to record.
+	assert.Equal(t, scanner.VerdictClean, result.Verdict)
+	assert.Equal(t, scanErr, result.Error)
+}
+
 func TestGuardDogScanner_SupportedEcosystems(t *testing.T) {
 	eco := (&GuardDogScanner{}).SupportedEcosystems()
 	assert.Contains(t, eco, scanner.EcosystemPyPI)

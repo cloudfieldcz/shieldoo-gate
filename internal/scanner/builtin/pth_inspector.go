@@ -37,6 +37,21 @@ func (p *PTHInspector) HealthCheck(_ context.Context) error { return nil }
 func (p *PTHInspector) Scan(_ context.Context, artifact scanner.Artifact) (scanner.ScanResult, error) {
 	start := time.Now()
 
+	// pth-inspector only applies to Python wheels (.whl). A wheel is a zip whose
+	// site-packages .pth files are auto-executed at interpreter start-up; sdists
+	// (.tar.gz) and other PyPI artifacts are not wheels — and not even zip
+	// archives, so zip.OpenReader fails on them. Skip non-wheel artifacts cleanly
+	// so that marking pth-inspector `required` does not fail closed on every
+	// normal sdist. Prefer the original filename; fall back to the local path so a
+	// wheel is still scanned even if the adapter did not set Filename.
+	name := artifact.Filename
+	if name == "" {
+		name = artifact.LocalPath
+	}
+	if !strings.HasSuffix(strings.ToLower(name), ".whl") {
+		return buildResult(p.Name(), start, scanner.VerdictClean, 1.0, nil), nil
+	}
+
 	r, err := zip.OpenReader(artifact.LocalPath)
 	if err != nil {
 		return scanner.ScanResult{

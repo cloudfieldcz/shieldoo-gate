@@ -3,6 +3,7 @@ package guarddog
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	pb "github.com/cloudfieldcz/shieldoo-gate/internal/scanner/guarddog/proto"
@@ -74,6 +75,25 @@ func (s *GuardDogScanner) Scan(ctx context.Context, artifact scanner.Artifact) (
 			ScannerID: s.Name(),
 			Error:     fmt.Errorf("guarddog: scanning %s: %w", artifact.ID, err),
 		}, nil
+	}
+
+	// An UNKNOWN verdict means the bridge could not complete the scan — GuardDog
+	// raised an internal error and the bridge fell back to UNKNOWN/0.0 instead of
+	// a real verdict. Treat it as a retryable scanner error, never a clean result:
+	// otherwise a required guarddog scanner would accept the unscanned artifact as
+	// successfully scanned (the aggregator would drop the 0.0-confidence result)
+	// and serve it. Return the error via both channels so the engine records it in
+	// ScanReport.Errored; the result stays CLEAN so best-effort mode fails open.
+	if strings.EqualFold(resp.Verdict, "UNKNOWN") {
+		scanErr := scanner.NewScanError(scanner.ErrKindRetryable,
+			fmt.Errorf("guarddog: bridge returned UNKNOWN for %s (scan did not complete)", artifact.ID))
+		return scanner.ScanResult{
+			Verdict:        scanner.VerdictClean,
+			ScannerID:      s.Name(),
+			ScannerVersion: s.Version(),
+			Duration:       time.Duration(resp.DurationMs) * time.Millisecond,
+			Error:          scanErr,
+		}, scanErr
 	}
 
 	var findings []scanner.Finding

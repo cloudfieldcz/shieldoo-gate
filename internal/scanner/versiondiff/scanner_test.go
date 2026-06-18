@@ -317,6 +317,36 @@ func TestScan_NoPreviousVersion_ReturnsCleanNoDBRow(t *testing.T) {
 	assert.Equal(t, 0, n)
 }
 
+func TestScan_PreviousVersionLookupFails_ReturnsRetryableError(t *testing.T) {
+	// A DB failure during the previous-version lookup is NOT "no previous
+	// version": we cannot tell whether a predecessor exists, so version-diff must
+	// fail closed (retryable scanner error) for required mode instead of silently
+	// serving CLEAN — which would also let an oversized update ride the DB error
+	// past the terminal size guard. Drop the artifacts table to force a query
+	// error that is not sql.ErrNoRows.
+	mb := &mockBridge{}
+	sock := startMockBridge(t, mb)
+	db := newTestDB(t)
+	cs := newFakeCache(t, nil)
+
+	_, err := db.Exec("DROP TABLE artifacts")
+	require.NoError(t, err)
+
+	s, _ := NewVersionDiffScanner(db, cs, defaultCfg(sock))
+	defer s.Close()
+
+	res, scanRunErr := s.Scan(context.Background(), scanner.Artifact{
+		ID: "pypi:x:1.0", Ecosystem: scanner.EcosystemPyPI, Name: "x", Version: "1.0",
+		SizeBytes: 10 * 1024 * 1024, // oversized too — must not bypass fail-closed
+	})
+	var scanErr *scanner.ScanError
+	require.ErrorAs(t, scanRunErr, &scanErr)
+	assert.Equal(t, scanner.ErrKindRetryable, scanErr.Kind)
+	assert.Equal(t, scanner.VerdictClean, res.Verdict)
+	assert.Equal(t, scanRunErr, res.Error)
+	assert.Equal(t, int32(0), mb.calls.Load(), "bridge must not be called when the lookup fails")
+}
+
 // --- Bridge verdicts -------------------------------------------------------
 
 func TestScan_BridgeReturnsClean(t *testing.T) {
@@ -770,11 +800,14 @@ func TestScan_RateLimited_SkipsBridge(t *testing.T) {
 	res, scanRunErr := s.Scan(context.Background(), art)
 	calls2 := mb.calls.Load()
 	assert.Equal(t, calls1, calls2, "second call within rate window must skip bridge")
-	// Overload is surfaced as a classified scanner error (not silent CLEAN) so
-	// required-mode fails closed; the result itself stays CLEAN for best-effort.
+	// The per-package quota is surfaced as a classified scanner error (not silent
+	// CLEAN) so required-mode fails closed; the result itself stays CLEAN for
+	// best-effort. It is classified `throttled`, not `overload`, so a single hot
+	// package cannot open the scanner-wide engine breaker and fail unrelated
+	// packages.
 	var scanErr *scanner.ScanError
 	require.ErrorAs(t, scanRunErr, &scanErr)
-	assert.Equal(t, scanner.ErrKindOverload, scanErr.Kind)
+	assert.Equal(t, scanner.ErrKindThrottled, scanErr.Kind)
 	assert.Equal(t, scanner.VerdictClean, res.Verdict)
 }
 
