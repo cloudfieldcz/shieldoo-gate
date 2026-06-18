@@ -253,6 +253,49 @@ func TestEngine_ScanAll_RetryableErrorsStillOpenCircuitBreaker(t *testing.T) {
 	assert.Equal(t, ErrKindOverload, lastKind, "open circuit must surface as overload")
 }
 
+func TestEngine_ScanAll_CanceledRequestDoesNotOpenCircuitBreaker(t *testing.T) {
+	// A canceled REQUEST context means the caller/client went away (e.g. an npm
+	// client disconnecting after receiving a 503), NOT that the scanner backend
+	// is unhealthy. Counting such aborts toward the per-scanner breaker created a
+	// self-reinforcing cascade in production: a 503 burst -> clients disconnect ->
+	// in-flight version-diff DB lookups return context.Canceled (classified
+	// retryable) -> breaker opens -> EVERY artifact fails closed. A required
+	// scanner whose failures are all request cancellations must leave its breaker
+	// shut, no matter how many arrive.
+	attempts := 0
+	var curCancel context.CancelFunc
+	sc := &mockScanner{
+		name:       "version-diff",
+		ecosystems: []Ecosystem{EcosystemPyPI},
+		scanFn: func(_ context.Context, _ Artifact) (ScanResult, error) {
+			attempts++
+			curCancel() // client disconnects mid-scan -> request context canceled
+			return ScanResult{}, NewScanError(ErrKindRetryable, context.Canceled)
+		},
+	}
+
+	engine := NewEngine(
+		[]Scanner{sc},
+		time.Second,
+		0,
+		WithCriticality(map[string]Criticality{"version-diff": CriticalityRequired}),
+	)
+
+	const scans = 8 // well past the breaker threshold (5)
+	for i := 0; i < scans; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		curCancel = cancel
+		_, err := engine.ScanAll(ctx, Artifact{Ecosystem: EcosystemPyPI})
+		require.NoError(t, err)
+		cancel()
+	}
+
+	assert.GreaterOrEqual(t, attempts, scans,
+		"scanner must keep being attempted — the breaker must not short-circuit request cancellations")
+	assert.False(t, engine.breakers["version-diff"].isOpen(),
+		"request cancellations must not open the breaker")
+}
+
 func TestEngine_ScanAll_RequiredScannerCannotBeExcluded(t *testing.T) {
 	required := &mockScanner{
 		name:       "guarddog",

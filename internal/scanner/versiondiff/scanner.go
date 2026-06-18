@@ -226,10 +226,17 @@ func (s *VersionDiffScanner) Scan(ctx context.Context, artifact scanner.Artifact
 		return s.scanErrorResult(start, scanner.ErrKindThrottled, "rate-limited")
 	}
 
-	// 8. Circuit breaker — same overload semantics as the rate-limit guard.
+	// 8. Circuit breaker — same throttled semantics as the rate-limit guard.
+	// Classified `throttled`, NOT `overload`: this is version-diff's OWN internal
+	// breaker (local self-protection after repeated bridge errors), not a signal
+	// for the engine's per-scanner breaker to ALSO trip. Counting it there
+	// double-broke the same scanner — version-diff's internal breaker opening fed
+	// the engine breaker, which then failed every component closed. Throttled
+	// fails closed for required mode without touching the engine breaker; the
+	// engine breaker still opens independently on genuine retryable errors.
 	if !s.breaker.allow(time.Now()) {
-		log.Debug().Str("artifact", artifact.ID).Msg("version-diff: circuit open, returning overload error")
-		return s.scanErrorResult(start, scanner.ErrKindOverload, "circuit open")
+		log.Debug().Str("artifact", artifact.ID).Msg("version-diff: circuit open, returning throttled error")
+		return s.scanErrorResult(start, scanner.ErrKindThrottled, "circuit open")
 	}
 
 	// 9. Coalesce concurrent same-pair scans through singleflight, then call

@@ -1,7 +1,15 @@
-# config.yaml — Shieldoo Gate v1.1 reference configuration
+# config.example.yaml — Shieldoo Gate v1.1 reference configuration
 
 server:
   host: "0.0.0.0"
+  # CIDRs (or bare IPs) of reverse proxies / load balancers whose
+  # X-Forwarded-For / X-Real-IP headers may be trusted to resolve the client IP
+  # (used for audit logging and rate limiting). Empty (default) trusts NO proxy —
+  # the real TCP peer is always used, which prevents clients from spoofing their IP.
+  # Set this to your ingress subnet when running behind a trusted proxy.
+  trusted_proxies: []
+  #   - "10.0.0.0/8"
+  #   - "192.168.1.10"
 
 ports:
   pypi: 5000
@@ -19,7 +27,12 @@ upstreams:
   nuget: "https://api.nuget.org"
   maven: "https://repo1.maven.org/maven2"
   maven_resolver:
-    enabled: true
+    enabled: true                    # resolve licenses from parent POM chain (fail-open)
+    cache_size: 4096                 # in-memory LRU entries for parent POMs
+    cache_ttl: "24h"                 # parent POMs are immutable per release GAV
+    max_depth: 5                     # max parent chain depth (hardcode ceiling: 10)
+    fetch_timeout: "3s"              # per-POM HTTP timeout
+    resolver_timeout: "5s"           # total timeout for entire parent chain walk
   rubygems: "https://rubygems.org"
   gomod: "https://proxy.golang.org"
   docker:
@@ -30,7 +43,7 @@ upstreams:
       - host: "quay.io"
         url: "https://quay.io"
     sync:
-      enabled: false
+      enabled: true
       interval: "6h"
       rescan_interval: "24h"
       max_concurrent: 3
@@ -43,22 +56,22 @@ cache:
     path: "/var/cache/shieldoo-gate"
     max_size_gb: 50
   s3:
-    bucket: ""
-    region: ""
-    endpoint: ""
-    prefix: ""
-    force_path_style: false
-    access_key_env: ""
-    secret_key_env: ""
+    bucket: ""                     # S3 bucket name (required when backend is "s3")
+    region: "us-east-1"            # AWS region (required unless endpoint is set)
+    endpoint: ""                   # Custom endpoint for MinIO / S3-compatible services
+    prefix: ""                     # Optional key prefix for all objects
+    force_path_style: false        # Set true for MinIO / S3-compatible services
+    access_key_env: ""             # Env var name for AWS access key (optional; defaults to AWS credential chain)
+    secret_key_env: ""             # Env var name for AWS secret key (optional; defaults to AWS credential chain)
   azure_blob:
-    account_name: ""
-    container_name: ""
-    connection_string_env: ""
-    prefix: ""
+    account_name: ""               # Azure storage account name (required unless connection_string_env is set)
+    container_name: ""             # Blob container name (required when backend is "azure_blob")
+    connection_string_env: ""      # Env var name holding Azure Storage connection string (optional)
+    prefix: ""                     # Optional key prefix for all blobs
   gcs:
-    bucket: ""
-    credentials_file: ""
-    prefix: ""
+    bucket: ""                     # GCS bucket name (required when backend is "gcs")
+    credentials_file: ""           # Path to service account JSON (optional; defaults to GOOGLE_APPLICATION_CREDENTIALS)
+    prefix: ""                     # Optional key prefix for all objects
   ttl:
     pypi: "168h"
     npm: "168h"
@@ -71,6 +84,7 @@ database:
     path: "/var/lib/shieldoo-gate/gate.db"
   postgres:
     # DSN should be provided via environment variable SGW_DATABASE_POSTGRES_DSN
+    # to avoid committing credentials to version control.
     dsn: ""
     max_open_conns: 25
     max_idle_conns: 5
@@ -78,7 +92,18 @@ database:
 
 scanners:
   parallel: true
-  timeout: "60s"
+  timeout: "60s"                          # outer cap per scanner per artifact; default 60s.
+                                          # Invariant: must be >= scanners.version_diff.scanner_timeout + 5s buffer
+                                          # whenever version_diff is enabled (validated at startup).
+  retry:
+    max_attempts: 3                       # bounded retries for retryable scanner errors
+    backoff: "200ms"                      # initial backoff, doubled per attempt
+  criticality:                            # per-scanner failure mode, keyed by scanner Name(); unlisted => best_effort
+    builtin-threat-feed: "required"
+    guarddog: "required"
+    ai-scanner: "required"
+    version-diff: "required"            # LOCAL REPRO: prod-like required to reproduce the breaker cascade
+    builtin-reputation: "best_effort"
   guarddog:
     enabled: true
     bridge_socket: "/tmp/shieldoo-bridge.sock"
@@ -92,101 +117,167 @@ scanners:
   # AI scanner (LLM-based). Uses Azure OpenAI gpt-5.4-mini to analyze install-time
   # scripts for malicious patterns. Synchronous, opt-in. Requires AI_SCANNER_API_KEY env var.
   ai:
-    enabled: true
-    provider: "azure_openai"
+    enabled: true                        # LOCAL REPRO: prod-like (Azure creds via docker/.env)
+    provider: "azure_openai"             # "azure_openai" (default) or "openai"
     model: "gpt-5.4-mini"
-    api_key_env: "AI_SCANNER_API_KEY"
-    timeout: "45s"
+    api_key_env: "AI_SCANNER_API_KEY"    # env var name holding the API key
+    timeout: "15s"                       # timeout per LLM API call
     max_input_tokens: 32000
     bridge_socket: "/tmp/shieldoo-bridge.sock"
-    azure_endpoint: ""
-    azure_deployment: "gpt-54-mini"
+    # Azure OpenAI settings (when provider is "azure_openai"):
+    azure_endpoint: ""                   # e.g. "https://<instance>.openai.azure.com/"
+    azure_deployment: "gpt-54-mini"      # Azure deployment name
+  # Dynamic sandbox scanner (gVisor). Runs asynchronously after artifact is served.
+  # Requires Linux with gVisor (runsc) installed. Disabled by default.
   sandbox:
     enabled: false
-    runtime_binary: "runsc"
-    timeout: "30s"
-    network_policy: "none"
-    max_concurrent: 2
+    runtime_binary: "runsc"          # path to gVisor runtime binary
+    timeout: "30s"                   # per-sandbox execution timeout
+    network_policy: "none"           # "none" (no network) or "monitor" (DNS/HTTP logging)
+    max_concurrent: 2                # max concurrent sandbox executions
+  # Typosquatting & namespace confusion detection. Built-in scanner that checks
+  # package names against popular packages using edit distance, homoglyph detection,
+  # combosquatting, and namespace confusion. Enabled by default, no external dependencies.
   typosquat:
     enabled: true
-    top_packages_count: 5000
-    max_edit_distance: 2
-    internal_namespaces: []
-    combosquat_suffixes:
+    top_packages_count: 5000          # protect top N packages per ecosystem (max 10000)
+    max_edit_distance: 2              # flag names within this distance (1-3)
+    internal_namespaces: []           # e.g. ["@mycompany/", "mycompany-"]
+    combosquat_suffixes:              # suffixes to check for combosquatting
       - "-utils"
       - "-helper"
       - "-lib"
       - "-dev"
       - "-tool"
       - "-sdk"
-    allowlist: []
-    persist_dedup_window_seconds: 300
-  # AI-driven version diff scanner (v2.0+) — opt-in. Requires scanner-bridge
-  # with AI scanner enabled. Leave disabled in this reference dev config so
-  # the stack runs without an Azure OpenAI key. To enable: set enabled: true,
-  # mode: "shadow" for ≥7 days, then flip to "active". See docs/scanners/version-diff.md.
+    allowlist: []                     # package names to skip (false positive suppression)
+    persist_dedup_window_seconds: 300 # collapse repeat synthetic-row writes within this window (default 300; 0 disables)
+  # AI-driven version diff scanner (v2.0+). Compares each new package version
+  # against the most recent CLEAN/SUSPICIOUS cached version, sends both to the
+  # scanner-bridge over gRPC, and asks the LLM (gpt-5.4-mini default) whether
+  # the changes show malicious supply-chain intent. Replaces the heuristic
+  # version_diff scanner — config keys with `thresholds:` / `entropy_sample_bytes`
+  # / `sensitive_patterns:` are now ignored.
+  #
+  # FIRST ACTIVATION: leave `mode: "shadow"` for at least 7 days. The scanner
+  # will run on every applicable artifact and persist results to
+  # `version_diff_results`, but its verdict will be forced to CLEAN so the
+  # policy engine ignores it. Operators can then evaluate FP/FN rate and AI
+  # cost before flipping to `mode: "active"`.
+  #
+  # TRUST BOUNDARY: install hooks and top-level executable code from BOTH
+  # versions of the package leave the gate node and are sent to Azure OpenAI
+  # for analysis (after secret-pattern redaction). For on-prem deployments
+  # with strict no-egress requirements, set `enabled: false`.
   version_diff:
-    enabled: false
-    mode: "shadow"
-    max_artifact_size_mb: 50
-    max_extracted_size_mb: 50
-    max_extracted_files: 5000
-    scanner_timeout: "55s"
-    bridge_socket: ""
-    allowlist: []
-    min_confidence: 0.6
-    per_package_rate_limit: 10
-    daily_cost_limit_usd: 5.0
-    circuit_breaker_threshold: 5
+    enabled: true                       # LOCAL REPRO: prod-like
+    mode: "active"                      # "shadow" (no policy effect) | "active" (verdict reaches policy)
+    max_artifact_size_mb: 50            # skip diff for artifacts larger than this (compressed)
+    max_extracted_size_mb: 50           # bridge: max aggregate bytes read across all members
+    max_extracted_files: 5000           # bridge: max member count
+    scanner_timeout: "55s"              # must be < scanners.timeout (engine outer cap, default 60s)
+    bridge_socket: ""                   # empty -> reuse scanners.guarddog.bridge_socket
+    allowlist: []                       # package names to skip (FP suppression)
+    min_confidence: 0.6                 # SUSPICIOUS below this is downgraded to CLEAN with audit_log entry
+    per_package_rate_limit: 10          # max LLM calls per package per hour; 0 = unlimited
+    daily_cost_limit_usd: 5.0           # ADVISORY in v2.0 — current implementation records spend in
+                                        # version_diff_results.ai_tokens_used but does not auto-disable
+                                        # the scanner on overrun. Use Prometheus alerting on the daily
+                                        # token-sum query (docs/scanners/version-diff.md). Auto-disable
+                                        # hard cap is deferred to v2.1.
+    circuit_breaker_threshold: 5        # consecutive bridge errors trigger 60s degraded mode
+  # Maintainer reputation & package risk scoring. Queries upstream registry APIs
+  # for metadata (maintainer history, publication patterns, download counts) and
+  # produces a composite risk score. Fail-open: metadata fetch errors never block.
   reputation:
-    enabled: true
-    cache_ttl: "24h"
-    cache_ttl_jitter: "2h"
-    timeout: "10s"
-    rate_limit: 30
-    retention_days: 30
+    enabled: false                      # opt-in; queries upstream APIs for each new package
+    cache_ttl: "24h"                    # cache metadata for this long before re-fetching
+    cache_ttl_jitter: "2h"             # random jitter added to TTL (prevents thundering herd)
+    timeout: "10s"                      # per-upstream-API request timeout
+    rate_limit: 30                      # max upstream API requests per minute per ecosystem
+    retention_days: 30                  # delete stale reputation entries older than this
     thresholds:
-      suspicious: 0.5
-      malicious: 0.8
+      suspicious: 0.5                   # score >= this → SUSPICIOUS verdict
+      malicious: 0.8                    # score >= this (capped at SUSPICIOUS per convention)
+    signals:
+      # V1 signals
+      package_age:
+        enabled: true
+        weight: 0.3                     # packages less than 30 days old
+      low_downloads:
+        enabled: true
+        weight: 0.2                     # fewer than 100 downloads
+      no_source_repo:
+        enabled: true
+        weight: 0.3                     # no source repository linked
+      dormant_reactivation:
+        enabled: true
+        weight: 0.7                     # 12+ months inactive, then new version
+      few_versions:
+        enabled: true
+        weight: 0.15                    # only 1 version published
+      no_description:
+        enabled: true
+        weight: 0.1                     # no package description
+      version_count_spike:
+        enabled: true
+        weight: 0.4                     # 10+ versions in 7 days
+      ownership_change:
+        enabled: true
+        weight: 0.8                     # maintainer list changed recently
+      # V2 signals
+      yanked_versions:
+        enabled: true
+        weight: 0.6                     # previous versions were yanked/deleted
+      unusual_versioning:
+        enabled: true
+        weight: 0.2                     # version numbers like 99.0.0 or 0.0.1
+      maintainer_email_domain:
+        enabled: true
+        weight: 0.15                    # all maintainer emails use free providers
+      first_publication:
+        enabled: true
+        weight: 0.25                    # maintainer has published only this package
+      repo_mismatch:
+        enabled: false                  # source repo name doesn't match package (requires tuning)
+        weight: 0.4
+      classifier_anomaly:
+        enabled: false                  # package classifiers appear inconsistent (requires tuning)
+        weight: 0.15
 
 policy:
-  mode: "balanced"
+  mode: ""                             # "strict" (default) | "balanced" | "permissive"
   block_if_verdict: "MALICIOUS"
-  quarantine_if_verdict: "SUSPICIOUS"
-  minimum_confidence: 0.7
-  behavioral_minimum_confidence: 0.35  # Lower threshold for behavioral scanners (guarddog, ai-scanner, etc.)
-  ai_triage:
-    enabled: true
-    timeout: "5s"
-    min_confidence: 0.7
-    cache_ttl: "168h"
-    rate_limit: 10
-    circuit_breaker_threshold: 5
+  quarantine_if_verdict: "SUSPICIOUS"  # ignored when mode is set
+  minimum_confidence: 0.7              # scanner confidence threshold for aggregator
+  behavioral_minimum_confidence: 0.35  # lower threshold for behavioral scanners (default: minimum_confidence / 2)
+  on_scan_error: "quarantine"          # required scanner failure mode: quarantine(503/reject/skip) | block | fail_open
+  retry_after: "30s"                   # Retry-After hint for pull-path 503 responses
+  ai_triage:                           # AI-assisted triage for balanced mode
+    enabled: false
+    timeout: "5s"                      # per-call timeout (no retries)
+    min_confidence: 0.7                # triage decision trust threshold
+    cache_ttl: "168h"                  # 7 days
+    rate_limit: 10                     # max triage calls per minute
+    circuit_breaker_threshold: 5       # consecutive failures before cooldown
     circuit_breaker_cooldown: "60s"
   allowlist:
     - "pypi:litellm:==1.82.6"
-    # Written in PEP 503 canonical form (hyphen). The allowlist parser
-    # canonicalizes the ecosystem name before matching, so either spelling
-    # would work — canonical is preferred because that's what artifact rows
-    # are keyed on after migration 024.
-    - "pypi:strawberry-graphql:==0.263.0"
-    - "pypi:six:==1.17.0"
   tag_mutability:
     enabled: true
-    action: "warn"
+    action: "warn"                   # "quarantine" | "warn" | "block"
     exclude_tags: ["latest", "nightly", "dev"]
-    check_on_cache_hit: false
-  # SPDX-based license policy (v1.2+). YAML here is the startup fallback; the
-  # effective policy can be edited at runtime from the admin UI (License Policy)
-  # and persisted to the global_license_policy DB row (overrides these values).
+    check_on_cache_hit: false        # adds latency to cache hits; use rescan scheduler instead
+  # License policy — blocks/warns artifacts based on SPDX IDs extracted
+  # from the SBOM. Requires sbom.enabled=true. See docs/policy.md.
   licenses:
-    enabled: true
-    blocked: []              # seed empty — populate from the UI (group presets)
-    warned: []
-    allowed: []
-    unknown_action: "allow"  # allow | warn | block
-    on_sbom_error: "allow"   # allow | warn | block
-    or_semantics: "any_allowed"
+    enabled: false
+    blocked: []                      # e.g. ["GPL-3.0-only", "AGPL-3.0-only"]
+    warned:  []                      # e.g. ["LGPL-2.1-only", "MPL-2.0"]
+    allowed: []                      # Non-empty enables whitelist mode
+    unknown_action: "allow"          # "allow" | "warn" | "block"
+    on_sbom_error: "allow"           # Action when SBOM unavailable (Trivy timeout, pre-SBOM artifact, etc.)
+    or_semantics: "any_allowed"      # "any_allowed" | "all_allowed" — SPDX OR expression evaluation
 
 threat_feed:
   enabled: true
@@ -195,13 +286,25 @@ threat_feed:
 
 rescan:
   enabled: true
-  interval: "6h"
-  batch_size: 100
-  max_concurrent: 5
+  interval: "24h"                  # How often the scheduler checks for pending rescans
+  batch_size: 100                  # Max artifacts per cycle
+  max_concurrent: 5                # Max parallel scans
+
+# Public-facing URLs for each ecosystem proxy, displayed in the admin UI
+# usage instructions. When empty, the UI shows generic <host>:port placeholders.
+# Can be overridden via env vars: SGW_PUBLIC_URLS_PYPI, SGW_PUBLIC_URLS_NPM, etc.
+public_urls:
+  pypi: ""                             # e.g. "https://pypi.gate.example.com"
+  npm: ""                              # e.g. "https://npm.gate.example.com"
+  nuget: ""                            # e.g. "https://nuget.gate.example.com"
+  docker: ""                           # e.g. "https://cr.gate.example.com"
+  maven: ""                            # e.g. "https://maven.gate.example.com"
+  rubygems: ""                         # e.g. "https://gems.gate.example.com"
+  gomod: ""                            # e.g. "https://go.gate.example.com"
 
 log:
-  level: "debug"
-  format: "text"
+  level: "info"
+  format: "text"    # "text" for human-readable, "json" for structured logging
 
 # OIDC authentication for admin API (opt-in, disabled by default).
 # When disabled, the admin API is fully open — suitable for development/testing.
@@ -211,134 +314,133 @@ auth:
   issuer_url: ""                     # OIDC provider URL, e.g. "https://accounts.google.com"
   client_id: ""                      # OAuth2 client ID from your OIDC provider
   client_secret_env: "SGW_OIDC_CLIENT_SECRET"  # Env var holding the client secret
-  redirect_url: "http://localhost:8080/auth/callback" # e.g. "https://shieldoo-gate.example.com:8080/auth/callback"
+  redirect_url: ""                   # MUST be https:// in production (e.g. "https://shieldoo-gate.example.com/auth/callback").
+                                     # Validation rejects a non-https redirect_url unless cookie_insecure=true.
   scopes: ["openid", "email", "profile"]
-  cookie_insecure: true              # Local HTTP dev only — allows the http redirect_url above.
-                                     # MUST be false (default) in production so session cookies are Secure.
+  session_ttl: "15m"                 # Admin UI session lifetime. The cookie holds an opaque
+                                     # server-side session ID (not the raw ID token), so logout
+                                     # and expiry are enforced server-side and a stolen cookie can be revoked.
+  cookie_insecure: false             # Local-HTTP-dev ONLY opt-out. Default false → auth cookies are Secure.
+  allowed_origins: []                # Optional explicit Origin allowlist for the CSRF guard on
+                                     # cookie-authenticated mutations. Empty (default) requires same-origin.
+                                     #   - "https://shieldoo-gate.example.com"
 
 # API key authentication for proxy endpoints (pip, npm, docker, nuget, gem, go).
-# When disabled, proxy endpoints are open — protected by network segmentation only.
+# When disabled (default), proxy endpoints are open — protected by network segmentation only.
 # When enabled, all proxy requests require a valid API key via HTTP Basic Auth.
 # Keys are either per-user PATs (generated via admin API) or a global shared token.
-#
-# This reference config has auth ENABLED + a well-known test token so the
-# examples/ projects can exercise the full Basic-auth → project-label flow
-# without any extra setup. For production, switch to PATs (or rotate the
-# global token) and never hard-code the token in a committed config.
 proxy_auth:
-  enabled: true
-  global_token_env: "SGW_PROXY_TOKEN"  # Env var holding the global shared token
+  enabled: false
+  global_token_env: "SGW_PROXY_TOKEN"  # Env var holding the global shared token (optional)
 
-# Project registry — derives a project label from the HTTP Basic-auth username.
-# This dev config runs in **strict** mode so per-project license-policy overrides
-# are honoured (the S-01 anti-spoofing guard requires strict). Bootstrap labels
-# below are pre-provisioned on every startup so the examples/ smoke-tests, the
-# self-build (shieldoo-gate), and CI (ci-bot) can authenticate immediately
-# without an admin POST /projects.
+# Project registry — per-team / per-service segmentation of proxy usage.
+# The Basic auth USERNAME is interpreted as the project label (lowercased +
+# regex-validated). See docs/index.md#client-authentication--how-basic-auth-maps-to-projects-v12.
 projects:
-  mode: strict              # lazy | strict
-  default_label: default    # fallback when Basic-auth username is empty
-  max_count: 1000
-  lazy_create_rate: 10
-  cache_size: 512
-  cache_ttl: 5m
-  usage_flush_period: 30s
+  mode: "lazy"                 # "lazy" (auto-create) | "strict" (reject unknown)
+  default_label: "default"     # Fallback for empty Basic auth username
+  # label_regex: ""            # Optional custom regex (default: ^[a-z0-9][a-z0-9_-]{0,63}$)
+  max_count: 1000              # Hard cap (0 = unlimited)
+  lazy_create_rate: 10         # New projects per hour per identity (PAT hash)
+  cache_size: 512              # LRU cache entries (hot-path optimization)
+  cache_ttl: "5m"              # LRU entry TTL
+  usage_flush_period: "30s"    # Debounced upsert interval for artifact_project_usage
+  # Bootstrap labels — pre-provisioned on every startup (idempotent). Required
+  # for strict mode + ad-hoc clients (CI, build pipelines) that can't POST
+  # /projects themselves. Lazy mode would auto-create on first use, but listing
+  # them here also makes the registry browsable in the admin UI before any
+  # traffic flows.
   bootstrap_labels:
     - default
-    - shieldoo-gate    # used by docker/Dockerfile (SGW_USER) for self-build dogfood
-    - python-demo      # examples/python-requests
-    - npm-demo         # examples/npm-chalk
-    - dotnet-demo      # examples/dotnet-json
-    - maven-demo       # examples/maven-example
-    - rubygems-demo    # examples/rubygems-example
-    - go-demo          # examples/go-example
-    - ci-bot           # tests/e2e-shell — generic CI/E2E identity
+    - shieldoo-gate          # used by docker/Dockerfile (SGW_USER) for self-build dogfood
+    - ci-bot                 # generic CI/E2E identity
 
-# SBOM generation — CycloneDX JSON produced from the single-run Trivy scan
-# and persisted asynchronously to the active blob backend.
+# SBOM generation — when enabled, Trivy emits CycloneDX output including
+# licenses. See docs/scanners.md.
 sbom:
-  enabled: true
-  format: cyclonedx-json
-  async_write: true
-  ttl: 90d
+  enabled: false               # Set true to generate + persist CycloneDX SBOMs
+  format: "cyclonedx-json"
+  async_write: true            # Write blob in a goroutine (don't block request path)
+  ttl: "30d"                   # Retention hint (cleanup scheduler TBD)
 
-# Vulnerability scan — push-from-CI feature (v1.3+). Components/projects can
-# upload SBOMs via shdg CLI or POST /api/v1/projects/{label}/components/{name}/scans.
-# Trivy + OSV scan the SBOM and produce findings; the UI exposes ignore/release
-# workflows and per-project license-policy overrides. Without this block enabled
-# the /api/v1/vulnerabilities/* endpoints return 404 and the UI tab is hidden.
+alerts:
+  webhook:
+    enabled: false
+    url: "https://hooks.example.com/shieldoo"
+    secret_env: "SGW_WEBHOOK_SECRET"
+    allow_insecure: false
+    on: ["BLOCKED", "QUARANTINED", "TAG_MUTATED"]
+  slack:
+    enabled: false
+    webhook_env: "SGW_SLACK_WEBHOOK_URL"
+    on: ["BLOCKED", "QUARANTINED"]
+  email:
+    enabled: false
+    host: "smtp.example.com"
+    port: 587
+    from: "shieldoo@example.com"
+    to: ["security@example.com"]
+    username_env: "SGW_SMTP_USER"
+    password_env: "SGW_SMTP_PASS"
+    use_tls: true
+    tls_skip_verify: false
+    batch_interval: "30s"
+    on: ["QUARANTINED", "TAG_MUTATED"]
+
+# Vulnerability scan — push-from-CI CycloneDX SBOM scanning with OSV+Trivy.
+# When enabled, exposes /api/v1/projects/:label/components/:name/scans for CI
+# uploads, plus the /vulnerabilities admin API and UI.
 vuln_scan:
-  enabled: true
-  max_sbom_bytes: 10485760           # 10 MiB
-  max_components: 10000
-  max_components_per_project: 200
-  stale_threshold: "30d"             # mark scans older than this as STALE
+  enabled: false
+  max_sbom_bytes: 524288000       # 500 MiB hard cap on SBOM upload size (image SBOMs can be large)
+  max_components: 500000          # max CycloneDX components in one SBOM
+  max_components_per_project: 200 # per-project cap on Component rows
+  max_concurrent_scans: 4         # cap on parallel ScanService.Run goroutines (uploads + rescans)
+  stale_threshold: "720h"         # 30d — components older than this surface "stale"
   rescan:
-    interval: "6h"                   # background rescan cadence
+    interval: "6h"
     max_concurrent: 4
-    timeout: "5m"                    # per-scan-run timeout
+    timeout: "5m"
   retention:
-    keep_n: 100                      # keep last N scan_runs per component
-    interval: "1h"                   # retention sweep cadence
+    keep_n: 100                   # keep most recent N runs per Component
+    interval: "1h"
     grace_period: "5m"
   scanners:
     osv:
       api_url: "https://api.osv.dev"
       timeout: "30s"
-      chunk_size: 100                # max packages per OSV /querybatch
-      rate_limit: 5.0                # req/sec to api.osv.dev
+      chunk_size: 1000
       cache_ttl: "1h"
     trivy:
-      binary_path: "trivy"           # uses image's pinned trivy
+      binary_path: "trivy"
       timeout: "5m"
-      use_server_mode: false         # v1.1+ optional client/server split
+      use_server_mode: false      # v1.1 — long-running trivy server
   alerts:
     aggregation_window: "5m"
     aggregation_min_events: 3
     ignore_expired_notify_creator: true
   rate_limit:
-    uploads_per_hour: 60             # per-token budget; bursts allowed
-    ignores_per_hour: 30             # per (token, component)
+    uploads_per_hour: 60
+    ignores_per_hour: 30
     ignores_global_per_hour: 200
-    rescans_per_hour: 6              # per (token, component)
+    rescans_per_hour: 6
 
-# AI features — master flag for AI-assisted UX (ignore-reason drafter, anomaly
-# detection). Disabled by default in this reference dev config; requires Azure
-# OpenAI credentials to be useful. Flip enabled: true and fill azure_openai
-# block to activate.
+# AI-assisted surfaces (anomaly detection, fix-path insights, ignore-reason drafting).
+# Default OFF for production. Enable per deployment after providing Azure OpenAI creds.
 ai_features:
   enabled: false
   ignore_reason_drafter:
     enabled: false
     daily_token_budget: 5000000
     max_draft_tokens: 200
-    rate_limit_per_minute: 1.0
+    rate_limit_per_minute: 1
   anomaly_detection:
-    enabled: false
+    enabled: true
     baseline_days: 30
     min_baseline_samples: 7
     sigma_threshold: 3.0
   azure_openai:
     endpoint: ""
-    api_key_env: "AI_FEATURES_API_KEY"
+    api_key_env: "AZURE_OPENAI_API_KEY"
     deployment: ""
-    api_version: "2024-08-01-preview"
-
-# Public-facing URLs for each ecosystem proxy, displayed in the admin UI
-# usage instructions. Empty = generic <host>:port placeholders.
-public_urls:
-  pypi: ""
-  npm: ""
-  nuget: ""
-  docker: ""
-  maven: ""
-  rubygems: ""
-  gomod: ""
-
-alerts:
-  webhook:
-    enabled: false
-  slack:
-    enabled: false
-  email:
-    enabled: false
+    api_version: "2024-02-15-preview"

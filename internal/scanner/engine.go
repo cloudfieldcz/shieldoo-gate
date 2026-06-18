@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -270,7 +271,16 @@ func (e *Engine) scanOne(ctx context.Context, sc Scanner, artifact Artifact) (Sc
 	// of unscannable or rate-limited artifacts open the circuit and fail
 	// unrelated, normal artifacts as overload until cooldown. Both still fail
 	// closed (returned below); they just must not trip scanner-health breaking.
-	if breaker != nil && lastErr != nil && lastErr.CountsTowardBreaker() {
+	//
+	// A canceled REQUEST context is likewise excluded: it means the caller/client
+	// went away (e.g. an npm client disconnecting after a 503), not that the
+	// scanner backend is unhealthy. Counting cancellations let a 503 burst become
+	// self-reinforcing — disconnects produced context.Canceled errors (classified
+	// retryable) that opened the breaker and failed every artifact closed. A
+	// context deadline is NOT excluded: an exceeded scan deadline is a genuine
+	// scanner-slowness signal that should still count.
+	requestCanceled := errors.Is(ctx.Err(), context.Canceled)
+	if breaker != nil && lastErr != nil && lastErr.CountsTowardBreaker() && !requestCanceled {
 		breaker.recordFailure()
 	}
 	return ScanResult{}, lastErr

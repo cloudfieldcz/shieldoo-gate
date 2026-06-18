@@ -843,11 +843,15 @@ func TestScan_ConsecutiveBridgeErrors_OpensCircuit(t *testing.T) {
 	// Third call: circuit open, no bridge call.
 	res, scanRunErr := s.Scan(context.Background(), art)
 	assert.Equal(t, callsAfter2, mb.calls.Load(), "circuit must short-circuit further bridge calls")
-	// Circuit-open is overload, surfaced as a classified scanner error so
-	// required-mode fails closed; the result itself stays CLEAN for best-effort.
+	// Circuit-open is THROTTLED, not overload: version-diff's own breaker is local
+	// self-protection and must not also feed the engine's per-scanner breaker
+	// (double-breaking the same scanner cascaded to a full SCAN_UNAVAILABLE). It
+	// is still surfaced as a classified scanner error so required-mode fails
+	// closed; the result itself stays CLEAN for best-effort.
 	var scanErr *scanner.ScanError
 	require.ErrorAs(t, scanRunErr, &scanErr)
-	assert.Equal(t, scanner.ErrKindOverload, scanErr.Kind)
+	assert.Equal(t, scanner.ErrKindThrottled, scanErr.Kind)
+	assert.False(t, scanErr.CountsTowardBreaker(), "version-diff's own circuit must not feed the engine breaker")
 	assert.Equal(t, scanner.VerdictClean, res.Verdict)
 }
 

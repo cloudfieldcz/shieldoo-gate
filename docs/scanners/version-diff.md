@@ -28,7 +28,12 @@ as `CLEAN`, `SUSPICIOUS`, or `MALICIOUS`. The Go side maps the verdict to a
     health signal, so (like `terminal`) it is excluded from the scanner-wide
     health circuit breaker — otherwise a single hot package hammering its quota
     would open the breaker and fail unrelated, healthy packages as overload.
-  - The consecutive-failure circuit breaker is open — `overload`.
+  - The consecutive-failure circuit breaker is open — `throttled`. This is
+    version-diff's OWN local self-protection breaker; classifying it `throttled`
+    (not `overload`) keeps it out of the engine's per-scanner health breaker, so
+    version-diff's internal breaker opening cannot *also* trip the engine breaker
+    and fail every component (the engine breaker still opens independently on
+    genuine `retryable` errors).
   - The previous-version DB lookup itself fails (lock, timeout, schema) —
     `retryable`. Only `sql.ErrNoRows` means "no previous version"; any other
     error leaves the predecessor's existence unknown, so the scan must not
