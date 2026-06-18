@@ -26,6 +26,41 @@ GUARDDOG_VERSION = "2.9.0"
 # AI scanner is optional — only loaded when enabled via environment.
 AI_SCANNER_ENABLED = os.environ.get("AI_SCANNER_ENABLED", "false").lower() == "true"
 
+# gRPC server thread-pool size = the number of scans that may run concurrently.
+# Each worker can spawn a GuardDog semgrep-core child, which is CPU- and
+# memory-heavy; on a small host a burst (e.g. a full `npm ci`) fanning out to
+# all 64 default workers oversubscribes the CPU, so individual scans slow past
+# the gate's scanner timeout and a required scanner fails closed (503). Cap it
+# via BRIDGE_MAX_WORKERS to match the host so each scan gets enough CPU to
+# finish inside the deadline.
+DEFAULT_MAX_WORKERS = 64
+
+
+def _max_workers_from_env():
+    """Resolve gRPC worker-pool size from BRIDGE_MAX_WORKERS (default 64).
+
+    A non-numeric or non-positive value falls back to the default rather than
+    crashing the bridge on a typo'd deployment env var.
+    """
+    raw = os.environ.get("BRIDGE_MAX_WORKERS", "")
+    if not raw:
+        return DEFAULT_MAX_WORKERS
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "BRIDGE_MAX_WORKERS=%r is not an integer; using default %d",
+            raw, DEFAULT_MAX_WORKERS,
+        )
+        return DEFAULT_MAX_WORKERS
+    if value <= 0:
+        logger.warning(
+            "BRIDGE_MAX_WORKERS=%d is not positive; using default %d",
+            value, DEFAULT_MAX_WORKERS,
+        )
+        return DEFAULT_MAX_WORKERS
+    return value
+
 
 class ScannerBridgeServicer(scanner_pb2_grpc.ScannerBridgeServicer):
     def __init__(self):
@@ -300,6 +335,7 @@ class ScannerBridgeServicer(scanner_pb2_grpc.ScannerBridgeServicer):
 
 def serve():
     socket_path = os.environ.get("BRIDGE_SOCKET", "/tmp/shieldoo-bridge.sock")
+    max_workers = _max_workers_from_env()
 
     # Clean up stale socket
     if os.path.exists(socket_path):
@@ -307,13 +343,14 @@ def serve():
 
     # Isolate GuardDog scratch into a bridge-owned dir and start the age-based
     # janitor BEFORE serving — tempfile.tempdir must be set once, before any of
-    # the 64 scan threads run (Constraint 2). The janitor backstops the hard-kill
+    # the scan threads run (Constraint 2). The janitor backstops the hard-kill
     # leak the per-scan cleanup cannot cover.
     scratch_dir = scratch_janitor.setup_scratch_dir()
     if scratch_dir:
         scratch_janitor.start_scratch_janitor(scratch_dir)
 
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=64))
+    logger.info("Scanner bridge starting with max_workers=%d", max_workers)
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=max_workers))
     scanner_pb2_grpc.add_ScannerBridgeServicer_to_server(
         ScannerBridgeServicer(), server
     )

@@ -49,6 +49,10 @@ services:
       - gate-cache:/var/cache/shieldoo-gate:ro
     environment:
       BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
+      # Concurrent-scan cap (default 64). Lower it on a small host so a burst
+      # of parallel scans doesn't oversubscribe the CPU and trip the gate's
+      # required-scanner timeout. See docs/deployment.md.
+      BRIDGE_MAX_WORKERS: "${BRIDGE_MAX_WORKERS:-64}"
       AI_SCANNER_ENABLED: "${AI_SCANNER_ENABLED:-false}"
       AI_SCANNER_API_KEY: "${AI_SCANNER_API_KEY:-}"
       AI_SCANNER_PROVIDER: "${AI_SCANNER_PROVIDER:-azure_openai}"
