@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -141,20 +142,7 @@ func (s *VersionDiffScanner) Scan(ctx context.Context, artifact scanner.Artifact
 		return s.cleanResult(start, nil), nil
 	}
 
-	// 2. Compressed-size guard. "Couldn't scan", not "nothing to scan": the diff
-	// is deliberately skipped for resource reasons, but there IS content to vet.
-	// Surface a terminal scanner error (permanent for this artifact — retrying
-	// won't shrink it) so required-mode fails closed. This closes the "pad the
-	// package past the size limit to skip the diff" evasion; best-effort mode
-	// still degrades to fail-open in the engine.
-	maxBytes := int64(s.cfg.MaxArtifactSizeMB) * 1024 * 1024
-	if maxBytes > 0 && artifact.SizeBytes > maxBytes {
-		log.Debug().Str("artifact", artifact.ID).Int64("size", artifact.SizeBytes).
-			Msg("version-diff: artifact exceeds max size, returning terminal error")
-		return s.scanErrorResult(start, scanner.ErrKindTerminal, "artifact exceeds max size")
-	}
-
-	// 3. Sub-timeout
+	// 2. Sub-timeout
 	timeout := defaultScannerTimeout
 	if s.cfg.ScannerTimeout != "" {
 		if d, err := time.ParseDuration(s.cfg.ScannerTimeout); err == nil && d > 0 {
@@ -164,7 +152,7 @@ func (s *VersionDiffScanner) Scan(ctx context.Context, artifact scanner.Artifact
 	scanCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// 4. DB query: previous CLEAN/SUSPICIOUS version
+	// 3. DB query: previous CLEAN/SUSPICIOUS version
 	var prevID, prevSHA256, prevVersion string
 	err := s.db.QueryRowContext(scanCtx,
 		`SELECT a.id, a.sha256, a.version FROM artifacts a
@@ -174,18 +162,46 @@ func (s *VersionDiffScanner) Scan(ctx context.Context, artifact scanner.Artifact
 		 ORDER BY a.cached_at DESC LIMIT 1`,
 		string(artifact.Ecosystem), artifact.Name, artifact.ID,
 	).Scan(&prevID, &prevSHA256, &prevVersion)
-	if err != nil {
-		// No previous version — nothing to diff. Do not insert a row.
+	if errors.Is(err, sql.ErrNoRows) {
+		// No previous version — genuinely nothing to diff. Do not insert a row.
 		return s.cleanResult(start, nil), nil
 	}
+	if err != nil {
+		// The lookup itself failed (DB lock, timeout, schema). We cannot tell
+		// whether a previous version exists, so we must NOT assume "nothing to
+		// diff" and silently serve CLEAN — that would also let an oversized update
+		// ride a transient DB error past the terminal size guard below. Surface a
+		// retryable scanner error so a required version-diff fails closed (and a
+		// best-effort one degrades to fail-open in the engine).
+		log.Debug().Err(err).Str("artifact", artifact.ID).
+			Msg("version-diff: previous-version lookup failed, returning retryable error")
+		return s.scanErrorResult(start, scanner.ErrKindRetryable, fmt.Sprintf("previous-version lookup failed: %v", err))
+	}
 
-	// 5. DB idempotency cache lookup. Use the model name we expect plus an
+	// 4. DB idempotency cache lookup. Use the model name we expect plus an
 	//    "any prompt version" wildcard match — we want to hit cache for any
 	//    prompt the bridge has used. Most-recent row wins.
 	if cached, hit := s.lookupCache(scanCtx, artifact.ID, prevID); hit {
 		log.Debug().Str("artifact", artifact.ID).Str("prev", prevID).
 			Str("cached_verdict", cached.Verdict).Msg("version-diff: cache hit")
 		return s.toResult(start, cached, true), nil
+	}
+
+	// 5. Compressed-size guard — deliberately AFTER the previous-version lookup
+	// and cache check. "Couldn't scan", not "nothing to scan": at this point a
+	// real diff is owed (a previous version exists and isn't cached), but the new
+	// artifact is too large to ship to the bridge. Surface a terminal scanner
+	// error (permanent for this artifact — retrying won't shrink it) so
+	// required-mode fails closed; this closes the "pad the package past the size
+	// limit to skip the diff" evasion. A first-seen oversized package has no
+	// previous version and already returned CLEAN above — there is nothing to
+	// evade, so it must NOT fail closed. Best-effort mode (the default) still
+	// degrades to fail-open in the engine.
+	maxBytes := int64(s.cfg.MaxArtifactSizeMB) * 1024 * 1024
+	if maxBytes > 0 && artifact.SizeBytes > maxBytes {
+		log.Debug().Str("artifact", artifact.ID).Int64("size", artifact.SizeBytes).
+			Msg("version-diff: artifact exceeds max size, returning terminal error")
+		return s.scanErrorResult(start, scanner.ErrKindTerminal, "artifact exceeds max size")
 	}
 
 	// 6. cache.Get(prevID) + SHA256 verify
@@ -197,13 +213,17 @@ func (s *VersionDiffScanner) Scan(ctx context.Context, artifact scanner.Artifact
 		return s.cleanResult(start, fmt.Errorf("sha256 mismatch for %s: %w", prevID, err)), nil
 	}
 
-	// 7. Per-package rate limit. Overload, not "nothing to scan": surface a
+	// 7. Per-package rate limit. Throttled, not "nothing to scan": surface a
 	// classified scanner error so operators who mark version-diff `required`
 	// fail closed instead of serving the artifact as silently clean. Best-effort
-	// (the default) still degrades to fail-open in the engine.
+	// (the default) still degrades to fail-open in the engine. Classified
+	// `throttled`, NOT `overload`: this is intentional local backpressure on one
+	// package, so it must not count toward the engine's scanner-wide circuit
+	// breaker — otherwise a single hot package hammering its quota would open the
+	// breaker and fail unrelated, healthy packages.
 	if !s.rateLimiter.allow(artifact.Name) {
-		log.Debug().Str("package", artifact.Name).Msg("version-diff: rate-limited, returning overload error")
-		return s.scanErrorResult(start, scanner.ErrKindOverload, "rate-limited")
+		log.Debug().Str("package", artifact.Name).Msg("version-diff: rate-limited, returning throttled error")
+		return s.scanErrorResult(start, scanner.ErrKindThrottled, "rate-limited")
 	}
 
 	// 8. Circuit breaker — same overload semantics as the rate-limit guard.
@@ -569,8 +589,10 @@ func (s *VersionDiffScanner) cleanResult(start time.Time, err error) scanner.Sca
 }
 
 // scanErrorResult builds a classified scanner error for "couldn't scan"
-// conditions: transient overload (circuit open, rate limited) and the terminal
-// size guard (artifact too large to ever diff). Unlike cleanResult's fail-open
+// conditions: backend overload (circuit open), per-package throttling (rate
+// limit), and the terminal size guard (artifact too large to ever diff). The
+// kind matters downstream — only overload counts toward the engine's
+// scanner-health breaker; throttled and terminal do not. Unlike cleanResult's fail-open
 // path, the error lands in ScanReport.Errored so required-mode fails closed
 // (e.g. closing the "pad the package past the size limit to skip the diff"
 // evasion); the result still carries VerdictClean so best-effort mode keeps

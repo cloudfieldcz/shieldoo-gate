@@ -16,21 +16,47 @@ as `CLEAN`, `SUSPICIOUS`, or `MALICIOUS`. The Go side maps the verdict to a
 - Per-artifact, in parallel with all other enabled scanners.
 - Skipped (returns CLEAN, no error — genuinely "nothing to scan") when:
   - The package name is in the configured `allowlist`.
-  - No previous CLEAN/SUSPICIOUS version exists in the artifacts table.
+  - No previous CLEAN/SUSPICIOUS version exists in the artifacts table. This
+    includes a **first-seen package that exceeds `max_artifact_size_mb`** —
+    with no predecessor there is no diff to perform, so the size guard does not
+    apply and the scan is a genuine no-op (not a fail-closed condition).
   - An idempotent cache hit is found in `version_diff_results` for the
     `(new artifact, previous artifact, model, prompt version)` tuple.
 - "Couldn't scan" (returns CLEAN **with a classified scanner error**) when:
-  - The per-package rate limiter has exhausted the hourly quota — `overload`.
+  - The per-package rate limiter has exhausted the hourly quota — `throttled`.
+    This is intentional local backpressure on one package, **not** a backend
+    health signal, so (like `terminal`) it is excluded from the scanner-wide
+    health circuit breaker — otherwise a single hot package hammering its quota
+    would open the breaker and fail unrelated, healthy packages as overload.
   - The consecutive-failure circuit breaker is open — `overload`.
-  - Compressed artifact size exceeds `max_artifact_size_mb` (default 50 MB) —
-    `terminal` (permanent for that artifact; not retried).
+  - The previous-version DB lookup itself fails (lock, timeout, schema) —
+    `retryable`. Only `sql.ErrNoRows` means "no previous version"; any other
+    error leaves the predecessor's existence unknown, so the scan must not
+    assume "nothing to diff" and serve CLEAN (which would also let an oversized
+    update slip past the terminal size guard below).
+  - Compressed artifact size exceeds `max_artifact_size_mb` (default 50 MB)
+    **and a previous version exists to diff against** — `terminal` (permanent
+    for that artifact; not retried). The guard is evaluated only after the
+    previous-version and cache lookups, so it fires solely when a real diff is
+    being skipped.
+  - The bridge returns verdict `UNKNOWN` (it could not classify the pair — e.g.
+    the diff inputs were missing or the LLM response failed to parse) —
+    `retryable`. UNKNOWN is a scanner error, never a clean result, and is never
+    persisted to the idempotency cache.
 
   The error lands in `ScanReport.Errored`, so if an operator marks
   `version-diff` as `required` (see [Scanners](../scanners.md#scan-engine)),
   these conditions fail closed per `policy.on_scan_error` instead of serving
   the artifact as silently clean — in particular, the size guard closes the
-  "pad the package past the limit to skip the diff" evasion. In the default
+  "pad an update past the limit to skip the diff" evasion. In the default
   best-effort mode the engine still degrades them to fail-open.
+
+  `terminal` and `throttled` errors fail closed for a `required` scanner but,
+  unlike `overload`/`retryable` errors, are **not** counted against the
+  scanner's health circuit breaker — an artifact that is permanently too large,
+  or one package hitting its per-package quota, says nothing about backend
+  health, so a burst of either cannot open the breaker and fail unrelated,
+  healthy artifacts.
 
 ## Deployment requirement: shared cache mount
 
@@ -46,8 +72,10 @@ volumes:
   - gate-cache:/var/cache/shieldoo-gate:ro     # NEW: required for version-diff (>= v2.0)
 ```
 
-Without this mount, every diff scan raises `FileNotFoundError`, the bridge
-returns `UNKNOWN`, and the Go scanner fail-opens. The shipped compose files
+Without this mount, every diff scan raises `FileNotFoundError` and the bridge
+returns `UNKNOWN`, which the Go scanner treats as a `retryable` scanner error
+(best-effort version-diff degrades to fail-open; a `required` version-diff fails
+closed). The shipped compose files
 (`tests/e2e-shell/docker-compose.e2e.yml`, `docker/docker-compose.yml`,
 `.deploy/compose.yaml`) already include the mount; custom deployments need
 to mirror it.
@@ -88,7 +116,7 @@ scanners:
 | `SUSPICIOUS` (confidence ≥ `min_confidence`) | `SUSPICIOUS` | Finding severity HIGH (≥ 0.75) or MEDIUM |
 | `SUSPICIOUS` (confidence < `min_confidence`) | `CLEAN` | Audit log entry `SCANNER_VERDICT_DOWNGRADED`, reason `below-min-confidence` |
 | `MALICIOUS` | `SUSPICIOUS` | **Always downgraded.** Finding severity CRITICAL. Audit log entry, reason `asymmetric-diff-downgrade` |
-| `UNKNOWN` (parse error, timeout, fail-open) | `CLEAN` (fail-open) | **NOT persisted** — cache integrity protected |
+| `UNKNOWN` (bridge could not classify the pair) | `CLEAN` payload **+ `retryable` scanner error** | **NOT persisted.** `required` version-diff fails closed (503); best-effort degrades to fail-open in the engine |
 
 In `mode: "shadow"`, the final `ScanResult.Verdict` is forced to `CLEAN`
 regardless of the mapping above. The DB row preserves the raw `ai_verdict`

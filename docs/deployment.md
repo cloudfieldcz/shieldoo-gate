@@ -366,7 +366,7 @@ shieldoo_gate_cache_hits_total{ecosystem}              # counter
 shieldoo_gate_cache_misses_total{ecosystem}            # counter
 shieldoo_gate_blocked_total{ecosystem, reason}         # counter
 shieldoo_gate_quarantined_total{ecosystem}             # counter
-shieldoo_gate_scanner_errors_total{scanner}            # counter
+shieldoo_gate_scanner_errors_total{scanner, kind}      # counter (kind: retryable|terminal|overload|throttled)
 ```
 
 ## Security Considerations

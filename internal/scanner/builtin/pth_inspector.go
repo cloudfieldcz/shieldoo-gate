@@ -37,6 +37,16 @@ func (p *PTHInspector) HealthCheck(_ context.Context) error { return nil }
 func (p *PTHInspector) Scan(_ context.Context, artifact scanner.Artifact) (scanner.ScanResult, error) {
 	start := time.Now()
 
+	// pth-inspector only applies to Python wheels (.whl). A wheel is a zip whose
+	// site-packages .pth files are auto-executed at interpreter start-up; sdists
+	// (.tar.gz) and other PyPI artifacts are not wheels — and not even zip
+	// archives, so zip.OpenReader fails on them. Skip non-wheel artifacts cleanly
+	// so that marking pth-inspector `required` does not fail closed on every
+	// normal sdist.
+	if !strings.HasSuffix(strings.ToLower(wheelFilename(artifact)), ".whl") {
+		return buildResult(p.Name(), start, scanner.VerdictClean, 1.0, nil), nil
+	}
+
 	r, err := zip.OpenReader(artifact.LocalPath)
 	if err != nil {
 		return scanner.ScanResult{
@@ -78,6 +88,25 @@ func (p *PTHInspector) Scan(_ context.Context, artifact scanner.Artifact) (scann
 		return buildResult(p.Name(), start, scanner.VerdictMalicious, 0.95, findings), nil
 	}
 	return buildResult(p.Name(), start, scanner.VerdictClean, 1.0, nil), nil
+}
+
+// wheelFilename recovers the artifact's original filename for the wheel-suffix
+// check. Filename is the explicit, preferred source (set by the PyPI adapter on
+// fresh scans). When it is unset — e.g. the rescan scheduler builds
+// scanner.Artifact without it — the PyPI artifact ID still encodes the original
+// filename as its 4th colon segment (ecosystem:name:version:filename), which is
+// reliable where LocalPath is not: cache backends hand back extensionless temp
+// paths (shieldoo-s3-cache-*, *.tmp), and an extensionless path would otherwise
+// look like a non-wheel and let a malicious cached wheel be skipped as clean on
+// rescan. LocalPath is only a last resort.
+func wheelFilename(a scanner.Artifact) string {
+	if a.Filename != "" {
+		return a.Filename
+	}
+	if parts := strings.SplitN(a.ID, ":", 4); len(parts) == 4 && parts[3] != "" {
+		return parts[3]
+	}
+	return a.LocalPath
 }
 
 // isPTHExecutable returns true when a .pth line contains code that would be
