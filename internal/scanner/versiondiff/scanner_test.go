@@ -550,7 +550,40 @@ func TestScan_BridgeError_FailsOpen(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, scanner.VerdictClean, res.Verdict)
-	assert.Error(t, res.Error)
+	// TRUE fail-open: a transient bridge error means "couldn't compare", not
+	// "found something bad". It must NOT surface res.Error — otherwise the engine
+	// promotes it to a counted scan error (engine.go scanOne), failing the
+	// required version-diff scanner closed and tripping its breaker (ADR-013).
+	assert.Nil(t, res.Error, "transient bridge error must fail open with no surfaced scanner error")
+}
+
+func TestScan_PreviousBlobMissingFromCache_FailsOpenNoError(t *testing.T) {
+	// The previous-version DB row exists (the SELECT succeeds) but its cached blob
+	// is missing — a transient/operational condition, not a malicious signal.
+	// version-diff must fail OPEN (CLEAN, no surfaced error) so the engine does
+	// not count it toward the breaker. This is the dominant real-world trigger of
+	// the cascade reproduced in docs/scanners/version-diff.md.
+	mb := &mockBridge{
+		scanFn: func(_ context.Context, _ *pb.DiffScanRequest) (*pb.DiffScanResponse, error) {
+			return &pb.DiffScanResponse{Verdict: "CLEAN", Confidence: 0.9}, nil
+		},
+	}
+	sock := startMockBridge(t, mb)
+	db := newTestDB(t)
+	// Cache deliberately does NOT contain the previous blob "pypi:x:0.9".
+	cs := newFakeCache(t, map[string][]byte{})
+	seedArtifactPair(t, db, "pypi", "x",
+		"pypi:x:1.0", "1.0", "n",
+		"pypi:x:0.9", "0.9", "deadbeef", true)
+
+	s, _ := NewVersionDiffScanner(db, cs, defaultCfg(sock))
+	defer s.Close()
+	res, err := s.Scan(context.Background(), scanner.Artifact{
+		ID: "pypi:x:1.0", Ecosystem: scanner.EcosystemPyPI, Name: "x", Version: "1.0", SHA256: "n",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, scanner.VerdictClean, res.Verdict)
+	assert.Nil(t, res.Error, "predecessor cache-miss must fail open with no surfaced scanner error")
 }
 
 func TestScan_BridgeReturnsMaliciousLowConfidence_StillDowngradesToSuspicious(t *testing.T) {

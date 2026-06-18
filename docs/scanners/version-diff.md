@@ -29,11 +29,10 @@ as `CLEAN`, `SUSPICIOUS`, or `MALICIOUS`. The Go side maps the verdict to a
     health circuit breaker — otherwise a single hot package hammering its quota
     would open the breaker and fail unrelated, healthy packages as overload.
   - The consecutive-failure circuit breaker is open — `throttled`. This is
-    version-diff's OWN local self-protection breaker; classifying it `throttled`
-    (not `overload`) keeps it out of the engine's per-scanner health breaker, so
-    version-diff's internal breaker opening cannot *also* trip the engine breaker
-    and fail every component (the engine breaker still opens independently on
-    genuine `retryable` errors).
+    version-diff's OWN local self-protection breaker (backend protection after
+    repeated bridge errors). version-diff is an **enrichment-class** scanner and
+    has no engine per-scanner breaker at all ([ADR-013](../adr/ADR-013-enrichment-scanner-breaker-exemption.md));
+    this internal breaker is its sole backend-health guard.
   - The previous-version DB lookup itself fails (lock, timeout, schema) —
     `retryable`. Only `sql.ErrNoRows` means "no previous version"; any other
     error leaves the predecessor's existence unknown, so the scan must not
@@ -56,12 +55,27 @@ as `CLEAN`, `SUSPICIOUS`, or `MALICIOUS`. The Go side maps the verdict to a
   "pad an update past the limit to skip the diff" evasion. In the default
   best-effort mode the engine still degrades them to fail-open.
 
-  `terminal` and `throttled` errors fail closed for a `required` scanner but,
-  unlike `overload`/`retryable` errors, are **not** counted against the
-  scanner's health circuit breaker — an artifact that is permanently too large,
-  or one package hitting its per-package quota, says nothing about backend
-  health, so a burst of either cannot open the breaker and fail unrelated,
-  healthy artifacts.
+- **Fails open** (returns CLEAN, error **logged but not surfaced** on the
+  result) when it "couldn't compare against the previous version" — a transient
+  or artifact-specific condition that is not a malicious signal:
+  - The previous version's blob is missing from the cache (`cache.Get` miss).
+  - The previous version's cached blob fails its SHA-256 check.
+  - A transient bridge call failure (gRPC error / deadline on one diff).
+
+  These use `cleanResult`, which deliberately does **not** set
+  `ScanResult.Error` — surfacing it would make the engine promote it to a
+  counted scan error, failing the request closed and (pre-fix) tripping a
+  scanner-wide breaker that cascaded to every artifact. See
+  [ADR-013](../adr/ADR-013-enrichment-scanner-breaker-exemption.md). A sustained
+  bridge outage is still caught: after N consecutive bridge errors the internal
+  breaker opens and returns `throttled` (fail-closed per artifact for a required
+  scanner).
+
+  Because version-diff is **enrichment-class** it has no engine per-scanner
+  circuit breaker: its genuine per-artifact errors (`retryable` UNKNOWN,
+  `terminal` size guard, `throttled`) still fail closed for that one artifact
+  when `required`, but can never open a scanner-wide breaker that fails
+  unrelated, healthy artifacts as `overload`.
 
 ## Deployment requirement: shared cache mount
 
@@ -234,6 +248,76 @@ Operator load: ~4 reviews/day during a busy week, 0–1/day during quiet
 weeks. With `policy.minimum_confidence: 0.7`, only ~half of SUSPICIOUS
 verdicts reach the BLOCK candidate path; the remainder are filtered by
 the policy stack before reaching operators.
+
+## The `required` breaker cascade — root cause & fix (ADR-013)
+
+Marking version-diff `required` exposed a cascade: under an `npm ci` burst the
+gate returned HTTP 503 `scanner unavailable` for **every** artifact, not just the
+ones version-diff failed on. The original theory blamed version-diff's
+previous-version **DB lookup** timing out under pool pressure. A faithful local
+reproduction (below) **disproved that** with direct evidence:
+
+- Postgres stayed nearly idle during the cascade: ≤3 connections (pool of 5 never
+  exhausted), ≤1 active query, **zero lock waits**, zero queries slower than 1 s.
+- The previous-version `SELECT` logged `previous-version lookup failed` **zero**
+  times — the DB lookup never failed.
+- The version-diff retryable errors that fed the breaker came from its
+  `cleanResult` **fail-open** path: predecessor blob missing from cache
+  (`cache get previous …: artifact not found`) and transient bridge
+  `DeadlineExceeded`.
+
+The real mechanism: version-diff returned those transient conditions as
+`ScanResult{Verdict: Clean, Error: …}` *intending* to fail open, but the engine
+(`scanOne`: `if err == nil && result.Error != nil { err = result.Error }`)
+promoted that `Error` into a classified scan error. For the `required` version-diff
+scanner it then (1) failed the request closed and (2) counted toward the
+per-scanner breaker. Five transient fail-opens opened the breaker → every
+subsequent artifact fast-failed `overload` → `ActionRetryLater` → 503.
+
+**Fix ([ADR-013](../adr/ADR-013-enrichment-scanner-breaker-exemption.md)):**
+(1) version-diff's `cleanResult` is now a true fail-open — it logs but does not
+set `ScanResult.Error`, so the engine neither fails closed nor counts it; and
+(2) version-diff is an **enrichment-class** scanner (`EnrichmentScanner`),
+exempt from the engine's per-scanner breaker — its genuine errors (UNKNOWN
+verdict) still fail closed *per artifact*, but can no longer open a scanner-wide
+breaker that fails unrelated, healthy artifacts. Backend protection comes from
+version-diff's own internal consecutive-failure breaker (`throttled`, already
+excluded from the engine breaker per [ADR-012](../adr/ADR-012-fail-closed-scanner-errors.md)).
+
+### Local reproduction harness
+
+The default dev stack (sqlite + amd64 emulation, cold cache) does **not** reproduce
+it: sqlite WAL hides lock contention, emulation serializes execution, and a cold DB
+makes every package first-seen (`sql.ErrNoRows` → CLEAN, the failure path never
+engages). The harness flips all three and replays the real release-CI load:
+
+- [`docker/docker-compose.local-repro.yml`](../../docker/docker-compose.local-repro.yml)
+  — Postgres backend (prod parity) with a small gate pool (`SGW_DB_POOL`, default
+  5); the scanner-bridge pinned to a small CPU budget (`BRIDGE_CPUS`, default 2)
+  so scans run slower under burst; native arch (`SGW_PLATFORM=""`); prod-like
+  `max_concurrent_scans=32`.
+- [`scripts/local-repro-versiondiff-cascade.sh`](../../scripts/local-repro-versiondiff-cascade.sh)
+  — **seeds** the predecessor of every locked version in `ui/package-lock.json`
+  through the gate (caches them CLEAN + records DB version rows), then runs a real
+  **`npm ci` of the frontend** through the gate. With predecessors cached, every
+  locked version `npm ci` pulls engages version-diff under npm's concurrent fan-out.
+
+```bash
+# AI creds: copy AI_SCANNER_* from .deploy/.env into docker/.env (the script does
+# this automatically). Knobs: SKIP_UP=1, CONCURRENCY=128 (npm maxsockets),
+# SGW_DB_POOL=5, BRIDGE_CPUS (raise to isolate version-diff from guarddog CPU
+# starvation, lower to also stress the primary scanners).
+./scripts/local-repro-versiondiff-cascade.sh
+curl -s http://localhost:8080/metrics | grep -E 'circuit_breaker_state|scanner_errors_total'
+```
+
+**Before the fix**, this opened `circuit_breaker_state{scanner="version-diff"}=1`
+and failed `npm ci` with 503s. **After the fix**, version-diff has no engine
+breaker (that series is gone), its transient cache/bridge errors fail open, and
+`npm ci` completes — even at `SGW_DB_POOL=5`. (Note: `BRIDGE_CPUS=2` separately
+starves guarddog/semgrep and can open the *guarddog* breaker — that is a primary
+scanner legitimately failing closed under genuine CPU starvation, a different
+condition from this cascade; raise `BRIDGE_CPUS` to isolate the version-diff path.)
 
 ## Retention
 

@@ -1,0 +1,81 @@
+# docker-compose.local-repro.yml — faithful local reproduction of the
+# version-diff `required`-scanner breaker cascade (see
+# scripts/local-repro-versiondiff-cascade.sh and docs/scanners/version-diff.md).
+#
+# Why this override exists: the default dev stack (sqlite + amd64 emulation) does
+# NOT reproduce the prod cascade. sqlite WAL hides lock contention, amd64-on-arm
+# emulation serializes execution, and a cold DB makes every package first-seen
+# (version-diff returns CLEAN, never engaging its failure path). This override
+# flips all three:
+#
+#   1. Postgres backend (prod parity) with a DELIBERATELY SMALL gate pool so a
+#      concurrent burst exhausts it and the version-diff previous-version lookup
+#      (scanner.go:157) waits → DeadlineExceeded → ErrKindRetryable → 5 of those
+#      open the engine per-scanner breaker → every component fails closed (503).
+#   2. Native arch (SGW_PLATFORM="" — set by the repro script) so containers run
+#      at full speed and real concurrency happens.
+#   3. The repro script seeds predecessor versions so version-diff has something
+#      to diff against and actually reaches its DB-lookup + bridge path.
+#
+# Usage:
+#   ./scripts/local-repro-versiondiff-cascade.sh        # full run (build, seed, bombard)
+# or manually:
+#   SGW_PLATFORM= docker compose \
+#     -f docker/docker-compose.yml -f docker/docker-compose.local-repro.yml \
+#     up -d --build
+#
+# AI scanner creds: copy AI_SCANNER_* from .deploy/.env into docker/.env
+# (gitignored) so the bridge reaches Azure OpenAI — a real (slow-ish under burst)
+# LLM call holds the scan open long enough for the pool to bite. Without creds
+# the bridge fails open and the cascade is much harder to trigger.
+
+services:
+  postgres:
+    image: postgres:18.2-alpine          # pinned — matches .deploy/compose.yaml
+    platform: ${SGW_PLATFORM-linux/amd64}
+    command: ["postgres", "-c", "max_connections=512"]
+    environment:
+      POSTGRES_USER: sgw
+      POSTGRES_PASSWORD: sgw
+      POSTGRES_DB: sgw
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - repro-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sgw -d sgw"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  scanner-bridge:
+    mem_limit: 4g                          # prod parity — semgrep is memory-heavy under burst
+    # Pin the bridge to a small CPU budget so each guarddog/AI scan takes longer
+    # under the burst. Slower scans hold the gate's scan slot (and the DB work
+    # bracketing it) open longer, which starves the small postgres pool faster —
+    # i.e. it widens the window in which the version-diff lookup can time out.
+    # Mirrors prod, where the bridge was the constrained, OOM-prone resource.
+    cpus: "${BRIDGE_CPUS:-2}"
+    environment:
+      BRIDGE_MAX_WORKERS: "${BRIDGE_MAX_WORKERS:-32}"
+
+  shieldoo-gate:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      scanner-bridge:
+        condition: service_started
+    environment:
+      SGW_DATABASE_BACKEND: "postgres"
+      SGW_DATABASE_POSTGRES_DSN: "postgres://sgw:sgw@postgres:5432/sgw?sslmode=disable"
+      # The contention lever. Prod cascaded even at 64; locally a pool of 5
+      # reliably reproduces it (confirmed: version-diff breaker opens, npm ci
+      # fails with 503 "scanner unavailable"). Tune UP toward 64 to confirm a
+      # candidate fix holds under prod-like headroom.
+      SGW_DATABASE_POSTGRES_MAX_OPEN_CONNS: "${SGW_DB_POOL:-5}"
+      SGW_DATABASE_POSTGRES_MAX_IDLE_CONNS: "2"
+      # Let the burst actually fan out (prod parity). Default is 4 — too low to
+      # generate the concurrent DB pressure the cascade needs.
+      SGW_SCANNERS_MAX_CONCURRENT_SCANS: "${SGW_MAX_SCANS:-32}"
+
+volumes:
+  repro-postgres-data:

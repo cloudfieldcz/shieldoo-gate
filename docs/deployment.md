@@ -90,6 +90,82 @@ The scanner-bridge has its own Dockerfile (`scanner-bridge/Dockerfile`) that:
 3. Compiles protobuf definitions at build time
 4. Runs `python main.py` as the entrypoint
 
+## Recommended production sizing
+
+These are the **tuning knobs** that keep a single-node deployment stable under a
+build-CI burst (e.g. a full `npm ci` of a large dependency tree fanning out
+through the proxy). They are derived from the reference production deployment.
+Only sizing/tuning values are shown — supply your own domains, storage backend,
+credentials, and OIDC/AI settings (see `config.example.yaml` and `.env`).
+
+**Reference host:** a small single-node VM — **2 vCPU / 8 GB RAM** — running the
+full stack (gate + scanner-bridge + PostgreSQL) via Docker Compose.
+
+**PostgreSQL** (`postgres:18.2-alpine`):
+
+```yaml
+command: ["postgres", "-c", "max_connections=512"]
+```
+`max_connections` is a *ceiling*, not a preallocation — backends fork on demand,
+so the headroom (well above the gate pool) only absorbs the pool + healthcheck +
+ad-hoc `psql` without "too many clients" rejections.
+
+**Gate — database pool** (`database.postgres`):
+
+```yaml
+max_open_conns: 64        # ≈ 2× scanners.max_concurrent_scans — covers the
+                          # concurrent scan DB work plus the request-path queries
+max_idle_conns: 32
+conn_max_lifetime: "5m"
+```
+
+**Gate — scan engine** (`scanners`):
+
+```yaml
+timeout: "120s"           # outer per-scanner cap; must be ≥ version_diff.scanner_timeout + 5s
+max_concurrent_scans: 32  # bounds concurrent gRPC fan-out to the bridge
+```
+
+**Gate — version-diff** (`scanners.version_diff`) — safe to run as a `required`
+scanner from **v0.15.4** onward (it is enrichment-class and exempt from the
+engine per-scanner breaker; transient errors fail open — see
+[ADR-013](adr/ADR-013-enrichment-scanner-breaker-exemption.md) and
+[version-diff.md](scanners/version-diff.md)):
+
+```yaml
+scanner_timeout: "55s"    # < scanners.timeout by ≥ 5s
+max_artifact_size_mb: 50
+```
+
+**Scanner criticality** (`scanners.criticality`):
+
+```yaml
+builtin-threat-feed: "required"
+guarddog:            "required"
+ai-scanner:          "required"
+version-diff:        "required"     # safe since v0.15.4
+builtin-reputation:  "best_effort"
+```
+> ⚠️ A scanner marked `required` that is **not enabled/registered** aborts startup
+> (fatal). Only mark a scanner `required` if it is actually enabled in this
+> deployment — e.g. keep `builtin-reputation: best_effort` unless reputation is on.
+
+**Scanner-bridge** (Compose service):
+
+```yaml
+mem_limit: 4g                       # semgrep (GuardDog) is memory-heavy under burst;
+                                    # a tighter cgroup risks OOMKill taking the socket down
+environment:
+  BRIDGE_MAX_WORKERS: "32"          # concurrent-scan cap; match scanners.max_concurrent_scans
+```
+
+The invariants behind these numbers: `scanners.timeout ≥ version_diff.scanner_timeout + 5s`
+(validated at startup); `BRIDGE_MAX_WORKERS ≈ max_concurrent_scans` so the bridge
+neither queues behind the gate nor oversubscribes CPU; and `max_open_conns ≈
+2× max_concurrent_scans` so the scan path never starves the request path of
+connections. To reproduce/verify breaker behaviour under load locally, see
+`docker/docker-compose.local-repro.yml` and `scripts/local-repro-versiondiff-cascade.sh`.
+
 ## Local Development (without Docker)
 
 ### Prerequisites

@@ -6,7 +6,11 @@ services:
       args:
         SGW_TOKEN: ${SGW_TOKEN:-}
         APP_VERSION: ${APP_VERSION:-dev}
-    platform: linux/amd64
+    # Pinned to amd64 by default (prod parity). The version-diff local-repro
+    # harness exports SGW_PLATFORM="" to run native — emulation serializes
+    # execution and hides the concurrent DB pressure the cascade needs.
+    # NB: `${VAR-default}` (no colon) keeps an explicitly-empty value empty.
+    platform: ${SGW_PLATFORM-linux/amd64}
     depends_on:
       scanner-bridge:
         condition: service_started
@@ -40,7 +44,7 @@ services:
       dockerfile: Dockerfile
       args:
         SGW_TOKEN: ${SGW_TOKEN:-}
-    platform: linux/amd64
+    platform: ${SGW_PLATFORM-linux/amd64}
     volumes:
       - bridge-socket:/tmp
       # Read-only access to the gate cache for AI-driven version-diff:

@@ -193,6 +193,8 @@ See [`tests/e2e-shell/README.md`](tests/e2e-shell/README.md) for details on the 
 
 **Full documentation is available in [`docs/`](docs/index.md).**
 
+For production deployment, see the [recommended sizing & tuning](docs/deployment.md#recommended-production-sizing) (single-node 2 vCPU / 8 GB reference, pool/concurrency/criticality knobs).
+
 ## Security
 
 Found a security vulnerability? **Please do not open a public issue.** Report it

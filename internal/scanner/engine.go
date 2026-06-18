@@ -73,9 +73,35 @@ func NewEngine(scanners []Scanner, timeout time.Duration, maxConcurrentScans int
 		opt(e)
 	}
 	for _, sc := range scanners {
+		// Enrichment-class scanners are exempt from the per-scanner breaker — see
+		// EnrichmentScanner and scanOne. Without an entry in e.breakers their
+		// breaker is nil, so scanOne neither short-circuits nor records failures.
+		if isEnrichment(sc) {
+			continue
+		}
 		e.breakers[sc.Name()] = newScanCircuit(5, time.Minute)
 	}
 	return e
+}
+
+// EnrichmentScanner is implemented by scanners whose failures are
+// artifact-specific (a particular package's diff is anomalous, oversized, or
+// transiently uncacheable) or transient-backend, rather than a signal that the
+// scanner is unhealthy for ALL traffic. The engine does NOT gate an enrichment
+// scanner behind the per-scanner circuit breaker: a burst of such failures must
+// not open a scanner-wide breaker that fast-fails unrelated, healthy artifacts
+// as overload (the version-diff cascade — see ADR-013). Enrichment scanners are
+// expected to protect their own backend (e.g. an internal consecutive-failure
+// breaker) and still fail closed PER ARTIFACT when marked required. The marker
+// is independent of criticality: an enrichment scanner can still be required.
+type EnrichmentScanner interface {
+	Scanner
+	EnrichmentClass() bool
+}
+
+func isEnrichment(sc Scanner) bool {
+	es, ok := sc.(EnrichmentScanner)
+	return ok && es.EnrichmentClass()
 }
 
 // RegisteredScannerNames returns the names of all registered scanners.

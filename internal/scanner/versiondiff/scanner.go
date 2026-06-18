@@ -108,6 +108,16 @@ func (s *VersionDiffScanner) Close() error {
 func (s *VersionDiffScanner) Name() string    { return scannerName }
 func (s *VersionDiffScanner) Version() string { return scannerVersion }
 
+// EnrichmentClass marks version-diff as an enrichment scanner: its failures are
+// artifact-specific (one package's diff is anomalous/oversized/uncacheable) or
+// transient-backend, never a signal that the scanner is unhealthy for ALL
+// traffic. The engine therefore does NOT gate it behind a scanner-wide circuit
+// breaker — a burst of per-artifact failures must not fast-fail unrelated,
+// healthy artifacts as overload. version-diff protects its own LLM backend via
+// the internal consecutive-failure breaker (step 8) and still fails closed PER
+// ARTIFACT when required. See ADR-013.
+func (s *VersionDiffScanner) EnrichmentClass() bool { return true }
+
 func (s *VersionDiffScanner) SupportedEcosystems() []scanner.Ecosystem {
 	return []scanner.Ecosystem{
 		scanner.EcosystemPyPI,
@@ -580,6 +590,20 @@ func (s *VersionDiffScanner) writeDowngradeAudit(artifactID string, original, fi
 	}
 }
 
+// cleanResult is version-diff's TRUE fail-open path: "couldn't compare against
+// the previous version" (predecessor blob missing from cache, SHA mismatch on
+// the previous version, a transient bridge hiccup) — NOT "found something bad".
+//
+// It deliberately does NOT set ScanResult.Error. Surfacing the error would make
+// the engine promote it to a classified scan error (engine.go scanOne:
+// `if err == nil && result.Error != nil { err = result.Error }`), which for the
+// REQUIRED, enrichment-class version-diff scanner would (1) fail the request
+// closed and (2) count toward its circuit breaker — the cascade ADR-013 fixes
+// (a burst of cache-miss/bridge-hiccup fail-opens would open the breaker and
+// fast-fail every unrelated artifact as overload). The error is logged for
+// observability and dropped from the result. Conditions that must genuinely fail
+// CLOSED for a required scanner (UNKNOWN verdict, the size-evasion guard, the
+// per-package rate limit, the internal breaker) use scanErrorResult instead.
 func (s *VersionDiffScanner) cleanResult(start time.Time, err error) scanner.ScanResult {
 	if err != nil {
 		log.Warn().Err(err).Msg("version-diff: fail-open")
@@ -591,7 +615,6 @@ func (s *VersionDiffScanner) cleanResult(start time.Time, err error) scanner.Sca
 		ScannerVersion: scannerVersion,
 		Duration:       time.Since(start),
 		ScannedAt:      start,
-		Error:          err,
 	}
 }
 

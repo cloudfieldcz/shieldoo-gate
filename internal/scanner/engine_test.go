@@ -15,11 +15,13 @@ type mockScanner struct {
 	ecosystems []Ecosystem
 	scanFn     func(ctx context.Context, artifact Artifact) (ScanResult, error)
 	healthFn   func(ctx context.Context) error
+	enrichment bool
 }
 
 func (m *mockScanner) Name() string                     { return m.name }
 func (m *mockScanner) Version() string                  { return "1.0.0-test" }
 func (m *mockScanner) SupportedEcosystems() []Ecosystem { return m.ecosystems }
+func (m *mockScanner) EnrichmentClass() bool            { return m.enrichment }
 func (m *mockScanner) Scan(ctx context.Context, a Artifact) (ScanResult, error) {
 	return m.scanFn(ctx, a)
 }
@@ -177,6 +179,46 @@ func TestEngine_ScanAll_TerminalErrorsDoNotOpenCircuitBreaker(t *testing.T) {
 	}
 	assert.Equal(t, scans, attempts, "breaker must never short-circuit terminal-only scanners")
 	assert.False(t, engine.breakers["version-diff"].isOpen(), "terminal errors must not open the breaker")
+}
+
+func TestEngine_ScanAll_EnrichmentScannerHasNoBreakerContagion(t *testing.T) {
+	// An enrichment scanner (e.g. version-diff) reports failures that are
+	// artifact-specific or transient-backend, not a signal the scanner is
+	// unhealthy for ALL traffic. The engine must NOT gate it behind the
+	// per-scanner circuit breaker: a burst of retryable failures must still reach
+	// the scanner every time (never short-circuit to overload) and must NOT open a
+	// scanner-wide breaker that fails unrelated, healthy artifacts. The scanner
+	// protects its own backend via an internal breaker; per-artifact fail-closed
+	// (the retryable error in report.Errored) is preserved. Marked REQUIRED to
+	// prove the exemption is driven by enrichment class, not criticality.
+	attempts := 0
+	enrich := &mockScanner{
+		name:       "version-diff",
+		ecosystems: []Ecosystem{EcosystemPyPI},
+		enrichment: true,
+		scanFn: func(_ context.Context, _ Artifact) (ScanResult, error) {
+			attempts++
+			return ScanResult{}, NewScanError(ErrKindRetryable, errors.New("bridge hiccup"))
+		},
+	}
+
+	engine := NewEngine(
+		[]Scanner{enrich},
+		time.Second,
+		0,
+		WithCriticality(map[string]Criticality{"version-diff": CriticalityRequired}),
+	)
+	assert.Nil(t, engine.breakers["version-diff"], "enrichment scanner must not get a per-scanner breaker")
+
+	const scans = 8 // > legacy breaker threshold (5)
+	for i := 0; i < scans; i++ {
+		report, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemPyPI})
+		require.NoError(t, err)
+		require.Contains(t, report.Errored, "version-diff")
+		assert.Equal(t, ErrKindRetryable, report.Errored["version-diff"].Kind,
+			"scan %d: retryable must stay retryable, never become overload from an open circuit", i)
+	}
+	assert.Equal(t, scans, attempts, "enrichment scanner must be invoked every scan (no breaker short-circuit)")
 }
 
 func TestEngine_ScanAll_ThrottleErrorsDoNotOpenCircuitBreaker(t *testing.T) {

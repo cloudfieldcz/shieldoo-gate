@@ -26,7 +26,7 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
 
 - [API Reference](api/) — OpenAPI 3.1 spec for the REST API
 - [`shdg` CLI](cli/shdg.md) — push CycloneDX SBOMs to the vulnerability-scan API from CI
-- [Architecture Decision Records](adr/) — ADR-001 through ADR-012 (latest: [ADR-012 — fail closed on required inline scanner errors](adr/ADR-012-fail-closed-scanner-errors.md))
+- [Architecture Decision Records](adr/) — ADR-001 through ADR-013 (latest: [ADR-013 — enrichment-class scanners exempt from the per-scanner breaker](adr/ADR-013-enrichment-scanner-breaker-exemption.md))
 - [`SECURITY.md`](../SECURITY.md) — how to report a vulnerability (GitHub Private Vulnerability Reporting), SLA, safe harbor, scope
 - [Planned Features](features/index.md) — phased roadmap with 15 proposed features across enterprise foundation, advanced detection, compliance, developer experience, and advanced deployment
 
