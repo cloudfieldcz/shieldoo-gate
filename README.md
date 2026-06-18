@@ -193,6 +193,15 @@ See [`tests/e2e-shell/README.md`](tests/e2e-shell/README.md) for details on the 
 
 **Full documentation is available in [`docs/`](docs/index.md).**
 
+## Security
+
+Found a security vulnerability? **Please do not open a public issue.** Report it
+privately through [GitHub Private Vulnerability Reporting](https://github.com/cloudfieldcz/shieldoo-gate/security)
+(the **"Report a vulnerability"** button on the Security tab).
+
+See [`SECURITY.md`](SECURITY.md) for our disclosure policy, response SLA, and safe
+harbor terms.
+
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE).

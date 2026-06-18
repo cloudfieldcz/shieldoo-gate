@@ -27,6 +27,7 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
 - [API Reference](api/) — OpenAPI 3.1 spec for the REST API
 - [`shdg` CLI](cli/shdg.md) — push CycloneDX SBOMs to the vulnerability-scan API from CI
 - [Architecture Decision Records](adr/) — ADR-001 through ADR-012 (latest: [ADR-012 — fail closed on required inline scanner errors](adr/ADR-012-fail-closed-scanner-errors.md))
+- [`SECURITY.md`](../SECURITY.md) — how to report a vulnerability (GitHub Private Vulnerability Reporting), SLA, safe harbor, scope
 - [Planned Features](features/index.md) — phased roadmap with 15 proposed features across enterprise foundation, advanced detection, compliance, developer experience, and advanced deployment
 
 ## Architecture
@@ -207,4 +208,11 @@ make test-e2e
 
 ## Contributing
 
-Shieldoo Gate welcomes contributions under Apache 2.0. See `CONTRIBUTING.md` for guidelines and `SECURITY.md` for responsible disclosure. Threat intelligence contributions (malicious package reports) are especially welcome — submit as OSV-format JSON with evidence.
+Shieldoo Gate welcomes contributions under Apache 2.0. See `CONTRIBUTING.md` for guidelines and [`SECURITY.md`](../SECURITY.md) for responsible disclosure. Threat intelligence contributions (malicious package reports) are especially welcome — submit as OSV-format JSON with evidence.
+
+## Security
+
+Found a vulnerability? **Do not open a public issue.** Report it privately through
+[GitHub Private Vulnerability Reporting](https://github.com/cloudfieldcz/shieldoo-gate/security)
+("Report a vulnerability"). See [`SECURITY.md`](../SECURITY.md) for the policy
+(SLA, safe harbor, scope).
