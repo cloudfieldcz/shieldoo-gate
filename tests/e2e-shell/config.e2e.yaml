@@ -83,6 +83,12 @@ database:
 scanners:
   parallel: true
   timeout: "120s"
+  criticality:                            # per-scanner failure mode, keyed by scanner Name(); unlisted => best_effort
+    builtin-threat-feed: "required"
+    guarddog: "required"
+    ai-scanner: "required"
+    version-diff: "required"
+    builtin-reputation: "required"
   guarddog:
     enabled: true
     bridge_socket: "/tmp/shieldoo-bridge.sock"
