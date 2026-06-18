@@ -39,6 +39,10 @@ as `CLEAN`, `SUSPICIOUS`, or `MALICIOUS`. The Go side maps the verdict to a
     for that artifact; not retried). The guard is evaluated only after the
     previous-version and cache lookups, so it fires solely when a real diff is
     being skipped.
+  - The bridge returns verdict `UNKNOWN` (it could not classify the pair — e.g.
+    the diff inputs were missing or the LLM response failed to parse) —
+    `retryable`. UNKNOWN is a scanner error, never a clean result, and is never
+    persisted to the idempotency cache.
 
   The error lands in `ScanReport.Errored`, so if an operator marks
   `version-diff` as `required` (see [Scanners](../scanners.md#scan-engine)),
@@ -68,8 +72,10 @@ volumes:
   - gate-cache:/var/cache/shieldoo-gate:ro     # NEW: required for version-diff (>= v2.0)
 ```
 
-Without this mount, every diff scan raises `FileNotFoundError`, the bridge
-returns `UNKNOWN`, and the Go scanner fail-opens. The shipped compose files
+Without this mount, every diff scan raises `FileNotFoundError` and the bridge
+returns `UNKNOWN`, which the Go scanner treats as a `retryable` scanner error
+(best-effort version-diff degrades to fail-open; a `required` version-diff fails
+closed). The shipped compose files
 (`tests/e2e-shell/docker-compose.e2e.yml`, `docker/docker-compose.yml`,
 `.deploy/compose.yaml`) already include the mount; custom deployments need
 to mirror it.
@@ -110,7 +116,7 @@ scanners:
 | `SUSPICIOUS` (confidence ≥ `min_confidence`) | `SUSPICIOUS` | Finding severity HIGH (≥ 0.75) or MEDIUM |
 | `SUSPICIOUS` (confidence < `min_confidence`) | `CLEAN` | Audit log entry `SCANNER_VERDICT_DOWNGRADED`, reason `below-min-confidence` |
 | `MALICIOUS` | `SUSPICIOUS` | **Always downgraded.** Finding severity CRITICAL. Audit log entry, reason `asymmetric-diff-downgrade` |
-| `UNKNOWN` (parse error, timeout, fail-open) | `CLEAN` (fail-open) | **NOT persisted** — cache integrity protected |
+| `UNKNOWN` (bridge could not classify the pair) | `CLEAN` payload **+ `retryable` scanner error** | **NOT persisted.** `required` version-diff fails closed (503); best-effort degrades to fail-open in the engine |
 
 In `mode: "shadow"`, the final `ScanResult.Verdict` is forced to `CLEAN`
 regardless of the mapping above. The DB row preserves the raw `ai_verdict`

