@@ -145,10 +145,11 @@ func TestEngine_ScanAll_TerminalErrorsDoNotOpenCircuitBreaker(t *testing.T) {
 	// A terminal error is a per-artifact permanent condition (e.g. oversized),
 	// not scanner-health degradation. Many terminal errors in a row must NOT open
 	// the per-scanner breaker, otherwise a burst of oversized artifacts would
-	// fail unrelated, normal artifacts as overload until cooldown. The breaker
-	// threshold is 5; we scan well past it and assert every call still reaches the
-	// scanner and still classifies as terminal (never overload from an open
-	// circuit).
+	// fail unrelated, normal artifacts as overload until cooldown. The scanner is
+	// marked REQUIRED so its breaker is actually consulted (the breaker applies
+	// only to required scanners); the breaker threshold is 5, so we scan well past
+	// it and assert every call still reaches the scanner, still classifies as
+	// terminal (never overload from an open circuit), and leaves the breaker shut.
 	attempts := 0
 	oversized := &mockScanner{
 		name:       "version-diff",
@@ -159,7 +160,12 @@ func TestEngine_ScanAll_TerminalErrorsDoNotOpenCircuitBreaker(t *testing.T) {
 		},
 	}
 
-	engine := NewEngine([]Scanner{oversized}, time.Second, 0)
+	engine := NewEngine(
+		[]Scanner{oversized},
+		time.Second,
+		0,
+		WithCriticality(map[string]Criticality{"version-diff": CriticalityRequired}),
+	)
 
 	const scans = 8 // > breaker threshold (5)
 	for i := 0; i < scans; i++ {
@@ -170,15 +176,18 @@ func TestEngine_ScanAll_TerminalErrorsDoNotOpenCircuitBreaker(t *testing.T) {
 			"scan %d: terminal must stay terminal, never become overload from an open circuit", i)
 	}
 	assert.Equal(t, scans, attempts, "breaker must never short-circuit terminal-only scanners")
+	assert.False(t, engine.breakers["version-diff"].isOpen(), "terminal errors must not open the breaker")
 }
 
 func TestEngine_ScanAll_ThrottleErrorsDoNotOpenCircuitBreaker(t *testing.T) {
 	// A throttle error is intentional local backpressure on ONE package (the
 	// version-diff per-package rate limit), not scanner-health degradation. A hot
 	// package hammering its quota must NOT open the scanner-wide breaker and fail
-	// unrelated, healthy packages as overload. The breaker threshold is 5; we scan
-	// well past it and assert every call still reaches the scanner and still
-	// classifies as throttled (never overload from an open circuit).
+	// unrelated, healthy packages as overload. The scanner is marked REQUIRED so
+	// its breaker is actually consulted (the breaker applies only to required
+	// scanners); the breaker threshold is 5, so we scan well past it and assert
+	// every call still reaches the scanner, still classifies as throttled (never
+	// overload from an open circuit), and leaves the breaker shut.
 	attempts := 0
 	throttled := &mockScanner{
 		name:       "version-diff",
@@ -189,7 +198,12 @@ func TestEngine_ScanAll_ThrottleErrorsDoNotOpenCircuitBreaker(t *testing.T) {
 		},
 	}
 
-	engine := NewEngine([]Scanner{throttled}, time.Second, 0)
+	engine := NewEngine(
+		[]Scanner{throttled},
+		time.Second,
+		0,
+		WithCriticality(map[string]Criticality{"version-diff": CriticalityRequired}),
+	)
 
 	const scans = 8 // > breaker threshold (5)
 	for i := 0; i < scans; i++ {
@@ -200,13 +214,17 @@ func TestEngine_ScanAll_ThrottleErrorsDoNotOpenCircuitBreaker(t *testing.T) {
 			"scan %d: throttle must stay throttled, never become overload from an open circuit", i)
 	}
 	assert.Equal(t, scans, attempts, "breaker must never short-circuit a throttled scanner")
+	assert.False(t, engine.breakers["version-diff"].isOpen(), "throttled errors must not open the breaker")
 }
 
 func TestEngine_ScanAll_RetryableErrorsStillOpenCircuitBreaker(t *testing.T) {
-	// Counterpart to the terminal test: retryable/overload errors DO indicate
-	// scanner-health degradation, so they must still open the breaker. After the
-	// threshold (5) consecutive failures the scanner is short-circuited and stops
-	// being called, with the error reported as overload (circuit open).
+	// Counterpart to the terminal/throttle tests: retryable errors DO indicate
+	// scanner-health degradation, so a run of them on a REQUIRED scanner must
+	// actually accumulate and open the breaker (this exercises the live counting
+	// path, unlike TestEngine_ScanAll_RequiredScannerCircuitBreaks which forces
+	// the breaker open by hand). After the threshold (5) consecutive failures the
+	// scanner is short-circuited and stops being called, with the error reported
+	// as overload (circuit open).
 	attempts := 0
 	flaky := &mockScanner{
 		name:       "guarddog",
@@ -217,7 +235,12 @@ func TestEngine_ScanAll_RetryableErrorsStillOpenCircuitBreaker(t *testing.T) {
 		},
 	}
 
-	engine := NewEngine([]Scanner{flaky}, time.Second, 0)
+	engine := NewEngine(
+		[]Scanner{flaky},
+		time.Second,
+		0,
+		WithCriticality(map[string]Criticality{"guarddog": CriticalityRequired}),
+	)
 
 	var lastKind ScanErrorKind
 	for i := 0; i < 8; i++ {
