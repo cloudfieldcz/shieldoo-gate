@@ -141,6 +141,65 @@ func TestEngine_ScanAll_DoesNotRetryTerminalErrors(t *testing.T) {
 	assert.Equal(t, ErrKindTerminal, report.Errored["guarddog"].Kind)
 }
 
+func TestEngine_ScanAll_TerminalErrorsDoNotOpenCircuitBreaker(t *testing.T) {
+	// A terminal error is a per-artifact permanent condition (e.g. oversized),
+	// not scanner-health degradation. Many terminal errors in a row must NOT open
+	// the per-scanner breaker, otherwise a burst of oversized artifacts would
+	// fail unrelated, normal artifacts as overload until cooldown. The breaker
+	// threshold is 5; we scan well past it and assert every call still reaches the
+	// scanner and still classifies as terminal (never overload from an open
+	// circuit).
+	attempts := 0
+	oversized := &mockScanner{
+		name:       "version-diff",
+		ecosystems: []Ecosystem{EcosystemPyPI},
+		scanFn: func(_ context.Context, _ Artifact) (ScanResult, error) {
+			attempts++
+			return ScanResult{}, NewScanError(ErrKindTerminal, errors.New("artifact exceeds max size"))
+		},
+	}
+
+	engine := NewEngine([]Scanner{oversized}, time.Second, 0)
+
+	const scans = 8 // > breaker threshold (5)
+	for i := 0; i < scans; i++ {
+		report, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemPyPI})
+		require.NoError(t, err)
+		require.Contains(t, report.Errored, "version-diff")
+		assert.Equal(t, ErrKindTerminal, report.Errored["version-diff"].Kind,
+			"scan %d: terminal must stay terminal, never become overload from an open circuit", i)
+	}
+	assert.Equal(t, scans, attempts, "breaker must never short-circuit terminal-only scanners")
+}
+
+func TestEngine_ScanAll_RetryableErrorsStillOpenCircuitBreaker(t *testing.T) {
+	// Counterpart to the terminal test: retryable/overload errors DO indicate
+	// scanner-health degradation, so they must still open the breaker. After the
+	// threshold (5) consecutive failures the scanner is short-circuited and stops
+	// being called, with the error reported as overload (circuit open).
+	attempts := 0
+	flaky := &mockScanner{
+		name:       "guarddog",
+		ecosystems: []Ecosystem{EcosystemPyPI},
+		scanFn: func(_ context.Context, _ Artifact) (ScanResult, error) {
+			attempts++
+			return ScanResult{}, NewScanError(ErrKindRetryable, errors.New("bridge crashed"))
+		},
+	}
+
+	engine := NewEngine([]Scanner{flaky}, time.Second, 0)
+
+	var lastKind ScanErrorKind
+	for i := 0; i < 8; i++ {
+		report, err := engine.ScanAll(context.Background(), Artifact{Ecosystem: EcosystemPyPI})
+		require.NoError(t, err)
+		require.Contains(t, report.Errored, "guarddog")
+		lastKind = report.Errored["guarddog"].Kind
+	}
+	assert.Less(t, attempts, 8, "breaker should short-circuit the scanner after the failure threshold")
+	assert.Equal(t, ErrKindOverload, lastKind, "open circuit must surface as overload")
+}
+
 func TestEngine_ScanAll_RequiredScannerCannotBeExcluded(t *testing.T) {
 	required := &mockScanner{
 		name:       "guarddog",

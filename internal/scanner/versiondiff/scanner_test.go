@@ -240,6 +240,12 @@ func TestScan_Oversized_ReturnsTerminalErrorWithoutBridge(t *testing.T) {
 
 	db := newTestDB(t)
 	cs := newFakeCache(t, nil)
+	// Seed a previous CLEAN version so there IS a real diff owed — the size guard
+	// only fails closed when padding an update past the limit would otherwise
+	// skip a diff that should have happened.
+	seedArtifactPair(t, db, "pypi", "big",
+		"pypi:big:2.0", "2.0", "newsha",
+		"pypi:big:1.0", "1.0", "oldsha", true)
 	cfg := defaultCfg(sock)
 	cfg.MaxArtifactSizeMB = 1
 
@@ -247,7 +253,7 @@ func TestScan_Oversized_ReturnsTerminalErrorWithoutBridge(t *testing.T) {
 	defer s.Close()
 
 	res, scanRunErr := s.Scan(context.Background(), scanner.Artifact{
-		ID: "pypi:big:1.0", Ecosystem: scanner.EcosystemPyPI, Name: "big", Version: "1.0",
+		ID: "pypi:big:2.0", Ecosystem: scanner.EcosystemPyPI, Name: "big", Version: "2.0",
 		SizeBytes: 10 * 1024 * 1024,
 	})
 	// Oversized is "couldn't scan", surfaced as a terminal scanner error so
@@ -257,6 +263,33 @@ func TestScan_Oversized_ReturnsTerminalErrorWithoutBridge(t *testing.T) {
 	var scanErr *scanner.ScanError
 	require.ErrorAs(t, scanRunErr, &scanErr)
 	assert.Equal(t, scanner.ErrKindTerminal, scanErr.Kind)
+	assert.Equal(t, scanner.VerdictClean, res.Verdict)
+	assert.Equal(t, int32(0), mb.calls.Load())
+}
+
+func TestScan_OversizedFirstSeen_ReturnsCleanNoError(t *testing.T) {
+	// An oversized package with NO previous version has nothing to diff:
+	// version-diff is genuinely a no-op, so it returns CLEAN with no error — not
+	// a terminal fail-closed. The size guard only fails closed when a real diff
+	// against an existing predecessor would otherwise be skipped; with no
+	// predecessor there is nothing to evade.
+	mb := &mockBridge{}
+	sock := startMockBridge(t, mb)
+
+	db := newTestDB(t)
+	cs := newFakeCache(t, nil)
+	cfg := defaultCfg(sock)
+	cfg.MaxArtifactSizeMB = 1
+
+	s, _ := NewVersionDiffScanner(db, cs, cfg)
+	defer s.Close()
+
+	res, err := s.Scan(context.Background(), scanner.Artifact{
+		ID: "pypi:big:1.0", Ecosystem: scanner.EcosystemPyPI, Name: "big", Version: "1.0",
+		SizeBytes: 10 * 1024 * 1024,
+	})
+	require.NoError(t, err)
+	assert.Nil(t, res.Error, "first-seen oversized package must not surface a scanner error")
 	assert.Equal(t, scanner.VerdictClean, res.Verdict)
 	assert.Equal(t, int32(0), mb.calls.Load())
 }

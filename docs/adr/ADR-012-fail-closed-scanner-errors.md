@@ -16,6 +16,8 @@ Inline scan completeness is explicit through `scanner.ScanReport` (`Expected`, `
 
 The per-scanner circuit breaker applies **only to `required` scanners**. For a required scanner an open circuit yields a fast fail-closed decision (an `overload` error the policy engine maps to 503/quarantine) instead of a per-attempt timeout. Best-effort scanners fail open regardless, so short-circuiting them would carry no safety benefit and would only silently drop the data they produce (SBOM, licenses, vuln findings) for every artifact scanned during the cooldown window; they are therefore always attempted, with the bridge concurrency semaphore (`max_concurrent_scans`) remaining their overload guard.
 
+The circuit breaker tracks scanner *health*, so only `retryable` and `overload` errors count toward it. A `terminal` error is a permanent property of one artifact (e.g. too large to scan, unsupported format) and says nothing about backend health — it still fails closed for a `required` scanner, but does not open the breaker. This prevents a burst of individually-unscannable artifacts from short-circuiting the scanner and failing unrelated, healthy traffic as `overload`.
+
 `policy.on_scan_error` maps required scanner failures to adapter behavior:
 
 - Pull paths return HTTP 503 with `Retry-After`.

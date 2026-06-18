@@ -141,20 +141,7 @@ func (s *VersionDiffScanner) Scan(ctx context.Context, artifact scanner.Artifact
 		return s.cleanResult(start, nil), nil
 	}
 
-	// 2. Compressed-size guard. "Couldn't scan", not "nothing to scan": the diff
-	// is deliberately skipped for resource reasons, but there IS content to vet.
-	// Surface a terminal scanner error (permanent for this artifact — retrying
-	// won't shrink it) so required-mode fails closed. This closes the "pad the
-	// package past the size limit to skip the diff" evasion; best-effort mode
-	// still degrades to fail-open in the engine.
-	maxBytes := int64(s.cfg.MaxArtifactSizeMB) * 1024 * 1024
-	if maxBytes > 0 && artifact.SizeBytes > maxBytes {
-		log.Debug().Str("artifact", artifact.ID).Int64("size", artifact.SizeBytes).
-			Msg("version-diff: artifact exceeds max size, returning terminal error")
-		return s.scanErrorResult(start, scanner.ErrKindTerminal, "artifact exceeds max size")
-	}
-
-	// 3. Sub-timeout
+	// 2. Sub-timeout
 	timeout := defaultScannerTimeout
 	if s.cfg.ScannerTimeout != "" {
 		if d, err := time.ParseDuration(s.cfg.ScannerTimeout); err == nil && d > 0 {
@@ -164,7 +151,7 @@ func (s *VersionDiffScanner) Scan(ctx context.Context, artifact scanner.Artifact
 	scanCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// 4. DB query: previous CLEAN/SUSPICIOUS version
+	// 3. DB query: previous CLEAN/SUSPICIOUS version
 	var prevID, prevSHA256, prevVersion string
 	err := s.db.QueryRowContext(scanCtx,
 		`SELECT a.id, a.sha256, a.version FROM artifacts a
@@ -179,13 +166,30 @@ func (s *VersionDiffScanner) Scan(ctx context.Context, artifact scanner.Artifact
 		return s.cleanResult(start, nil), nil
 	}
 
-	// 5. DB idempotency cache lookup. Use the model name we expect plus an
+	// 4. DB idempotency cache lookup. Use the model name we expect plus an
 	//    "any prompt version" wildcard match — we want to hit cache for any
 	//    prompt the bridge has used. Most-recent row wins.
 	if cached, hit := s.lookupCache(scanCtx, artifact.ID, prevID); hit {
 		log.Debug().Str("artifact", artifact.ID).Str("prev", prevID).
 			Str("cached_verdict", cached.Verdict).Msg("version-diff: cache hit")
 		return s.toResult(start, cached, true), nil
+	}
+
+	// 5. Compressed-size guard — deliberately AFTER the previous-version lookup
+	// and cache check. "Couldn't scan", not "nothing to scan": at this point a
+	// real diff is owed (a previous version exists and isn't cached), but the new
+	// artifact is too large to ship to the bridge. Surface a terminal scanner
+	// error (permanent for this artifact — retrying won't shrink it) so
+	// required-mode fails closed; this closes the "pad the package past the size
+	// limit to skip the diff" evasion. A first-seen oversized package has no
+	// previous version and already returned CLEAN above — there is nothing to
+	// evade, so it must NOT fail closed. Best-effort mode (the default) still
+	// degrades to fail-open in the engine.
+	maxBytes := int64(s.cfg.MaxArtifactSizeMB) * 1024 * 1024
+	if maxBytes > 0 && artifact.SizeBytes > maxBytes {
+		log.Debug().Str("artifact", artifact.ID).Int64("size", artifact.SizeBytes).
+			Msg("version-diff: artifact exceeds max size, returning terminal error")
+		return s.scanErrorResult(start, scanner.ErrKindTerminal, "artifact exceeds max size")
 	}
 
 	// 6. cache.Get(prevID) + SHA256 verify

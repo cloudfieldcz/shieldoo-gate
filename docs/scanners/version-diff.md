@@ -16,21 +16,33 @@ as `CLEAN`, `SUSPICIOUS`, or `MALICIOUS`. The Go side maps the verdict to a
 - Per-artifact, in parallel with all other enabled scanners.
 - Skipped (returns CLEAN, no error — genuinely "nothing to scan") when:
   - The package name is in the configured `allowlist`.
-  - No previous CLEAN/SUSPICIOUS version exists in the artifacts table.
+  - No previous CLEAN/SUSPICIOUS version exists in the artifacts table. This
+    includes a **first-seen package that exceeds `max_artifact_size_mb`** —
+    with no predecessor there is no diff to perform, so the size guard does not
+    apply and the scan is a genuine no-op (not a fail-closed condition).
   - An idempotent cache hit is found in `version_diff_results` for the
     `(new artifact, previous artifact, model, prompt version)` tuple.
 - "Couldn't scan" (returns CLEAN **with a classified scanner error**) when:
   - The per-package rate limiter has exhausted the hourly quota — `overload`.
   - The consecutive-failure circuit breaker is open — `overload`.
-  - Compressed artifact size exceeds `max_artifact_size_mb` (default 50 MB) —
-    `terminal` (permanent for that artifact; not retried).
+  - Compressed artifact size exceeds `max_artifact_size_mb` (default 50 MB)
+    **and a previous version exists to diff against** — `terminal` (permanent
+    for that artifact; not retried). The guard is evaluated only after the
+    previous-version and cache lookups, so it fires solely when a real diff is
+    being skipped.
 
   The error lands in `ScanReport.Errored`, so if an operator marks
   `version-diff` as `required` (see [Scanners](../scanners.md#scan-engine)),
   these conditions fail closed per `policy.on_scan_error` instead of serving
   the artifact as silently clean — in particular, the size guard closes the
-  "pad the package past the limit to skip the diff" evasion. In the default
+  "pad an update past the limit to skip the diff" evasion. In the default
   best-effort mode the engine still degrades them to fail-open.
+
+  `terminal` errors fail closed for a `required` scanner but, unlike
+  `overload`/`retryable` errors, are **not** counted against the scanner's
+  health circuit breaker — an artifact that is permanently too large says
+  nothing about backend health, so a burst of oversized uploads cannot open the
+  breaker and fail unrelated, normal-size artifacts.
 
 ## Deployment requirement: shared cache mount
 

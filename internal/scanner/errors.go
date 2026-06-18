@@ -69,6 +69,15 @@ func (e *ScanError) Retryable() bool {
 	return e != nil && (e.Kind == ErrKindRetryable || e.Kind == ErrKindOverload)
 }
 
+// Terminal reports whether the error is a permanent, per-artifact failure that
+// retrying cannot fix (e.g. an artifact too large to scan, or an unsupported
+// archive format). Terminal errors still fail closed for required scanners, but
+// — unlike retryable/overload errors — they say nothing about scanner health,
+// so the engine must not count them against a scanner's circuit breaker.
+func (e *ScanError) Terminal() bool {
+	return e != nil && e.Kind == ErrKindTerminal
+}
+
 // ClassifyScanError maps an arbitrary error to a *ScanError. An existing
 // *ScanError is returned unchanged. gRPC status codes, context deadlines, and
 // net timeouts are mapped to their natural kinds; everything else defaults to
