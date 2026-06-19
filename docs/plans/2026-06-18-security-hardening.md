@@ -11,7 +11,7 @@
   - `docker/Dockerfile`: `node:20.19.0-alpine3.21`, `golang:1.26.4-alpine`, `aquasec/trivy:0.71.1`, runtime `alpine:3.20.10`
   - `scanner-bridge/Dockerfile`: `python:3.13.14-slim` (×2)
   - `tests/e2e-shell/Dockerfile.test-runner`: `golang:1.26.4-alpine`, `ubuntu:24.04`
-- GitHub Actions pinned by **tag, not SHA** (`checkout@v4`, `build-push-action@v6`, …).
+- GitHub Actions pinned by **tag, not SHA** (`checkout@v4`, `build-push-action@v6`, …). — ✅ fixed by T6 (2026-06-19), all `uses:` now SHA-pinned.
 - Missing: `SECURITY.md`, `CONTRIBUTING.md`, `CODEOWNERS`, `dependabot.yml`.
 
 ## Decisions
@@ -33,13 +33,14 @@
 ### P2 — Supply-chain hardening (image + build)
 - [x] **T5 — Digest-pin base images.** ✅ Done 2026-06-19. All 9 external image refs across the 3 Dockerfiles pinned `tag@sha256:…` (multi-arch index digests; covers `FROM` + `COPY --from=ghcr.io/astral-sh/uv`). `docker buildx --check` passes both production Dockerfiles. [ADR-014](../adr/ADR-014-base-image-digest-pinning.md) records the decision; linked from `docs/index.md`.
   - **⚠️ OPEN FOLLOW-UP:** Dependabot/Renovate digest **auto-bump was deferred** (T2 skipped). Without it, digest pins freeze on potentially-vulnerable layers. Mitigations in place: ADR-010 build-time `apt-get upgrade` patches Debian bases; digests MUST be re-resolved manually each release (`docker buildx imagetools inspect <name:tag> --format '{{.Manifest.Digest}}'`). Revisit auto-bump when T2/Renovate is reconsidered.
-- [ ] **T6 — SHA-pin GitHub Actions** across all workflows (`@<full-sha> # vX`). Dependabot maintains.
+- [x] **T6 — SHA-pin GitHub Actions.** ✅ Done 2026-06-19. All 16 `uses:` refs in `release.yml` (the only workflow) pinned to full 40-char commit SHA with trailing `# vX.Y.Z` comment — 9 distinct actions (checkout, setup-go, upload/download-artifact, docker setup-buildx/login/metadata/build-push, softprops/action-gh-release). SHAs resolved via `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` (annotated tags dereferenced); YAML re-validated. [ADR-015](../adr/ADR-015-sha-pin-github-actions.md) records the decision; linked from `docs/index.md`. **This also satisfies T10** (release.yml is the priority target with `packages: write`).
+  - **⚠️ OPEN FOLLOW-UP:** SHA auto-bump (Dependabot `github-actions` ecosystem) deferred with the rest of T2. Refresh SHAs manually when bumping a major until then.
 - [ ] **T7 — Build provenance / signing**: SLSA provenance attestation + cosign sign image in `release.yml`; sign the dogfooded SBOM too.
 - [ ] **T8 — OpenSSF Scorecard** (`scorecard.yml`): weekly + README badge.
 
 ### P3 — Extras
 - [ ] **T9 — Branch protection** on `main`: required CI checks, required review, no force-push.
-- [ ] **T10 — Pin actions to SHA in `release.yml`** (priority because it has `packages: write`).
+- [x] **T10 — Pin actions to SHA in `release.yml`.** ✅ Done 2026-06-19 as part of **T6** — `release.yml` is currently the only workflow, so T6 covered it. See T6.
 - [ ] **T11 — Secret scanning + push protection** enabled in repo settings.
 
 ### P4 — GitHub Community Standards (not security-critical; close the checklist)
