@@ -141,7 +141,7 @@ paths:
       summary: Clear session cookie
       operationId: authLogout
       tags: [auth]
-      description: Clears the session cookie, logging the user out.
+      description: Clears the local session and cookie. When the OIDC provider advertises an end_session_endpoint, also returns a logout_url for RP-initiated logout.
       responses:
         "200":
           description: Successfully logged out
@@ -154,6 +154,13 @@ paths:
                   status:
                     type: string
                     enum: [logged_out]
+                  logout_url:
+                    type: string
+                    description: |
+                      RP-initiated logout URL (the OIDC `end_session_endpoint` with
+                      `client_id`, `post_logout_redirect_uri`, and `id_token_hint`). Present
+                      only when the provider advertises an `end_session_endpoint`; the SPA
+                      navigates here to terminate the IdP SSO session. Absent → local logout only.
 
   /auth/refresh:
     post:

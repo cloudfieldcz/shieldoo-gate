@@ -10,8 +10,8 @@ import (
 // CreateSession inserts a new server-side session row.
 func (db *GateDB) CreateSession(s model.Session) error {
 	_, err := db.Exec(
-		"INSERT INTO sessions (id, subject, email, name, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		s.ID, s.Subject, s.Email, s.Name, s.CreatedAt, s.LastSeenAt, s.ExpiresAt,
+		"INSERT INTO sessions (id, subject, email, name, id_token, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		s.ID, s.Subject, s.Email, s.Name, s.IDToken, s.CreatedAt, s.LastSeenAt, s.ExpiresAt,
 	)
 	if err != nil {
 		return fmt.Errorf("db: create session: %w", err)
@@ -24,7 +24,7 @@ func (db *GateDB) CreateSession(s model.Session) error {
 func (db *GateDB) GetSession(id string) (*model.Session, error) {
 	var s model.Session
 	err := db.Get(&s,
-		"SELECT id, subject, email, name, created_at, last_seen_at, expires_at FROM sessions WHERE id = ?",
+		"SELECT id, subject, email, name, id_token, created_at, last_seen_at, expires_at FROM sessions WHERE id = ?",
 		id,
 	)
 	if err != nil {

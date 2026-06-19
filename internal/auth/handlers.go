@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -31,6 +32,10 @@ type AuthConfig struct {
 	ClientSecretEnv string
 	RedirectURL     string
 	Scopes          []string
+	// PostLogoutRedirectURL is where the IdP returns the browser after a successful
+	// RP-initiated logout. Must be registered in the IdP client's allowed post-logout
+	// redirect URIs. Defaults to "/" when empty.
+	PostLogoutRedirectURL string
 	// CookieInsecure, when true, drops the Secure attribute from auth cookies. It is
 	// an explicit opt-out for local HTTP development ONLY. Default false → cookies are
 	// always Secure, so the session cookie is never sent over cleartext (which would
@@ -47,6 +52,9 @@ type AuthHandlers struct {
 	cfg          AuthConfig
 	store        *SessionStore
 	secureCookie bool
+	// endSessionURL is the provider's end_session_endpoint (RP-initiated logout). Empty when
+	// the provider advertises none → logout is local-only (backwards compatible).
+	endSessionURL string
 }
 
 // NewAuthHandlers creates auth handlers by performing OIDC discovery against
@@ -80,15 +88,26 @@ func NewAuthHandlers(cfg AuthConfig, store *SessionStore) (*AuthHandlers, error)
 		ClientID: cfg.ClientID,
 	})
 
+	var providerClaims struct {
+		EndSessionEndpoint string `json:"end_session_endpoint"`
+	}
+	if err := provider.Claims(&providerClaims); err != nil {
+		log.Warn().Err(err).Msg("auth: could not parse provider metadata for end_session_endpoint")
+	}
+
 	return &AuthHandlers{
-		oauth2Cfg:    oauth2Cfg,
-		provider:     provider,
-		verifier:     verifier,
-		cfg:          cfg,
-		store:        store,
-		secureCookie: !cfg.CookieInsecure,
+		oauth2Cfg:     oauth2Cfg,
+		provider:      provider,
+		verifier:      verifier,
+		cfg:           cfg,
+		store:         store,
+		secureCookie:  !cfg.CookieInsecure,
+		endSessionURL: providerClaims.EndSessionEndpoint,
 	}, nil
 }
+
+// EndSessionURL returns the discovered OIDC end_session_endpoint ("" if none advertised).
+func (h *AuthHandlers) EndSessionURL() string { return h.endSessionURL }
 
 // authCookie builds a hardened cookie with the handler's Secure setting.
 func (h *AuthHandlers) authCookie(name, value, path string, maxAge int) *http.Cookie {
@@ -240,7 +259,7 @@ func (h *AuthHandlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create an opaque server-side session; the cookie carries only the session ID.
-	sid, err := h.store.Create(&UserInfo{Subject: idToken.Subject, Email: claims.Email, Name: claims.Name})
+	sid, err := h.store.Create(&UserInfo{Subject: idToken.Subject, Email: claims.Email, Name: claims.Name}, rawIDToken)
 	if err != nil {
 		log.Error().Err(err).Msg("auth: failed to create session")
 		writeAuthError(w, http.StatusInternalServerError, "failed to create session")
@@ -263,16 +282,62 @@ func (h *AuthHandlers) HandleUserInfo(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(user)
 }
 
-// HandleLogout revokes the server-side session and clears the cookie.
+// HandleLogout revokes the server-side session and clears the cookie. When the provider
+// advertised an end_session_endpoint, it also returns a `logout_url` for the SPA to navigate
+// to (RP-initiated logout), terminating the IdP SSO session. Local logout is authoritative
+// and always succeeds; the IdP termination is best-effort layered on top.
 func (h *AuthHandlers) HandleLogout(w http.ResponseWriter, r *http.Request) {
+	var idTokenHint string
 	if cookie, err := r.Cookie(sessionCookieName); err == nil && cookie.Value != "" {
+		idTokenHint = h.store.IDTokenFor(cookie.Value) // read BEFORE delete
 		h.store.Delete(cookie.Value)
 	}
 	http.SetCookie(w, h.authCookie(sessionCookieName, "", "/", -1))
 
+	// No end-session endpoint advertised → local logout only (backwards compatible).
+	if h.endSessionURL == "" {
+		writeLogoutOK(w, "")
+		return
+	}
+
+	u, err := url.Parse(h.endSessionURL)
+	if err != nil {
+		// A malformed endpoint is an operator/discovery misconfig, not a per-request error.
+		// The local session is already revoked above, so degrade to local-only logout rather
+		// than failing the request (a 500 would only push the SPA to /auth/login anyway).
+		// Generic message only — never log the endpoint or the id_token (invariant #3).
+		log.Warn().Msg("auth: end_session_endpoint malformed; performing local-only logout")
+		writeLogoutOK(w, "")
+		return
+	}
+
+	postLogout := h.cfg.PostLogoutRedirectURL
+	if postLogout == "" {
+		postLogout = "/"
+	}
+	// Built ONLY from server-side config + the discovered endpoint + the stored token.
+	// No request input is consulted — keeps post_logout_redirect_uri non-attacker-controlled.
+	q := u.Query()
+	q.Set("client_id", h.cfg.ClientID)
+	q.Set("post_logout_redirect_uri", postLogout)
+	if idTokenHint != "" {
+		q.Set("id_token_hint", idTokenHint) // suppresses Keycloak's logout-confirmation prompt
+	}
+	u.RawQuery = q.Encode()
+
+	writeLogoutOK(w, u.String())
+}
+
+// writeLogoutOK writes the logout 200 response. logoutURL is included only when non-empty.
+// It MUST NOT be logged — it may carry the id_token_hint.
+func writeLogoutOK(w http.ResponseWriter, logoutURL string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"status":"logged_out"}`))
+	resp := map[string]string{"status": "logged_out"}
+	if logoutURL != "" {
+		resp["logout_url"] = logoutURL
+	}
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // HandleRefresh slides the session expiry server-side and re-sets the cookie MaxAge.

@@ -42,9 +42,16 @@ export default function UserMenu() {
 
   const handleLogout = async () => {
     try {
-      await userApi.logout()
+      const res = await userApi.logout() // POST /auth/logout
+      const url = res?.data?.logout_url
+      if (url) {
+        // RP-initiated logout: navigate to the IdP end-session endpoint so the SSO
+        // session is terminated (a 302 from a fetched POST is not a browser navigation).
+        window.location.href = url
+        return
+      }
     } catch {
-      // Ignore errors — clear session anyway.
+      // Ignore — fall through to the local redirect.
     }
     window.location.href = '/auth/login'
   }

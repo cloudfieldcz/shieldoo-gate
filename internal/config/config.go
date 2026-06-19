@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -169,6 +170,9 @@ type AuthConfig struct {
 	ClientID       string   `mapstructure:"client_id"`
 	ClientSecretEnv string  `mapstructure:"client_secret_env"`
 	RedirectURL    string   `mapstructure:"redirect_url"`
+	// PostLogoutRedirectURL is where the IdP returns the browser after RP-initiated logout.
+	// Must be registered in the IdP client's allowed post-logout redirect URIs. Empty → "/".
+	PostLogoutRedirectURL string `mapstructure:"post_logout_redirect_url"`
 	Scopes         []string `mapstructure:"scopes"`
 	// SessionTTL is the admin UI session lifetime (e.g. "15m"). Default 15m.
 	SessionTTL string `mapstructure:"session_ttl"`
@@ -965,6 +969,11 @@ func (c *Config) validateAuth() error {
 	if c.Auth.SessionTTL != "" {
 		if _, err := time.ParseDuration(c.Auth.SessionTTL); err != nil {
 			return fmt.Errorf("config: auth.session_ttl %q is not a valid duration: %w", c.Auth.SessionTTL, err)
+		}
+	}
+	if c.Auth.PostLogoutRedirectURL != "" {
+		if _, err := url.Parse(c.Auth.PostLogoutRedirectURL); err != nil {
+			return fmt.Errorf("config: auth.post_logout_redirect_url %q is not a valid URL: %w", c.Auth.PostLogoutRedirectURL, err)
 		}
 	}
 	return nil

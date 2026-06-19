@@ -50,9 +50,9 @@ func NewSessionStore(db *config.GateDB, ttl time.Duration) *SessionStore {
 // TTL returns the configured session lifetime.
 func (s *SessionStore) TTL() time.Duration { return s.ttl }
 
-// Create persists a new session for the given verified identity and returns its
-// opaque ID (to be set as the cookie value).
-func (s *SessionStore) Create(u *UserInfo) (string, error) {
+// Create persists a new session for the given verified identity (and its raw OIDC id_token,
+// used later as id_token_hint for RP-initiated logout) and returns its opaque ID.
+func (s *SessionStore) Create(u *UserInfo, idToken string) (string, error) {
 	id, err := randomString(sessionIDBytes)
 	if err != nil {
 		return "", err
@@ -63,6 +63,7 @@ func (s *SessionStore) Create(u *UserInfo) (string, error) {
 		Subject:    u.Subject,
 		Email:      u.Email,
 		Name:       u.Name,
+		IDToken:    idToken,
 		CreatedAt:  now,
 		LastSeenAt: now,
 		ExpiresAt:  now.Add(s.ttl),
@@ -71,6 +72,20 @@ func (s *SessionStore) Create(u *UserInfo) (string, error) {
 		return "", err
 	}
 	return id, nil
+}
+
+// IDTokenFor returns the raw OIDC id_token stored for the given session ID, or "" when the
+// session is missing or stored no token. Used ONLY by the logout path to build id_token_hint;
+// the token is deliberately NOT returned by Validate, so it never reaches request context.
+func (s *SessionStore) IDTokenFor(id string) string {
+	if id == "" {
+		return ""
+	}
+	sess, err := s.db.GetSession(id)
+	if err != nil {
+		return ""
+	}
+	return sess.IDToken
 }
 
 // Validate returns the identity for a live session and records activity. It returns

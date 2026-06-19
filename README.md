@@ -135,6 +135,24 @@ enabled. For a clean template, start from `config.example.yaml` (which has
 safer defaults: auth off, SBOM off). Do not deploy the dev token to any
 shared environment.
 
+### Local OIDC login (Keycloak)
+
+To exercise the admin-UI OIDC login/logout flow on your laptop, an opt-in Keycloak
+overlay is bundled — pre-seeded with a realm, client, and `test` / `poklop123` user:
+
+```bash
+# one-time: let your browser resolve the Docker hostname "keycloak"
+echo "127.0.0.1 keycloak" | sudo tee -a /etc/hosts
+
+make dev-keycloak-up     # build + start gate + Keycloak (one command)
+# open http://localhost:8080  → log in as test / poklop123
+make dev-keycloak-down   # stop + wipe
+```
+
+Everything else is pre-configured (no `config.yaml` edits). See
+[docs/development/local-keycloak.md](docs/development/local-keycloak.md) for details and the
+one-time `/etc/hosts` rationale.
+
 ### Authenticating through the proxy (v1.2+)
 
 When `proxy_auth.enabled: true`, every request uses HTTP Basic Auth. The

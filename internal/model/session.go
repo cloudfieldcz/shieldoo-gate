@@ -11,6 +11,7 @@ type Session struct {
 	Subject    string    `db:"subject"`
 	Email      string    `db:"email"`
 	Name       string    `db:"name"`
+	IDToken    string    `db:"id_token"`
 	CreatedAt  time.Time `db:"created_at"`
 	LastSeenAt time.Time `db:"last_seen_at"`
 	ExpiresAt  time.Time `db:"expires_at"`

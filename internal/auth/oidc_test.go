@@ -26,7 +26,7 @@ func newTestSessionStore(t *testing.T) *auth.SessionStore {
 
 func TestOIDCMiddleware_ValidSessionCookie_PassesThrough(t *testing.T) {
 	store := newTestSessionStore(t)
-	sid, err := store.Create(&auth.UserInfo{Subject: "user-123", Email: "alice@example.com", Name: "Alice"})
+	sid, err := store.Create(&auth.UserInfo{Subject: "user-123", Email: "alice@example.com", Name: "Alice"}, "")
 	require.NoError(t, err)
 
 	mw := auth.NewOIDCMiddleware(store)

@@ -140,7 +140,8 @@ export const dockerApi = {
 
 export const userApi = {
   me: () => authApi.get<UserInfo>('/auth/userinfo').then((r) => r.data),
-  logout: () => authApi.post('/auth/logout'),
+  logout: () =>
+    authApi.post<{ status: string; logout_url?: string }>('/auth/logout'),
 }
 
 export const apiKeysApi = {

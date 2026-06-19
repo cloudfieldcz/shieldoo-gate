@@ -1,0 +1,58 @@
+# docker-compose.keycloak.yml — OPT-IN local OIDC dev environment.
+#
+# Brings up Keycloak next to the gate and switches the gate to OIDC auth via SGW_* env
+# overrides (config.yaml is untouched). Browser + gate share the hostname `keycloak:8081`.
+#
+# REQUIRED ONE-TIME HOST SETUP (so your browser can resolve `keycloak`):
+#   echo "127.0.0.1 keycloak" | sudo tee -a /etc/hosts
+# See docs/development/local-keycloak.md.
+#
+# Usage:
+#   make dev-keycloak-up      # build + start (runs the /etc/hosts preflight)
+#   make dev-keycloak-down     # stop + wipe volumes (so the realm re-seeds next time)
+# or manually:
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.keycloak.yml up -d --build
+#
+# DEV-ONLY fixtures: fixed client secret, test/poklop123 user, cookie_insecure=true.
+# Never use any of these in a reachable environment.
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4@sha256:9409c59bdfb65dbffa20b11e6f18b8abb9281d480c7ca402f51ed3d5977e6007
+    # Keycloak is dev-only tooling, so run it natively (fast) instead of forcing the
+    # base compose's linux/amd64 (which emulates on Apple Silicon). Honors SGW_PLATFORM
+    # if explicitly set. The pinned digest is a multi-arch manifest list (arm64 + amd64).
+    platform: ${SGW_PLATFORM:-}
+    command: ["start-dev", "--import-realm", "--http-port=8081"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin       # dev admin console creds (http://keycloak:8081/admin)
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HOSTNAME: http://keycloak:8081         # issuer + all endpoint URLs (browser AND gate)
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"                 # exposes /health/ready on mgmt port 9000
+    ports:
+      - "8081:8081"                             # admin console + OIDC endpoints
+    volumes:
+      - ./keycloak/realm-shieldoo.json:/opt/keycloak/data/import/realm-shieldoo.json:ro
+    healthcheck:
+      # Keycloak's image ships no curl; use bash /dev/tcp against the mgmt health port.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000; echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3; cat <&3 | grep -q '\"status\": \"UP\"'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    restart: unless-stopped
+
+  shieldoo-gate:
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    environment:
+      SGW_AUTH_ENABLED: "true"
+      SGW_AUTH_ISSUER_URL: "http://keycloak:8081/realms/shieldoo"
+      SGW_AUTH_CLIENT_ID: "shieldoo-gate"
+      SGW_AUTH_REDIRECT_URL: "http://localhost:8080/auth/callback"
+      # post-logout redirect — DORMANT until Phase 2 adds the config field; harmless before.
+      SGW_AUTH_POST_LOGOUT_REDIRECT_URL: "http://localhost:8080"
+      SGW_AUTH_COOKIE_INSECURE: "true"          # required: HTTP localhost dev (see validateAuth)
+      SGW_OIDC_CLIENT_SECRET: "local-dev-secret" # must match realm-shieldoo.json

@@ -286,6 +286,7 @@ auth:
   client_id: ""                        # OAuth2 client ID from your OIDC provider
   client_secret_env: "SGW_OIDC_CLIENT_SECRET"  # Env var name holding client secret
   redirect_url: ""                     # MUST be https:// in production; validation rejects http unless cookie_insecure=true
+  post_logout_redirect_url: ""         # RP-initiated logout target; MUST be registered in the IdP client's post-logout redirect URIs. Empty → "/". Only used when the provider advertises an end_session_endpoint
   scopes:                              # OIDC scopes to request
     - "openid"
     - "email"

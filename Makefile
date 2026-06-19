@@ -1,6 +1,6 @@
 # Makefile — Shieldoo Gate
 
-.PHONY: build build-gate build-shdg test test-e2e test-e2e-containerized lint clean proto
+.PHONY: build build-gate build-shdg test test-e2e test-e2e-containerized lint clean proto dev-keycloak-up dev-keycloak-down
 
 BINARY := shieldoo-gate
 CMD_DIR := ./cmd/shieldoo-gate
@@ -90,3 +90,22 @@ proto:
 		--go-grpc_opt=paths=source_relative \
 		-I scanner-bridge/proto \
 		scanner-bridge/proto/scanner.proto
+
+# --- Local OIDC dev environment (opt-in) -----------------------------------
+# Stands up Keycloak next to the gate. See docs/development/local-keycloak.md.
+KC_COMPOSE := -f docker/docker-compose.yml -f docker/docker-compose.keycloak.yml
+
+dev-keycloak-up:
+	@grep -qE '^[^#]*\bkeycloak\b' /etc/hosts || { \
+	  printf '\n\033[33m[preflight] Your browser cannot resolve the Docker hostname "keycloak".\033[0m\n'; \
+	  printf 'Add this one-time line to /etc/hosts, then re-run:\n'; \
+	  printf '  echo "127.0.0.1 keycloak" | sudo tee -a /etc/hosts\n'; \
+	  printf 'Reason: the OIDC issuer http://keycloak:8081 must resolve from BOTH the gate\n'; \
+	  printf 'container (Docker DNS) and your host browser (this /etc/hosts line).\n\n'; \
+	}
+	docker compose $(KC_COMPOSE) up -d --build
+	@printf '\nKeycloak admin: http://keycloak:8081/admin (admin/admin)\n'
+	@printf 'Shieldoo Gate UI: http://localhost:8080  (login: test / poklop123)\n'
+
+dev-keycloak-down:
+	docker compose $(KC_COMPOSE) down -v --remove-orphans

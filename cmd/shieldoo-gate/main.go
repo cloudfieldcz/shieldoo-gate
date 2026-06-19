@@ -541,13 +541,14 @@ func main() {
 	var sessionStore *auth.SessionStore
 	if cfg.Auth.Enabled {
 		authCfg := auth.AuthConfig{
-			Enabled:         true,
-			IssuerURL:       cfg.Auth.IssuerURL,
-			ClientID:        cfg.Auth.ClientID,
-			ClientSecretEnv: cfg.Auth.ClientSecretEnv,
-			RedirectURL:     cfg.Auth.RedirectURL,
-			Scopes:          cfg.Auth.Scopes,
-			CookieInsecure:  cfg.Auth.CookieInsecure,
+			Enabled:               true,
+			IssuerURL:             cfg.Auth.IssuerURL,
+			ClientID:              cfg.Auth.ClientID,
+			ClientSecretEnv:       cfg.Auth.ClientSecretEnv,
+			RedirectURL:           cfg.Auth.RedirectURL,
+			PostLogoutRedirectURL: cfg.Auth.PostLogoutRedirectURL,
+			Scopes:                cfg.Auth.Scopes,
+			CookieInsecure:        cfg.Auth.CookieInsecure,
 		}
 		// Server-side session store: the cookie carries an opaque session ID, so
 		// logout/expiry are enforced server-side and a captured cookie can be revoked.

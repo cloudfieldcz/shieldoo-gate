@@ -22,7 +22,7 @@ func newSessionStore(t *testing.T) *SessionStore {
 
 func TestSessionStore_CreateAndValidate(t *testing.T) {
 	s := newSessionStore(t)
-	id, err := s.Create(&UserInfo{Subject: "sub-1", Email: "op@example.com", Name: "Op"})
+	id, err := s.Create(&UserInfo{Subject: "sub-1", Email: "op@example.com", Name: "Op"}, "")
 	require.NoError(t, err)
 	require.NotEmpty(t, id)
 
@@ -30,6 +30,15 @@ func TestSessionStore_CreateAndValidate(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "sub-1", u.Subject)
 	assert.Equal(t, "op@example.com", u.Email)
+}
+
+func TestSessionStore_CreateWithIDToken_RoundTrips(t *testing.T) {
+	s := newSessionStore(t)
+	id, err := s.Create(&UserInfo{Subject: "sub-1", Email: "op@example.com", Name: "Op"}, "raw.id.token")
+	require.NoError(t, err)
+
+	assert.Equal(t, "raw.id.token", s.IDTokenFor(id))
+	assert.Equal(t, "", s.IDTokenFor("does-not-exist"))
 }
 
 func TestSessionStore_UnknownID_Invalid(t *testing.T) {
@@ -47,7 +56,7 @@ func TestSessionStore_Expired_IsInvalidAndDeleted(t *testing.T) {
 	base := time.Unix(1_700_000_000, 0).UTC()
 	s.now = func() time.Time { return base }
 
-	id, err := s.Create(&UserInfo{Email: "op@example.com"})
+	id, err := s.Create(&UserInfo{Email: "op@example.com"}, "")
 	require.NoError(t, err)
 
 	// Jump past the TTL.
@@ -63,7 +72,7 @@ func TestSessionStore_Expired_IsInvalidAndDeleted(t *testing.T) {
 
 func TestSessionStore_Delete_RevokesImmediately(t *testing.T) {
 	s := newSessionStore(t)
-	id, err := s.Create(&UserInfo{Email: "op@example.com"})
+	id, err := s.Create(&UserInfo{Email: "op@example.com"}, "")
 	require.NoError(t, err)
 
 	s.Delete(id)
@@ -76,7 +85,7 @@ func TestSessionStore_Refresh_SlidesExpiry(t *testing.T) {
 	base := time.Unix(1_700_000_000, 0).UTC()
 	s.now = func() time.Time { return base }
 
-	id, err := s.Create(&UserInfo{Email: "op@example.com"})
+	id, err := s.Create(&UserInfo{Email: "op@example.com"}, "")
 	require.NoError(t, err)
 
 	// Just before original expiry, refresh extends the window by another TTL.
@@ -95,7 +104,7 @@ func TestSessionStore_Refresh_ExpiredFails(t *testing.T) {
 	s := newSessionStore(t)
 	base := time.Unix(1_700_000_000, 0).UTC()
 	s.now = func() time.Time { return base }
-	id, err := s.Create(&UserInfo{Email: "op@example.com"})
+	id, err := s.Create(&UserInfo{Email: "op@example.com"}, "")
 	require.NoError(t, err)
 
 	s.now = func() time.Time { return base.Add(2 * time.Hour) }
