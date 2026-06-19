@@ -1,5 +1,5 @@
 # Stage 1: Build React UI
-FROM node:20.19.0-alpine3.21 AS ui-builder
+FROM node:20.19.0-alpine3.21@sha256:8bda036ddd59ea51a23bc1a1035d3b5c614e72c01366d989f4120e8adca196d4 AS ui-builder
 
 ARG APP_VERSION=dev
 ARG SGW_TOKEN=""
@@ -26,7 +26,7 @@ RUN npm run build
 # (crypto/x509). Keep in lockstep with go.mod's `go` directive and the CI
 # GO_VERSION in .github/workflows/release.yml so all build paths embed the
 # same patched stdlib.
-FROM golang:1.26.4-alpine AS go-builder
+FROM golang:1.26.4-alpine@sha256:3ad57304ad93bbec8548a0437ad9e06a455660655d9af011d58b993f6f615648 AS go-builder
 
 ARG SGW_TOKEN=""
 # Same rationale as stage 1 — identify as project "shieldoo-gate" when
@@ -58,10 +58,10 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
 # Trivy < 0.66 cannot decode CycloneDX 1.6 SBOMs; shdg generates 1.6 by default,
 # so the gate must run a Trivy that supports it or every push-from-CI scan will
 # silently fall back to OSV-only and miss CVSS-derived severities.
-FROM aquasec/trivy:0.71.1 AS trivy
+FROM aquasec/trivy:0.71.1@sha256:53570e6911c2361ebe7995228088cf83a6b9b73e7f3cdca44bd8f8f425e80fa7 AS trivy
 
 # Stage 3: Runtime image
-FROM alpine:3.20.10 AS runtime
+FROM alpine:3.20.10@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc AS runtime
 
 RUN apk add --no-cache ca-certificates sqlite-libs
 

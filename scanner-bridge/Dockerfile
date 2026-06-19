@@ -11,7 +11,7 @@
 # if any native extension lost a shared lib it needs.
 
 # ---- Builder: toolchain + dependency install ----
-FROM python:3.13.14-slim AS builder
+FROM python:3.13.14-slim@sha256:c33f0bc4364a6881bed1ec0cc2665e6c53c87a43e774aaeab88e6f17af105e4f AS builder
 
 ARG SGW_TOKEN=""
 # Basic-auth username = project label on a self-hosted Shieldoo Gate. We use
@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
 # Install uv
-COPY --from=ghcr.io/astral-sh/uv:0.7.12 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.7.12@sha256:4faec156e35a5f345d57804d8858c6ba1cf6352ce5f4bffc11b7fdebdef46a38 /uv /usr/local/bin/uv
 
 WORKDIR /app
 
@@ -46,7 +46,7 @@ COPY proto/ proto/
 RUN python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. proto/scanner.proto
 
 # ---- Runtime: clean image, no build toolchain or -dev headers ----
-FROM python:3.13.14-slim AS runtime
+FROM python:3.13.14-slim@sha256:c33f0bc4364a6881bed1ec0cc2665e6c53c87a43e774aaeab88e6f17af105e4f AS runtime
 
 # Pull Debian-security patches for base-image OS packages on top of the pinned
 # base tag, then strip perl. The tag (python:3.13.14-slim) is pinned for

@@ -10,7 +10,7 @@
 # We do NOT need the rest of internal/ — the shdg main package is Go-stdlib-only.
 # We also do NOT git-stamp the binary (no .git in the build context); a hard-coded
 # "e2e" value is sufficient for the smoke test.
-FROM golang:1.26.4-alpine AS shdg-build
+FROM golang:1.26.4-alpine@sha256:3ad57304ad93bbec8548a0437ad9e06a455660655d9af011d58b993f6f615648 AS shdg-build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -19,7 +19,7 @@ RUN CGO_ENABLED=0 go build \
         -ldflags "-X main.Version=e2e -X main.Commit=e2e" \
         -o /out/shdg ./cmd/shdg
 
-FROM ubuntu:24.04
+FROM ubuntu:24.04@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae77ff1dc54
 
 # Avoid interactive prompts during package install
 ENV DEBIAN_FRONTEND=noninteractive
