@@ -9,8 +9,46 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
 )
+
+func TestParseMetadataCoord_ArtifactLevel(t *testing.T) {
+	g, a, ok := parseMetadataCoord("com/mycompany/lib/maven-metadata.xml")
+	require.True(t, ok)
+	assert.Equal(t, "com.mycompany", g)
+	assert.Equal(t, "lib", a)
+}
+
+func TestParseMetadataCoord_VersionLevelSnapshot(t *testing.T) {
+	g, a, ok := parseMetadataCoord("com/mycompany/lib/1.0.0-SNAPSHOT/maven-metadata.xml")
+	require.True(t, ok)
+	assert.Equal(t, "com.mycompany", g)
+	assert.Equal(t, "lib", a) // version segment dropped
+}
+
+func TestParseMetadataCoord_VersionLevelNumeric(t *testing.T) {
+	g, a, ok := parseMetadataCoord("org/apache/commons/commons-lang3/3.14.0/maven-metadata.xml")
+	require.True(t, ok)
+	assert.Equal(t, "org.apache.commons", g)
+	assert.Equal(t, "commons-lang3", a)
+}
+
+func TestParseMetadataCoord_TopLevel_NotOK(t *testing.T) {
+	_, _, ok := parseMetadataCoord("maven-metadata.xml")
+	assert.False(t, ok)
+	_, _, ok = parseMetadataCoord("com/maven-metadata.xml") // only 1 segment → can't split g:a
+	assert.False(t, ok)
+}
+
+func TestLooksLikeVersion(t *testing.T) {
+	assert.True(t, looksLikeVersion("1.0.0"))
+	assert.True(t, looksLikeVersion("1.0.0-SNAPSHOT"))
+	assert.True(t, looksLikeVersion("2"))
+	assert.False(t, looksLikeVersion("commons-lang3"))
+	assert.False(t, looksLikeVersion("lib"))
+	assert.False(t, looksLikeVersion(""))
+}
 
 func TestMavenAdapter_ParsePath_ValidJAR(t *testing.T) {
 	p, err := parseMavenPath("org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.jar")
@@ -97,7 +135,7 @@ func TestMavenAdapter_PathTraversal_Rejected(t *testing.T) {
 			}))
 			defer upstream.Close()
 
-			a := NewMavenAdapter(nil, nil, nil, nil, upstream.URL, nil)
+			a := NewMavenAdapter(nil, nil, nil, nil, config.UpstreamSet{Default: upstream.URL}, nil)
 			req := httptest.NewRequest(http.MethodGet, "/"+tt.path, nil)
 			w := httptest.NewRecorder()
 			a.ServeHTTP(w, req)
@@ -118,7 +156,7 @@ func TestMavenAdapter_ArtifactID_Format(t *testing.T) {
 }
 
 func TestMavenAdapter_Ecosystem_ReturnsMaven(t *testing.T) {
-	a := NewMavenAdapter(nil, nil, nil, nil, "https://repo1.maven.org/maven2", nil)
+	a := NewMavenAdapter(nil, nil, nil, nil, config.UpstreamSet{Default: "https://repo1.maven.org/maven2"}, nil)
 	assert.Equal(t, scanner.EcosystemMaven, a.Ecosystem())
 }
 
@@ -132,13 +170,13 @@ func TestMavenAdapter_HealthCheck(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	a := NewMavenAdapter(nil, nil, nil, nil, upstream.URL, nil)
+	a := NewMavenAdapter(nil, nil, nil, nil, config.UpstreamSet{Default: upstream.URL}, nil)
 	err := a.HealthCheck(context.Background())
 	assert.NoError(t, err)
 }
 
 func TestMavenAdapter_HealthCheck_UpstreamDown(t *testing.T) {
-	a := NewMavenAdapter(nil, nil, nil, nil, "http://127.0.0.1:1", nil)
+	a := NewMavenAdapter(nil, nil, nil, nil, config.UpstreamSet{Default: "http://127.0.0.1:1"}, nil)
 	err := a.HealthCheck(context.Background())
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "health check")
@@ -178,7 +216,7 @@ func TestMavenAdapter_PassThrough_MetadataXML(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	a := NewMavenAdapter(nil, nil, nil, nil, upstream.URL, nil)
+	a := NewMavenAdapter(nil, nil, nil, nil, config.UpstreamSet{Default: upstream.URL}, nil)
 	req := httptest.NewRequest(http.MethodGet, "/org/apache/commons/commons-lang3/maven-metadata.xml", nil)
 	w := httptest.NewRecorder()
 	a.ServeHTTP(w, req)
@@ -194,7 +232,7 @@ func TestMavenAdapter_PassThrough_POM(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	a := NewMavenAdapter(nil, nil, nil, nil, upstream.URL, nil)
+	a := NewMavenAdapter(nil, nil, nil, nil, config.UpstreamSet{Default: upstream.URL}, nil)
 	req := httptest.NewRequest(http.MethodGet, "/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.pom", nil)
 	w := httptest.NewRecorder()
 	a.ServeHTTP(w, req)

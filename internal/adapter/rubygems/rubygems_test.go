@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
 )
 
@@ -96,7 +97,7 @@ func TestRubyGemsAdapter_ArtifactID_WithPlatform(t *testing.T) {
 }
 
 func TestRubyGemsAdapter_Ecosystem(t *testing.T) {
-	a := NewRubyGemsAdapter(nil, nil, nil, nil, "https://rubygems.org")
+	a := NewRubyGemsAdapter(nil, nil, nil, nil, config.UpstreamSet{Default: "https://rubygems.org"})
 	assert.Equal(t, scanner.EcosystemRubyGems, a.Ecosystem())
 }
 
@@ -118,7 +119,7 @@ func TestRubyGemsAdapter_PassThrough_Specs(t *testing.T) {
 			}))
 			defer upstream.Close()
 
-			a := NewRubyGemsAdapter(nil, nil, nil, nil, upstream.URL)
+			a := NewRubyGemsAdapter(nil, nil, nil, nil, config.UpstreamSet{Default: upstream.URL})
 			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
 			w := httptest.NewRecorder()
 			a.ServeHTTP(w, req)
@@ -146,7 +147,7 @@ func TestRubyGemsAdapter_PassThrough_Metadata(t *testing.T) {
 			}))
 			defer upstream.Close()
 
-			a := NewRubyGemsAdapter(nil, nil, nil, nil, upstream.URL)
+			a := NewRubyGemsAdapter(nil, nil, nil, nil, config.UpstreamSet{Default: upstream.URL})
 			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
 			w := httptest.NewRecorder()
 			a.ServeHTTP(w, req)
@@ -166,7 +167,7 @@ func TestRubyGemsAdapter_PathTraversal_Rejected(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	a := NewRubyGemsAdapter(nil, nil, nil, nil, upstream.URL)
+	a := NewRubyGemsAdapter(nil, nil, nil, nil, config.UpstreamSet{Default: upstream.URL})
 
 	// A filename that contains ".." but is a single path segment will be
 	// caught by the validComponentRe check (dots are allowed but the full
@@ -188,13 +189,13 @@ func TestRubyGemsAdapter_HealthCheck(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	a := NewRubyGemsAdapter(nil, nil, nil, nil, upstream.URL)
+	a := NewRubyGemsAdapter(nil, nil, nil, nil, config.UpstreamSet{Default: upstream.URL})
 	err := a.HealthCheck(context.Background())
 	assert.NoError(t, err)
 }
 
 func TestRubyGemsAdapter_HealthCheck_UpstreamDown(t *testing.T) {
-	a := NewRubyGemsAdapter(nil, nil, nil, nil, "http://127.0.0.1:1")
+	a := NewRubyGemsAdapter(nil, nil, nil, nil, config.UpstreamSet{Default: "http://127.0.0.1:1"})
 	err := a.HealthCheck(context.Background())
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "health check")
@@ -225,7 +226,7 @@ func TestRubyGemsAdapter_InvalidFilenameCharacters_Rejected(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	a := NewRubyGemsAdapter(nil, nil, nil, nil, upstream.URL)
+	a := NewRubyGemsAdapter(nil, nil, nil, nil, config.UpstreamSet{Default: upstream.URL})
 	req := httptest.NewRequest(http.MethodGet, "/gems/<script>-1.0.0.gem", nil)
 	w := httptest.NewRecorder()
 	a.ServeHTTP(w, req)

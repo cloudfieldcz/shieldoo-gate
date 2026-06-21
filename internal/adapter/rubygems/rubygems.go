@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -39,7 +40,8 @@ type RubyGemsAdapter struct {
 	cache        cache.CacheStore
 	scanEngine   *scanner.Engine
 	policyEngine *policy.Engine
-	upstream     string
+	upstream     string // default index base (back-compat; == resolver default)
+	resolver     *adapter.UpstreamResolver
 	router       http.Handler
 	httpClient   *http.Client
 }
@@ -50,18 +52,40 @@ func NewRubyGemsAdapter(
 	cacheStore cache.CacheStore,
 	scanEngine *scanner.Engine,
 	policyEngine *policy.Engine,
-	upstream string,
+	upstreams config.UpstreamSet,
 ) *RubyGemsAdapter {
+	defaultURL := upstreams.DefaultOr("https://rubygems.org")
+	resolver, err := adapter.NewUpstreamResolver("rubygems", config.UpstreamSet{
+		Default:      defaultURL,
+		ExtraIndexes: upstreams.ExtraIndexes,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("rubygems: building upstream resolver: %v", err))
+	}
 	a := &RubyGemsAdapter{
 		db:           db,
 		cache:        cacheStore,
 		scanEngine:   scanEngine,
 		policyEngine: policyEngine,
-		upstream:     strings.TrimRight(upstream, "/"),
-		httpClient:   adapter.NewProxyHTTPClient(5 * time.Minute),
+		upstream:     strings.TrimRight(defaultURL, "/"),
+		resolver:     resolver,
+		// redirect-safe: per-index credentials must be stripped on cross-host/scheme redirect.
+		httpClient: adapter.NewRedirectSafeClient(5 * time.Minute),
 	}
 	a.router = a.buildRouter()
 	return a
+}
+
+// DB exposes the adapter's database handle for tests.
+func (a *RubyGemsAdapter) DB() *config.GateDB { return a.db }
+
+// idxURL returns the index URL, falling back to the default upstream for the
+// default index (empty Name/URL).
+func (a *RubyGemsAdapter) idxURL(idx adapter.ResolvedIndex) string {
+	if idx.URL != "" {
+		return idx.URL
+	}
+	return a.upstream
 }
 
 // Ecosystem implements adapter.Adapter.
@@ -96,19 +120,169 @@ func (a *RubyGemsAdapter) buildRouter() http.Handler {
 	// Gem download — triggers scan pipeline.
 	r.Get("/gems/{filename}", a.handleGemDownload)
 
-	// Metadata pass-through.
-	r.Get("/api/v1/gems/{name}.json", a.handlePassThrough)
-	r.Get("/api/v1/versions/{name}.json", a.handlePassThrough)
+	// Per-gem metadata — fan out across indexes (rewrites gem_uri fail-closed for extra indexes).
+	r.Get("/api/v1/gems/{name}.json", a.handleGemMetadata)
+	r.Get("/api/v1/versions/{name}.json", a.handleVersionsMetadata)
+	// Compact index (modern Bundler) — per-gem, relay-only, fans out. (Phase 6 S1 fix.)
+	r.Get("/info/{name}", a.handleInfo)
 
-	// Compressed gemspec pass-through.
+	// Compressed gemspec pass-through (legacy gemspec — default-only).
 	r.Get("/quick/Marshal.4.8/*", a.handlePassThrough)
 
-	// Index files pass-through.
+	// Whole-index files pass-through (not per-package; default-only — cannot
+	// enumerate private gems, by the settled ordered-fallback non-merge design).
 	r.Get("/specs.4.8.gz", a.handlePassThrough)
 	r.Get("/latest_specs.4.8.gz", a.handlePassThrough)
 	r.Get("/prerelease_specs.4.8.gz", a.handlePassThrough)
 
 	return r
+}
+
+// proxyOrigin reconstructs the gate's own origin ("<scheme>://<host>") from the
+// inbound request, so rewritten download URLs point back at the gate.
+func proxyOrigin(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
+}
+
+func (a *RubyGemsAdapter) handleGemMetadata(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if err := adapter.ValidatePackageName(name); err != nil {
+		adapter.WriteJSONError(w, http.StatusBadRequest, adapter.ErrorResponse{Error: "invalid package name", Reason: err.Error()})
+		return
+	}
+	a.serveMetadataFanOut(w, r, name, "/api/v1/gems/"+name+".json", true) // rewrite gem_uri
+}
+
+func (a *RubyGemsAdapter) handleVersionsMetadata(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if err := adapter.ValidatePackageName(name); err != nil {
+		adapter.WriteJSONError(w, http.StatusBadRequest, adapter.ErrorResponse{Error: "invalid package name", Reason: err.Error()})
+		return
+	}
+	a.serveMetadataFanOut(w, r, name, "/api/v1/versions/"+name+".json", false) // no download URL → no rewrite
+}
+
+// handleInfo serves the compact-index per-gem file (modern Bundler). It carries
+// per-version numbers + checksums but NO download URL, so it is relay-only — the
+// value is in fanning it out (a scoped name resolves only to its claiming index).
+func (a *RubyGemsAdapter) handleInfo(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if err := adapter.ValidatePackageName(name); err != nil {
+		adapter.WriteJSONError(w, http.StatusBadRequest, adapter.ErrorResponse{Error: "invalid package name", Reason: err.Error()})
+		return
+	}
+	a.serveMetadataFanOut(w, r, name, "/info/"+name, false) // no download URL → no rewrite
+}
+
+// serveMetadataFanOut tries each resolved index for the gem's metadata, serving
+// the first that has it (200). The default index relays verbatim (byte-identical
+// to today). Extra indexes relay an allowlist of headers and, when rewriteGemURI
+// is set, rewrite gem_uri fail-closed (502 on a foreign host / non-JSON). A
+// claimed-namespace miss → 404 + audit.
+func (a *RubyGemsAdapter) serveMetadataFanOut(w http.ResponseWriter, r *http.Request, name, path string, rewriteGemURI bool) {
+	for _, idx := range a.resolver.ResolveForPackage(name) {
+		served, err := a.tryServeMetadata(w, r, idx, path, rewriteGemURI)
+		if err != nil {
+			a.resolver.ObserveProbe(idx.Name, "error")
+			continue
+		}
+		if served {
+			a.resolver.ObserveProbe(idx.Name, "hit")
+			return
+		}
+		a.resolver.ObserveProbe(idx.Name, "miss")
+	}
+	if claimants := a.resolver.ClaimingIndexNames(name); len(claimants) > 0 {
+		a.resolver.ObserveScopedMiss()
+		eco := adapter.NamespacedEcosystem(string(scanner.EcosystemRubyGems), claimants[0])
+		md, _ := json.Marshal(map[string]any{"claiming_indexes": claimants})
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
+			EventType:    model.EventBlocked,
+			ArtifactID:   fmt.Sprintf("%s:%s:*", eco, name),
+			ClientIP:     r.RemoteAddr,
+			UserAgent:    r.UserAgent(),
+			Reason:       "scoped private-index gem not found on any claiming index (no public fallback)",
+			MetadataJSON: string(md),
+		})
+	}
+	adapter.WriteJSONError(w, http.StatusNotFound, adapter.ErrorResponse{Error: "not found", Artifact: name})
+}
+
+// tryServeMetadata fetches one index's metadata at path. (true,nil)=served;
+// (false,nil)=404; (false,err)=transport/non-200/rewrite error. A rewrite
+// failure for an EXTRA index is FAIL CLOSED: writes 502, returns (true,nil).
+func (a *RubyGemsAdapter) tryServeMetadata(w http.ResponseWriter, r *http.Request, idx adapter.ResolvedIndex, path string, rewriteGemURI bool) (bool, error) {
+	target := strings.TrimRight(a.idxURL(idx), "/") + path
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
+	if err != nil {
+		return false, err
+	}
+	if accept := r.Header.Get("Accept"); accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+	if h := a.resolver.AuthHeader(idx); h != "" {
+		req.Header.Set("Authorization", h)
+	}
+	resp, err := a.resolver.Client().Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("rubygems: index %q returned %d", idx.Name, resp.StatusCode)
+	}
+	const maxMetadataSize = 64 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataSize+1))
+	if err != nil {
+		return false, err
+	}
+	if int64(len(body)) > maxMetadataSize {
+		return false, fmt.Errorf("rubygems: index %q metadata exceeds size limit", idx.Name)
+	}
+
+	out := body
+	if idx.Name != "" && rewriteGemURI {
+		rewritten, rerr := adapter.RewriteRubyGemsGemURI(body, idx, proxyOrigin(r))
+		if rerr != nil {
+			log.Error().Err(rerr).Str("index", idx.Name).Msg("SECURITY: rubygems gem_uri rewrite failed, refusing to serve")
+			http.Error(w, "upstream metadata could not be safely rewritten", http.StatusBadGateway)
+			return true, nil
+		}
+		out = rewritten
+	}
+	relayMetadataHeaders(w, resp, idx.Name)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(out)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(out)
+	return true, nil
+}
+
+// relayMetadataHeaders copies upstream headers. Extra (low-trust) indexes get an
+// allowlist only; the default index relays all (minus Content-Length).
+func relayMetadataHeaders(w http.ResponseWriter, resp *http.Response, indexName string) {
+	if indexName != "" {
+		for _, h := range []string{"Content-Type", "ETag", "Last-Modified"} {
+			if v := resp.Header.Get(h); v != "" {
+				w.Header().Set(h, v)
+			}
+		}
+		return
+	}
+	for key, vals := range resp.Header {
+		if strings.EqualFold(key, "Content-Length") {
+			continue
+		}
+		for _, v := range vals {
+			w.Header().Add(key, v)
+		}
+	}
 }
 
 // parseGemFilename parses a gem filename into name and version.
@@ -173,7 +347,12 @@ func stripPlatform(versionPart string) string {
 
 // rubygemsArtifactID returns the canonical artifact ID for DB/cache lookups.
 func rubygemsArtifactID(name, version, filename string) string {
-	return fmt.Sprintf("%s:%s:%s:%s", string(scanner.EcosystemRubyGems), name, version, filename)
+	return rubygemsArtifactIDFor(string(scanner.EcosystemRubyGems), name, version, filename)
+}
+
+// rubygemsArtifactIDFor builds the artifact ID for a (possibly namespaced) eco.
+func rubygemsArtifactIDFor(eco, name, version, filename string) string {
+	return fmt.Sprintf("%s:%s:%s:%s", eco, name, version, filename)
 }
 
 // handleTyposquatPreScan runs the typosquat scanner on name before any
@@ -298,7 +477,19 @@ func (a *RubyGemsAdapter) handleGemDownload(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	a.downloadScanServe(w, r, name, version, filename)
+	idx := a.firstIndexFor(name)
+	a.downloadScanServe(w, r, idx, name, version, filename)
+}
+
+// firstIndexFor recovers the serving index for a download by re-resolving the
+// gem name (the /gems/ route carries the name). Returns the default index when
+// resolution is empty (a scoped-miss download: the fetch then 404s on the absent
+// upstream — correct, no public fallback).
+func (a *RubyGemsAdapter) firstIndexFor(name string) adapter.ResolvedIndex {
+	if idxs := a.resolver.ResolveForPackage(name); len(idxs) > 0 {
+		return idxs[0]
+	}
+	return adapter.ResolvedIndex{} // default
 }
 
 // handlePassThrough proxies requests directly to the upstream without scanning.
@@ -348,9 +539,12 @@ func (a *RubyGemsAdapter) handlePassThrough(w http.ResponseWriter, r *http.Reque
 }
 
 // downloadScanServe implements the full download -> scan -> policy -> serve pipeline.
-func (a *RubyGemsAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, name, version, filename string) {
+func (a *RubyGemsAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, idx adapter.ResolvedIndex, name, version, filename string) {
 	ctx := r.Context()
-	artifactID := rubygemsArtifactID(name, version, filename)
+	// Namespace the artifact ID by the serving index (eco__<index>); the default
+	// index keeps the bare eco. The scanner Ecosystem stays canonical (rubygems).
+	eco := adapter.NamespacedEcosystem(string(scanner.EcosystemRubyGems), idx.Name)
+	artifactID := rubygemsArtifactIDFor(eco, name, version, filename)
 
 	// Pre-scan for typosquatting BEFORE contacting upstream.
 	if a.handleTyposquatPreScan(w, r, name, version) {
@@ -405,7 +599,7 @@ func (a *RubyGemsAdapter) downloadScanServe(w http.ResponseWriter, r *http.Reque
 		})
 		// Trigger async sandbox scan (non-blocking).
 		adapter.TriggerAsyncScan(r.Context(), scanner.Artifact{
-			ID: artifactID, Ecosystem: scanner.EcosystemRubyGems, Name: name, Version: version, LocalPath: cachedPath,
+			ID: artifactID, Ecosystem: scanner.Ecosystem(eco), Name: name, Version: version, LocalPath: cachedPath,
 		}, cachedPath, a.db, a.policyEngine)
 		return
 	}
@@ -451,14 +645,14 @@ func (a *RubyGemsAdapter) downloadScanServe(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// 3. Download to temp file.
-	upstreamURL, err := url.JoinPath(a.upstream, "gems", filename)
+	// 3. Download to temp file from the resolved serving index (with its auth).
+	upstreamURL, err := url.JoinPath(strings.TrimRight(a.idxURL(idx), "/"), "gems", filename)
 	if err != nil {
 		http.Error(w, "bad upstream path", http.StatusInternalServerError)
 		return
 	}
 
-	tmpPath, size, sha, err := downloadToTemp(pctx, upstreamURL, a.httpClient)
+	tmpPath, size, sha, err := downloadToTempAuthed(pctx, upstreamURL, a.resolver.AuthHeader(idx), a.httpClient)
 	if err != nil {
 		log.Error().Err(err).Str("artifact", artifactID).Msg("rubygems: failed to download from upstream")
 		http.Error(w, "failed to fetch upstream artifact", http.StatusBadGateway)
@@ -477,10 +671,12 @@ func (a *RubyGemsAdapter) downloadScanServe(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// 4. Build scanner.Artifact.
+	// 4. Build scanner.Artifact. Ecosystem carries the namespaced segment
+	// (rubygems__<index>) so the persisted artifact row + cache isolate per index,
+	// matching the PyPI/npm reference (the artifact ID already encodes it).
 	scanArtifact := scanner.Artifact{
 		ID:          artifactID,
-		Ecosystem:   scanner.EcosystemRubyGems,
+		Ecosystem:   scanner.Ecosystem(eco),
 		Name:        name,
 		Version:     version,
 		LocalPath:   tmpPath,
@@ -630,11 +826,17 @@ func (a *RubyGemsAdapter) persistArtifact(
 	return adapter.InsertScanResults(a.db, artifactID, scanResults)
 }
 
-// downloadToTemp downloads url into a temporary file, returning (path, size, sha256hex, error).
-func downloadToTemp(ctx context.Context, rawURL string, client *http.Client) (string, int64, string, error) {
+// downloadToTempAuthed downloads url into a temporary file, returning (path,
+// size, sha256hex, error). When authHeader is non-empty it is sent as the
+// Authorization header (per-index private-source credential); the client must be
+// redirect-safe so the header is stripped on a cross-host/scheme redirect.
+func downloadToTempAuthed(ctx context.Context, rawURL, authHeader string, client *http.Client) (string, int64, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", 0, "", fmt.Errorf("rubygems: download: building request: %w", err)
+	}
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
 	}
 	resp, err := client.Do(req)
 	if err != nil {

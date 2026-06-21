@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
 )
@@ -233,14 +234,14 @@ type PortsConfig struct {
 }
 
 type UpstreamsConfig struct {
-	PyPI          string               `mapstructure:"pypi"`
-	NPM           string               `mapstructure:"npm"`
-	NuGet         string               `mapstructure:"nuget"`
+	PyPI          UpstreamSet          `mapstructure:"pypi"`
+	NPM           UpstreamSet          `mapstructure:"npm"`
+	NuGet         UpstreamSet          `mapstructure:"nuget"`
 	Docker        DockerUpstreamConfig `mapstructure:"docker"`
-	Maven         string               `mapstructure:"maven"`
+	Maven         UpstreamSet          `mapstructure:"maven"`
 	MavenResolver MavenResolverConfig  `mapstructure:"maven_resolver"`
-	RubyGems      string               `mapstructure:"rubygems"`
-	GoMod         string               `mapstructure:"gomod"`
+	RubyGems      UpstreamSet          `mapstructure:"rubygems"`
+	GoMod         UpstreamSet          `mapstructure:"gomod"`
 }
 
 // MavenResolverConfig controls the effective-POM parent chain resolver.
@@ -591,6 +592,14 @@ func Load(path string) (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
+	// Explicit env binding for upstreams that are now structured (UpstreamSet).
+	// A scalar SGW_UPSTREAMS_<ECO> is decoded into UpstreamSet.Default via the
+	// string-to-set decode hook below. AutomaticEnv alone does not populate a
+	// nested-struct key from a scalar env var.
+	for _, eco := range []string{"pypi", "npm", "nuget", "maven", "rubygems", "gomod"} {
+		_ = v.BindEnv("upstreams."+eco, "SGW_UPSTREAMS_"+strings.ToUpper(eco))
+	}
+
 	if err := v.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("config: reading %s: %w", path, err)
 	}
@@ -691,7 +700,12 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("scanners.reputation.retention_days", 30)
 
 	var cfg Config
-	if err := v.Unmarshal(&cfg); err != nil {
+	decodeOpt := viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
+		mapstructure.StringToTimeDurationHookFunc(),
+		mapstructure.StringToSliceHookFunc(","),
+		stringToUpstreamSetHookFunc(),
+	))
+	if err := v.Unmarshal(&cfg, decodeOpt); err != nil {
 		return nil, fmt.Errorf("config: unmarshalling: %w", err)
 	}
 
@@ -784,6 +798,22 @@ func (c *Config) Validate() error {
 
 	if err := c.validateSBOM(); err != nil {
 		return err
+	}
+
+	for _, p := range []struct {
+		eco string
+		set UpstreamSet
+	}{
+		{"pypi", c.Upstreams.PyPI},
+		{"npm", c.Upstreams.NPM},
+		{"nuget", c.Upstreams.NuGet},
+		{"maven", c.Upstreams.Maven},
+		{"rubygems", c.Upstreams.RubyGems},
+		{"gomod", c.Upstreams.GoMod},
+	} {
+		if err := validateUpstreamSet(p.eco, p.set); err != nil {
+			return err
+		}
 	}
 
 	return nil

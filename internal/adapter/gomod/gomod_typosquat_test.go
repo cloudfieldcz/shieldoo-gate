@@ -45,7 +45,7 @@ func setupTestGoModWithTyposquat(t *testing.T, upstreamHandler http.HandlerFunc)
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
 		MinimumConfidence:   0.7,
 	}, nil)
-	return gomod.NewGoModAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL), upstream
+	return gomod.NewGoModAdapter(db, cacheStore, scanEngine, policyEngine, config.UpstreamSet{Default: upstream.URL}), upstream
 }
 
 func setupTestGoModOverrideAware(t *testing.T, upstreamHandler http.HandlerFunc) (*gomod.GoModAdapter, *httptest.Server, *config.GateDB) {
@@ -74,7 +74,7 @@ func setupTestGoModOverrideAware(t *testing.T, upstreamHandler http.HandlerFunc)
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
 		MinimumConfidence:   0.7,
 	}, db)
-	a := gomod.NewGoModAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL)
+	a := gomod.NewGoModAdapter(db, cacheStore, scanEngine, policyEngine, config.UpstreamSet{Default: upstream.URL})
 	return a, upstream, db
 }
 

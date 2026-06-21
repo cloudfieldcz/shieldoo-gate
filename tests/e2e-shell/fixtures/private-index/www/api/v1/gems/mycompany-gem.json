@@ -1,0 +1,9 @@
+{
+  "name": "mycompany-gem",
+  "version": "1.0.0",
+  "platform": "ruby",
+  "gem_uri": "https://private-index:8443/gems/mycompany-gem-1.0.0.gem",
+  "homepage_uri": "https://corp.example.com/mycompany-gem",
+  "sha": "89a653c659e909dab64227dceeb819a583322ca425f7eb5dc191c9e8953d7f46",
+  "licenses": ["MIT"]
+}

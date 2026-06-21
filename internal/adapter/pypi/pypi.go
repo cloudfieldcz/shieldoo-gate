@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -30,14 +31,15 @@ var _ adapter.Adapter = (*PyPIAdapter)(nil)
 
 // PyPIAdapter proxies PyPI Simple API (PEP 503) and package downloads.
 type PyPIAdapter struct {
-	db             *config.GateDB
-	cache          cache.CacheStore
-	scanEngine     *scanner.Engine
-	policyEngine   *policy.Engine
-	upstreamURL    string
-	filesHost      string // CDN for package file downloads; defaults to pypiFilesHost
-	router         http.Handler
-	httpClient     *http.Client
+	db               *config.GateDB
+	cache            cache.CacheStore
+	scanEngine       *scanner.Engine
+	policyEngine     *policy.Engine
+	upstreamURL      string // default index base (back-compat; == resolver default)
+	filesHost        string // CDN for package file downloads; defaults to pypiFilesHost
+	resolver         *adapter.UpstreamResolver
+	router           http.Handler
+	httpClient       *http.Client
 	tagMutabilityCfg config.TagMutabilityConfig
 }
 
@@ -47,17 +49,27 @@ func NewPyPIAdapter(
 	cacheStore cache.CacheStore,
 	scanEngine *scanner.Engine,
 	policyEngine *policy.Engine,
-	upstreamURL string,
+	upstreams config.UpstreamSet,
 	tagMutabilityCfg config.TagMutabilityConfig,
 ) *PyPIAdapter {
+	defaultURL := upstreams.DefaultOr("https://pypi.org")
+	resolver, err := adapter.NewUpstreamResolver("pypi", config.UpstreamSet{
+		Default:      defaultURL,
+		ExtraIndexes: upstreams.ExtraIndexes,
+	})
+	if err != nil {
+		// Validation happened at config load; a build error here is a programming bug.
+		panic(fmt.Sprintf("pypi: building upstream resolver: %v", err))
+	}
 	a := &PyPIAdapter{
 		db:               db,
 		cache:            cacheStore,
 		scanEngine:       scanEngine,
 		policyEngine:     policyEngine,
-		upstreamURL:      strings.TrimRight(upstreamURL, "/"),
+		upstreamURL:      strings.TrimRight(defaultURL, "/"),
 		filesHost:        pypiFilesHost,
-		httpClient:        adapter.NewProxyHTTPClient(5 * time.Minute),
+		resolver:         resolver,
+		httpClient:       adapter.NewRedirectSafeClient(5 * time.Minute),
 		tagMutabilityCfg: tagMutabilityCfg,
 	}
 	a.router = a.buildRouter()
@@ -69,6 +81,16 @@ func NewPyPIAdapter(
 func (a *PyPIAdapter) SetFilesHost(host string) {
 	a.filesHost = strings.TrimRight(host, "/")
 }
+
+// SetHTTPClient overrides the HTTP client used for artifact downloads.
+// Intended for testing only — allows tests to inject a client that trusts
+// self-signed TLS certificates from httptest.NewTLSServer.
+func (a *PyPIAdapter) SetHTTPClient(c *http.Client) {
+	a.httpClient = c
+}
+
+// DB returns the underlying GateDB. Intended for testing only.
+func (a *PyPIAdapter) DB() *config.GateDB { return a.db }
 
 // Ecosystem implements adapter.Adapter.
 func (a *PyPIAdapter) Ecosystem() scanner.Ecosystem { return scanner.EcosystemPyPI }
@@ -95,13 +117,97 @@ func (a *PyPIAdapter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.router.ServeHTTP(w, r)
 }
 
+// indexContext carries the serving index's identity through the download pipeline.
+// name=="" and auth=="" for the default index (byte-identical behaviour).
+type indexContext struct {
+	name string // "" for the default index
+	auth string // Authorization header value, or ""
+}
+
+// extIndexNameRe validates extra-index names: lowercase alphanum + hyphens only.
+// This is the SSRF guard — reject any name that could forge a URL component.
+var extIndexNameRe = regexp.MustCompile(`^[a-z0-9-]+$`)
+
+// ecosystemSeg returns the ecosystem string for the given index context:
+// bare "pypi" for the default index, "pypi__<name>" for extra indexes.
+func (a *PyPIAdapter) ecosystemSeg(ic indexContext) string {
+	return adapter.NamespacedEcosystem(string(scanner.EcosystemPyPI), ic.name)
+}
+
+// pypiArtifactIDForEco builds a 4-segment artifact ID with an explicit ecosystem segment.
+func pypiArtifactIDForEco(eco, name, version, filename string) string {
+	return fmt.Sprintf("%s:%s:%s:%s", eco, name, version, filename)
+}
+
 // buildRouter creates the chi router with all PyPI routes.
 func (a *PyPIAdapter) buildRouter() http.Handler {
 	r := chi.NewRouter()
 	r.Get("/simple/", a.handleSimpleIndex)
 	r.Get("/simple/{package}/", a.handleSimplePackage)
 	r.Get("/packages/*", a.handlePackageDownload)
+	r.Get("/ext-packages/{index}/*", a.handleExtraPackageDownload)
 	return r
+}
+
+// handleExtraPackageDownload runs the full download → scan → policy → serve pipeline
+// for artifacts fetched from a named extra index. It is the target of the rewritten
+// download URLs produced by RewriteExtraIndexSimplePage.
+//
+// Security invariants:
+//   - SSRF: the {index} name is validated against extIndexNameRe AND resolved via the
+//     resolver before any upstream URL is constructed. Unknown/forged names → 404.
+//   - Path-traversal: any ".." segment in the wildcard file path → 404.
+//   - Artifacts are stored under the namespaced ecosystem "pypi__<index>" and go through
+//     the full scan+cache pipeline — never served unscanned.
+//   - Per-index auth is attached to the upstream request via a.resolver.AuthHeader.
+func (a *PyPIAdapter) handleExtraPackageDownload(w http.ResponseWriter, r *http.Request) {
+	index := chi.URLParam(r, "index")
+
+	// SSRF guard: validate name format before touching the resolver.
+	if !extIndexNameRe.MatchString(index) {
+		http.NotFound(w, r)
+		return
+	}
+	idx, ok := a.resolver.IndexByName(index)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	filePath := chi.URLParam(r, "*")
+
+	// Path-traversal defence-in-depth (S6): percent-decode the wildcard first so
+	// that %2e%2e (encoded "..") is caught alongside the literal form. We check the
+	// DECODED segments but keep the original filePath for constructing the upstream
+	// URL — only the traversal guard uses the decoded form.
+	decoded, err := url.PathUnescape(filePath)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	for _, seg := range strings.Split(decoded, "/") {
+		if seg == ".." {
+			http.NotFound(w, r)
+			return
+		}
+	}
+
+	// Determine the base URL for file downloads: FilesHost if set, otherwise the index URL.
+	filesBase := idx.FilesHost
+	if filesBase == "" {
+		filesBase = idx.URL
+	}
+	upstreamFull := strings.TrimRight(filesBase, "/") + "/" + filePath
+
+	ic := indexContext{name: index, auth: a.resolver.AuthHeader(idx)}
+
+	// PEP 658 .metadata files — relay directly (size-capped, header-allowlisted, authed).
+	if strings.HasSuffix(filePath, ".metadata") {
+		a.proxyDirectAuthed(w, r, upstreamFull, ic.auth)
+		return
+	}
+
+	a.downloadScanServeWithCtx(w, r, upstreamFull, filePath, ic)
 }
 
 // handleSimpleIndex proxies the PEP 503 simple index page.
@@ -109,8 +215,10 @@ func (a *PyPIAdapter) handleSimpleIndex(w http.ResponseWriter, r *http.Request) 
 	a.proxyUpstream(w, r, "/simple/")
 }
 
-// handleSimplePackage proxies the per-package simple page, rewriting download
-// URLs to route through the proxy's /packages/ handler so artifacts get scanned.
+// handleSimplePackage fans out across all resolved indexes for the package,
+// in fallback order, rewriting download URLs so artifacts route through the
+// scan pipeline. Scoped packages (claimed by a named index) NEVER fall back
+// to the default/public index — a scoped miss returns 404 with an audit row.
 func (a *PyPIAdapter) handleSimplePackage(w http.ResponseWriter, r *http.Request) {
 	pkg := chi.URLParam(r, "package")
 	if err := adapter.ValidatePackageName(pkg); err != nil {
@@ -120,7 +228,138 @@ func (a *PyPIAdapter) handleSimplePackage(w http.ResponseWriter, r *http.Request
 		})
 		return
 	}
-	a.proxyUpstreamRewrite(w, r, "/simple/"+pkg+"/")
+	indexes := a.resolver.ResolveForPackage(pkg)
+	for _, idx := range indexes {
+		served, err := a.tryServeSimple(w, r, idx, pkg)
+		if err != nil {
+			a.resolver.ObserveProbe(idx.Name, "error")
+			continue
+		}
+		if served {
+			a.resolver.ObserveProbe(idx.Name, "hit")
+			return
+		}
+		a.resolver.ObserveProbe(idx.Name, "miss")
+	}
+	// Nothing served — audit a scoped miss if the name was claimed.
+	if claimants := a.resolver.ClaimingIndexNames(pkg); len(claimants) > 0 {
+		a.resolver.ObserveScopedMiss()
+		eco := adapter.NamespacedEcosystem(string(scanner.EcosystemPyPI), claimants[0])
+		md, _ := json.Marshal(map[string]any{"claiming_indexes": claimants})
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
+			EventType:    model.EventBlocked,
+			ArtifactID:   fmt.Sprintf("%s:%s:*", eco, CanonicalName(pkg)),
+			ClientIP:     r.RemoteAddr,
+			UserAgent:    r.UserAgent(),
+			Reason:       "scoped private-index package not found on any claiming index (no public fallback)",
+			MetadataJSON: string(md),
+		})
+	}
+	adapter.WriteJSONError(w, http.StatusNotFound, adapter.ErrorResponse{
+		Error:    "not found",
+		Artifact: pkg,
+		Reason:   "package not found on any configured index",
+	})
+}
+
+// tryServeSimple fetches the simple page for pkg from idx, rewrites download
+// URLs, and writes the response. Returns (true, nil) on success, (false, nil)
+// on 404, (false, err) on any other upstream error.
+func (a *PyPIAdapter) tryServeSimple(w http.ResponseWriter, r *http.Request, idx adapter.ResolvedIndex, pkg string) (bool, error) {
+	pageURL, err := url.JoinPath(idx.URL, "/simple/"+pkg+"/")
+	if err != nil {
+		return false, err
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, pageURL, nil)
+	if err != nil {
+		return false, err
+	}
+	if idx.Name == "" {
+		// Default index: relay the client's Accept header unchanged (byte-identical behaviour).
+		if accept := r.Header.Get("Accept"); accept != "" {
+			req.Header.Set("Accept", accept)
+		}
+	} else {
+		// FIX A: Extra (lower-trust) indexes — force HTML so the upstream cannot
+		// return PEP 691 JSON (which the href regex cannot parse, causing a fail-open
+		// bypass). PEP 691 JSON is not yet supported for extra indexes.
+		req.Header.Set("Accept", "text/html, application/vnd.pypi.simple.v1+html;q=0.9")
+	}
+	if h := a.resolver.AuthHeader(idx); h != "" {
+		req.Header.Set("Authorization", h)
+	}
+	resp, err := a.resolver.Client().Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("pypi: index %q returned %d", idx.Name, resp.StatusCode)
+	}
+	const maxMetadataSize = 200 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataSize+1))
+	if err != nil {
+		return false, err
+	}
+	if int64(len(body)) > maxMetadataSize {
+		return false, fmt.Errorf("pypi: index %q metadata exceeds size limit", idx.Name)
+	}
+	var rewritten []byte
+	if idx.Name == "" {
+		// Default index: use the existing regex rewrite (byte-identical behaviour).
+		rewritten = pypiDownloadURLRe.ReplaceAll(body, []byte("/packages/"))
+	} else {
+		// FIX A: Validate Content-Type for extra indexes — non-HTML means the upstream
+		// ignored the forced Accept header and returned JSON (or something else). Fail
+		// closed: serving verbatim JSON would bypass all scanning because the href regex
+		// matches nothing in JSON.
+		ct := strings.ToLower(resp.Header.Get("Content-Type"))
+		if !strings.Contains(ct, "text/html") && !strings.Contains(ct, "application/vnd.pypi.simple.v1+html") {
+			log.Error().
+				Str("index", idx.Name).
+				Str("package", pkg).
+				Str("content_type", resp.Header.Get("Content-Type")).
+				Msg("SECURITY: extra index returned non-HTML simple page, refusing to serve (would bypass scanning)")
+			http.Error(w, "upstream metadata is not HTML; refusing to serve (would bypass scanning)", http.StatusBadGateway)
+			return true, nil
+		}
+		var rerr error
+		rewritten, rerr = adapter.RewriteExtraIndexSimplePage(body, idx, pageURL)
+		if rerr != nil {
+			log.Error().Err(rerr).Str("index", idx.Name).Str("package", pkg).
+				Msg("SECURITY: simple-page rewrite failed, refusing to serve")
+			http.Error(w, "upstream metadata could not be safely rewritten", http.StatusBadGateway)
+			return true, nil
+		}
+	}
+	// FIX E: Header relay — extra indexes use an allowlist to prevent a low-trust
+	// upstream from injecting Set-Cookie, CSP, Link, etc. The default index keeps
+	// the existing full relay (byte-identical behaviour).
+	if idx.Name == "" {
+		// Default index: existing behaviour — relay all but Content-Length.
+		for key, vals := range resp.Header {
+			if strings.EqualFold(key, "Content-Length") {
+				continue
+			}
+			for _, v := range vals {
+				w.Header().Add(key, v)
+			}
+		}
+	} else {
+		// Extra (lower-trust) index: allowlist only.
+		for _, h := range []string{"Content-Type", "ETag", "Last-Modified"} {
+			if v := resp.Header.Get(h); v != "" {
+				w.Header().Set(h, v)
+			}
+		}
+	}
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(rewritten)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(rewritten)
+	return true, nil
 }
 
 // pypiFilesHost is the CDN that serves actual PyPI package files.
@@ -159,11 +398,47 @@ func (a *PyPIAdapter) handlePackageDownload(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	a.downloadScanServe(w, r, upstreamFull, filePath)
+	// Default index: indexContext with empty name/auth → bare "pypi" ecosystem, no auth header.
+	a.downloadScanServeWithCtx(w, r, upstreamFull, filePath, indexContext{})
 }
 
-// downloadScanServe is the core scan pipeline.
-func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, upstreamURL, filePath string) {
+// proxyDirectAuthed fetches the given absolute URL, attaches an optional Authorization
+// header, and relays the response with a size cap and a safe header allowlist.
+// Used for PEP 658 .metadata files from extra indexes.
+func (a *PyPIAdapter) proxyDirectAuthed(w http.ResponseWriter, r *http.Request, target, auth string) {
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
+	if err != nil {
+		http.Error(w, "upstream request error", http.StatusInternalServerError)
+		return
+	}
+	if auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		http.Error(w, "upstream unreachable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Safe header allowlist — prevent a low-trust upstream from injecting
+	// Set-Cookie, CSP, Link, etc. into the client response.
+	for _, h := range []string{"Content-Type", "ETag", "Last-Modified"} {
+		if v := resp.Header.Get(h); v != "" {
+			w.Header().Set(h, v)
+		}
+	}
+
+	// Size cap: 10 MB for .metadata files (PEP 658).
+	const maxMetadataBytes int64 = 10 << 20
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, io.LimitReader(resp.Body, maxMetadataBytes))
+}
+
+// downloadScanServeWithCtx is the core scan pipeline.
+// ic carries the serving index identity; ic.name=="" means the default PyPI index
+// (bare "pypi" ecosystem, no auth header — byte-identical to the old behaviour).
+func (a *PyPIAdapter) downloadScanServeWithCtx(w http.ResponseWriter, r *http.Request, upstreamURL, filePath string, ic indexContext) {
 	ctx := r.Context()
 
 	// Derive a simple artifact identifier from the path for DB/cache lookups.
@@ -183,7 +458,9 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	artifactID := PyPIArtifactID(pkgName, pkgVersion, filename)
+	// Build artifact ID using the namespaced ecosystem segment.
+	// Default index (ic.name=="") → bare "pypi:...", extra index → "pypi__<name>:...".
+	artifactID := pypiArtifactIDForEco(a.ecosystemSeg(ic), pkgName, pkgVersion, filename)
 
 	// 1. Check if already in cache with a known status.
 	cachedPath, cacheErr := a.cache.Get(ctx, artifactID)
@@ -222,7 +499,7 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 		}
 		// Tag mutability check on cache hit.
 		if adapter.HandleTagMutability(ctx, a.tagMutabilityCfg, a.db, a.httpClient,
-			string(scanner.EcosystemPyPI), pkgName, pkgVersion, artifactID, upstreamURL, r, w) {
+			a.ecosystemSeg(ic), pkgName, pkgVersion, artifactID, upstreamURL, r, w) {
 			return
 		}
 		if adapter.CheckCacheHitLicensePolicy(w, r.Context(), a.policyEngine, a.db, artifactID) {
@@ -240,7 +517,7 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 		})
 		// Trigger async sandbox scan (non-blocking).
 		adapter.TriggerAsyncScan(r.Context(), scanner.Artifact{
-			ID: artifactID, Ecosystem: scanner.EcosystemPyPI, Name: pkgName, Version: pkgVersion, LocalPath: cachedPath,
+			ID: artifactID, Ecosystem: scanner.Ecosystem(a.ecosystemSeg(ic)), Name: pkgName, Version: pkgVersion, LocalPath: cachedPath,
 		}, cachedPath, a.db, a.policyEngine)
 		return
 	}
@@ -300,8 +577,8 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// 3. Download to temp file.
-	tmpPath, size, sha, err := downloadToTemp(pctx, upstreamURL, a.httpClient)
+	// 3. Download to temp file (attach per-index auth if present).
+	tmpPath, size, sha, err := downloadToTempAuthed(pctx, upstreamURL, ic.auth, a.httpClient)
 	if err != nil {
 		http.Error(w, "failed to fetch upstream package", http.StatusBadGateway)
 		return
@@ -322,7 +599,7 @@ func (a *PyPIAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, 
 	// 3. Build scanner.Artifact.
 	scanArtifact := scanner.Artifact{
 		ID:          artifactID,
-		Ecosystem:   scanner.EcosystemPyPI,
+		Ecosystem:   scanner.Ecosystem(a.ecosystemSeg(ic)),
 		Name:        pkgName,
 		Version:     pkgVersion,
 		LocalPath:   tmpPath,
@@ -536,66 +813,22 @@ func (a *PyPIAdapter) proxyDirect(w http.ResponseWriter, r *http.Request, target
 // pypiDownloadURLRe matches PyPI download URLs (files.pythonhosted.org).
 var pypiDownloadURLRe = regexp.MustCompile(`https://files\.pythonhosted\.org/packages/`)
 
-// proxyUpstreamRewrite fetches the upstream simple page and rewrites download
-// URLs from files.pythonhosted.org to relative /packages/ paths so that
-// package downloads are routed through the scan pipeline.
-func (a *PyPIAdapter) proxyUpstreamRewrite(w http.ResponseWriter, r *http.Request, path string) {
-	target, err := url.JoinPath(a.upstreamURL, path)
-	if err != nil {
-		http.Error(w, "bad upstream path", http.StatusInternalServerError)
-		return
-	}
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
-	if err != nil {
-		http.Error(w, "upstream request error", http.StatusInternalServerError)
-		return
-	}
-	if accept := r.Header.Get("Accept"); accept != "" {
-		req.Header.Set("Accept", accept)
-	}
-
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		http.Error(w, "upstream unreachable", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	// Cap metadata responses at 200 MB to prevent DoS from malicious upstreams.
-	// Read one extra byte to distinguish "fits" from "exceeds" so we error out
-	// cleanly instead of silently truncating the response body.
-	const maxMetadataSize = 200 << 20
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataSize+1))
-	if err != nil {
-		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
-		return
-	}
-	if int64(len(body)) > maxMetadataSize {
-		http.Error(w, "upstream metadata exceeds size limit", http.StatusBadGateway)
-		return
-	}
-
-	// Rewrite absolute download URLs to proxy-relative paths.
-	rewritten := pypiDownloadURLRe.ReplaceAll(body, []byte("/packages/"))
-
-	for key, vals := range resp.Header {
-		if strings.EqualFold(key, "Content-Length") {
-			continue // length changed after rewrite
-		}
-		for _, v := range vals {
-			w.Header().Add(key, v)
-		}
-	}
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(rewritten)))
-	w.WriteHeader(resp.StatusCode)
-	_, _ = w.Write(rewritten)
+// downloadToTemp downloads url into a temporary file, returning (path, size, sha256hex, error).
+// For the default index (no auth). Delegates to downloadToTempAuthed with auth="".
+func downloadToTemp(ctx context.Context, rawURL string, client *http.Client) (string, int64, string, error) {
+	return downloadToTempAuthed(ctx, rawURL, "", client)
 }
 
-// downloadToTemp downloads url into a temporary file, returning (path, size, sha256hex, error).
-func downloadToTemp(ctx context.Context, rawURL string, client *http.Client) (string, int64, string, error) {
+// downloadToTempAuthed downloads rawURL into a temporary file, optionally attaching an
+// Authorization header. Returns (tmpPath, size, sha256hex, error).
+// Cap: 2 GB to prevent disk exhaustion from malicious upstreams.
+func downloadToTempAuthed(ctx context.Context, rawURL, auth string, client *http.Client) (string, int64, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", 0, "", fmt.Errorf("pypi: download: building request: %w", err)
+	}
+	if auth != "" {
+		req.Header.Set("Authorization", auth)
 	}
 	resp, err := client.Do(req)
 	if err != nil {

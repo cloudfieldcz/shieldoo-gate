@@ -3,6 +3,7 @@ package reputation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,16 @@ import (
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scanner"
 )
+
+// errPackageNotFound signals that the public registry has no record of the
+// package (HTTP 404). For a private/secondary-index package this is the EXPECTED
+// case, NOT a scanner failure: there is simply no public reputation data. The
+// caller turns it into a zero-score CLEAN result with NO error, so a required
+// reputation scanner does not fail closed (503) on every private-index artifact.
+// Genuine transient failures (5xx, network, timeout) still return a real error
+// and remain retryable. See issue #32 (multi-upstream indexes) + the reputation
+// gotcha: required + public-404 must not be fatal.
+var errPackageNotFound = errors.New("reputation: package not found in public registry")
 
 // PackageMetadata holds upstream registry metadata about a package.
 type PackageMetadata struct {
@@ -98,6 +109,10 @@ func doPyPIFetch(client *http.Client, req *http.Request, name string) (*PackageM
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		// Not in the public registry — expected for a private-index package.
+		return nil, errPackageNotFound
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("reputation: pypi %s returned %d", name, resp.StatusCode)
 	}
@@ -221,6 +236,10 @@ func doNPMFetch(client *http.Client, req *http.Request, name string) (*PackageMe
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		// Not in the public registry — expected for a private-index package.
+		return nil, errPackageNotFound
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("reputation: npm %s returned %d", name, resp.StatusCode)
 	}
@@ -328,6 +347,10 @@ func fetchNuGetMetadata(ctx context.Context, client *http.Client, name string) (
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		// Not in the public registry — expected for a private-index package.
+		return nil, errPackageNotFound
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("reputation: nuget %s returned %d", name, resp.StatusCode)
 	}

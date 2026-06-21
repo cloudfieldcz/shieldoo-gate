@@ -355,6 +355,36 @@ proxy_auth:
   global_token_env: "SGW_PROXY_TOKEN"            # Env var holding a global shared token (optional)
 ```
 
+## Multi-Upstream Indexes (v1.1)
+
+Each non-Docker ecosystem upstream (`pypi`, `npm`, `nuget`, `maven`, `rubygems`, `gomod`)
+accepts either a **bare string** (back-compat) or a **structured set**:
+
+```yaml
+upstreams:
+  pypi:
+    default: "https://pypi.org"          # ordered first
+    extra_indexes:
+      - name: "corp"                      # ^[a-z0-9-]+$ — used in artifact-ID namespacing (pypi__corp)
+        url: "https://pkgs.internal.example.com"   # registry BASE — the gate appends /simple/
+        packages: ["mycompany-*"]         # optional glob scope (omit = unscoped fallback)
+        auth:
+          type: "basic"                   # "bearer" | "basic"
+          token_env: "SGW_CORP_INDEX_TOKEN"  # credential from env only — never plaintext
+```
+
+Key rules:
+
+- **Bare string ≡ `{ default: "<url>" }`** — a decode hook makes the two forms identical, so existing configs keep working unchanged.
+- **Standard going forward:** all committed configs (`docker/config.yaml`, `examples/deploy/config.yaml`, the production `.deploy/config.yaml`, and the Helm chart) use the structured `default:` form. This is shape-only — no behaviour change.
+- **`url` is the registry BASE**, not the simple-index URL: the gate appends the PEP 503 `/simple/<pkg>/` path itself (same as `default`). Do **not** put `/simple/` in `url` — it would be doubled. An index must serve its simple API at `<url>/simple/`.
+- **Resolution:** `default` first, then `extra_indexes` in order. When a `packages` glob matches, **only** the claiming scoped indexes are tried — a scoped-namespace miss is a hard 404, never a public fallback (dependency-confusion protection).
+- **Production posture:** the prod config (`.deploy/`) and the Helm chart ship **no** `extra_indexes` — the gate is a transparent pull-through proxy. Adding a private index is a deliberate per-ecosystem opt-in.
+- **Per-index auth** is read from `auth.token_env` (env var) only; credentials never appear in the config file or client requests.
+- See [`config.example.yaml`](../config.example.yaml) for a fully annotated multi-index example, and `examples/python-private-index/` for an end-to-end walkthrough.
+
+> A full design write-up + ADR-017 lands with the documentation phase (Phase 8); this section is the operational reference.
+
 ## Environment Variable Overrides
 
 Every config key can be overridden via environment variables using the `SGW_` prefix. Nested keys use `_` as separator:

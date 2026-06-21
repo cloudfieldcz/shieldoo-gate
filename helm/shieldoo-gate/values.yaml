@@ -62,12 +62,23 @@ cache:
     docker: "720h"
 
 upstreams:
-  pypi: "https://pypi.org"
-  npm: "https://registry.npmjs.org"
-  nuget: "https://api.nuget.org"
-  maven: "https://repo1.maven.org/maven2"
-  rubygems: "https://rubygems.org"
-  gomod: "https://proxy.golang.org"
+  # Structured `default:` form (functionally identical to a bare string). To front a
+  # private/secondary index, add `extra_indexes:` under an ecosystem (see
+  # config.example.yaml) — the configmap renders the whole subtree, so it carries
+  # through. An index `url` is the registry base; the gate appends /simple/. The chart
+  # ships NO extra_indexes by default (transparent pull-through proxy).
+  pypi:
+    default: "https://pypi.org"
+  npm:
+    default: "https://registry.npmjs.org"
+  nuget:
+    default: "https://api.nuget.org"
+  maven:
+    default: "https://repo1.maven.org/maven2"
+  rubygems:
+    default: "https://rubygems.org"
+  gomod:
+    default: "https://proxy.golang.org"
   docker:
     defaultRegistry: "https://registry-1.docker.io"
     allowedRegistries: []

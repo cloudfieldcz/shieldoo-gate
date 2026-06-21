@@ -100,6 +100,50 @@ Shieldoo Gate stores every PyPI artifact under its **PEP 503 canonical name**. T
 
 The allowlist parser and the override-creation API canonicalize their input, so an admin may write `pypi:strawberry-graphql:==0.263.0` or `pypi:strawberry_graphql:==0.263.0` interchangeably; both round-trip to the canonical form. See [ADR-003](adr/ADR-003-pypi-canonical-package-names.md) for the full rationale.
 
+### Multi-Upstream Indexes
+
+`upstreams.pypi` accepts the structured `{ default, extra_indexes }` form (a bare
+string is equivalent to `{ default }`). PyPI is the **reference adapter** for the
+feature — see [ADR-017](adr/ADR-017-multi-upstream-indexes.md), [issue #32](https://github.com/shieldoo/shieldoo-gate/issues/32),
+and the [config schema](configuration.md).
+
+- **Resolution.** The simple-page request (`GET /simple/{package}/`) fans out
+  across the default + extra indexes in order. A per-index `packages` glob scope
+  claims a namespace: a claimed name is queried **only** on the claiming indexes,
+  and a claimed-but-absent name is a hard **404** (never a public fallback) — the
+  dependency-confusion guard. The scoped-miss is audited as `BLOCKED` under the
+  namespaced ecosystem (`pypi__<index>:<name>`). Unlike the other ecosystems, an
+  **unscoped** extra index is supported on PyPI: it acts as an ordered fallback
+  after the default (see the download route below for why this works for PyPI but
+  not the flat-coordinate ecosystems).
+- **Download (the `/ext-packages/<index>/` route).** A PEP 503 simple page carries
+  no package id the download leg could re-resolve from, so extra-index download
+  URLs are rewritten to a dedicated **`GET /ext-packages/{index}/{path...}`** route
+  that carries the index identity explicitly. The route validates the index name
+  (fail-closed **404** on an unknown/forged name **before** any upstream request —
+  the SSRF guard), rejects `..` path traversal, looks up the serving index's base
+  URL + `files_host` + auth, then runs the normal download → scan → policy → cache
+  flow. Artifacts store under the namespaced ecosystem `pypi__<index>`; the default
+  index keeps the bare `pypi` ecosystem and its existing `/packages/{path...}`
+  route.
+- **Fail-closed rewrite.** The default index keeps its byte-identical legacy regex
+  rewrite. Extra-index simple pages are rewritten with a real
+  `golang.org/x/net/html` **tokenizer** (never a byte regex over adversarial
+  markup): every anchor `href` is rewritten to `/ext-packages/<index>/…`, non-anchor
+  tokens are emitted verbatim, and an absolute href to a **foreign host** (not the
+  index host or its `files_host`) **fails closed**. PEP 691 JSON is not supported —
+  extra indexes are forced to request HTML and any non-HTML 200 response **fails
+  closed (502)** rather than be served verbatim (a JSON simple page has no `href=`
+  to rewrite, so serving it verbatim would be a silent full scan bypass).
+- **`files_host` (PyPI-only).** A PyPI index may serve artifacts from a separate
+  file CDN (`files.pythonhosted.org` is the canonical example). `files_host` adds
+  that host to the rewrite/SSRF allowlist so its URLs are rewritten to
+  `/ext-packages/<index>/…` and downloaded through the gate. This key is **PyPI-only
+  and rejected at config load** for every other ecosystem.
+- **Auth.** Per-index credentials come from `auth.token_env` only (never the client
+  `Authorization`) and are stripped on cross-host/scheme redirects. Whole-index
+  enumeration (the root `GET /simple/`) is served from the default only.
+
 ### Client Configuration
 
 ```bash
@@ -138,6 +182,39 @@ index-url = "http://shieldoo-gate:5000/simple/"
 
 3. Scoped packages (`@org/package`) are supported — the `@` scope is preserved in routing.
 
+### Multi-Upstream Indexes
+
+`upstreams.npm` accepts the structured `{ default, extra_indexes }` form (a bare
+string is equivalent to `{ default }`). See [issue #32](https://github.com/shieldoo/shieldoo-gate/issues/32)
+and the [config schema](configuration.md).
+
+- **Resolution.** The packument request (`GET /{package}`) fans out across the
+  default + extra indexes in order. A per-index `packages` glob scope claims a
+  namespace: a claimed name is queried **only** on the claiming indexes, and a
+  claimed-but-absent name is a hard **404** (never a public fallback) — this
+  prevents dependency-confusion. The scoped-miss is audited as `BLOCKED` under the
+  namespaced ecosystem.
+- **Download.** npm download routes carry the package id, so the serving index is
+  recovered by **re-resolving the package name** on the tarball request (no extra
+  route). Artifacts are stored under the namespaced ecosystem `npm__<index>`; the
+  default index keeps the bare `npm` ecosystem.
+- **Fail-closed rewrite.** The default index keeps the byte-identical
+  serving-origin string-replace. Extra-index packuments are rewritten by a
+  JSON-aware pass that rewrites only `versions.*.dist.tarball` and **fails closed
+  (502)** if a tarball host is neither the index host nor its files host, or if the
+  packument is not valid JSON — a rewrite miss would be a silent full scan bypass.
+- **Auth & limitations.** Per-index credentials come from `auth.token_env` only
+  (never the client `Authorization`) and are stripped on cross-host/scheme
+  redirects. `files_host` is PyPI-only and is **rejected at config load** for npm.
+  The per-version manifest (`/{package}/{version}`) is served from the default
+  index only — npm resolves tarball URLs from the full packument, which is
+  rewritten. **Extra indexes should be `packages`-scoped:** the download leg
+  recovers the serving index by re-resolving the package name, so an *unscoped*
+  extra index that serves a package only because the default 404'd cannot be
+  re-identified on the download leg. Scoping is also the dependency-confusion-safe
+  configuration. NuGet/npm ids are matched case-insensitively, so a glob may be
+  written in any case (`MyCompany.*` claims `mycompany.*`).
+
 ### Client Configuration
 
 ```bash
@@ -169,6 +246,34 @@ npm config set registry http://shieldoo-gate:4873/
 2. **Registration requests** are proxied and rewritten similarly.
 
 3. **Package downloads** (`/v3-flatcontainer/...`) trigger scanning. The adapter extracts the package ID, version, and filename, downloads the `.nupkg` file, scans it, and either serves or blocks it.
+
+### Multi-Upstream Indexes
+
+`upstreams.nuget` accepts the structured `{ default, extra_indexes }` form, with
+the same resolution semantics as [npm](#multi-upstream-indexes) (see [issue #32](https://github.com/shieldoo/shieldoo-gate/issues/32)):
+
+- **Resolution.** Per-package **registration** (`/v3/registration/{id}/index.json`)
+  fans out across indexes with ordered fallback + `packages` glob scoping; a
+  scoped-miss is a hard **404** + namespaced `BLOCKED` audit. The **service index**
+  (`/v3/index.json`) is served from the **default** only — it is index-wide, not
+  per-package.
+- **Download.** The flat-container route carries the id, so the serving index is
+  recovered by re-resolution; artifacts store under `nuget__<index>`.
+- **Fail-closed rewrite.** The default index keeps the byte-identical
+  serving-origin rewrite. Extra-index registration documents are rewritten then
+  **verified fail-closed (502)**: if any `packageContent` download URL or
+  registration sub-page `@id` still points at a foreign host after the rewrite (or
+  the body is not valid JSON), the gate refuses to serve — a foreign download URL
+  or un-routed pagination page would bypass scanning.
+- **Auth & limitations.** Per-index credentials come from `auth.token_env` only
+  and are stripped on cross-host/scheme redirects. `files_host` is PyPI-only and
+  **rejected at config load** for NuGet. Package ids are matched
+  **case-insensitively** (NuGet ids are case-insensitive and clients lowercase
+  them), so a glob may be written in any case (`MyCompany.*` claims `mycompany.*`).
+  Extra indexes should be `packages`-scoped (download-leg index recovery + the
+  dependency-confusion guard both rely on it). A `packageContent` URL must resolve
+  to the gate's scanned `/v3-flatcontainer/{id}/{version}/{file}` route or the gate
+  refuses (502) — feeds with non-standard download paths are unsupported.
 
 ### Client Configuration
 
@@ -390,9 +495,44 @@ Example: `org.apache.commons:commons-lang3:3.14.0` maps to:
 
 3. **Classifier support:** Artifacts with classifiers (e.g., `-sources.jar`, `-javadoc.jar`) are correctly parsed and scanned.
 
+### Multi-Upstream Indexes
+
+`upstreams.maven` accepts the structured `{ default, extra_indexes }` form, with
+the same resolution semantics as [npm](#multi-upstream-indexes) (see [issue #32](https://github.com/shieldoo/shieldoo-gate/issues/32)):
+
+- **No metadata rewrite surface.** Like Go modules, Maven embeds **no download
+  URLs** in its metadata — `mvn`/Gradle construct artifact URLs from the
+  `groupId/artifactId/version` coordinate against the configured repository (the
+  gate) themselves. So the gate fans per-coordinate requests (`maven-metadata.xml`,
+  `.pom`, checksums `.sha1`/`.md5`/`.sha256`/`.asc`) out across indexes (resolve by
+  the **`groupId:artifactId`** coordinate, ordered fallback + glob scoping) and
+  relays them **verbatim** (size-capped, header allowlist for extra indexes); the
+  `.jar`/`.war`/`.aar`/`.zip` download route is the unconditional scan chokepoint.
+- **Download.** A scannable artifact recovers the serving index by **re-resolving
+  the coordinate**; artifacts store under `maven__<index>`. A scoped-miss on a
+  per-coordinate metadata request is a hard **404** + namespaced `BLOCKED` audit.
+- **Effective-POM resolver.** The parent-POM license-enrichment walk is **pinned
+  to the serving index** (its base URL + per-index auth) — a private artifact's
+  parents are fetched from the private repo, not silently from public. It is
+  best-effort/fail-open (a parent absent from the index simply yields fewer
+  licenses; it never blocks serving) and its per-(baseURL,GAV) cache prevents
+  cross-index license bleed.
+- **Auth & limitations.** Per-index credentials come from `auth.token_env` only,
+  stripped on cross-host/scheme redirects (metadata fan-out, artifact download, and
+  POM fetch). `files_host` is PyPI-only and **rejected at config load**. Scopes
+  match the case-sensitive `groupId:artifactId` coordinate (e.g.
+  `com.mycompany:*`). Extra indexes **must be `packages`-scoped** (the flat
+  coordinate download leg recovers the index by re-resolution). **Version-listing
+  limitation:** version-level `maven-metadata.xml` (SNAPSHOT resolution) is
+  resolved on a best-effort coordinate heuristic — an artifactId starting with a
+  digit may mis-resolve a *version listing* (never an artifact download: the `.jar`
+  always resolves on the exact parsed coordinate, so this is never a scan bypass).
+
 ### Artifact ID Format
 
-`maven:{groupId}:{artifactId}:{version}` (e.g., `maven:org.apache.commons:commons-lang3:3.14.0`)
+`maven:{groupId}:{artifactId}:{version}` for the default index;
+`maven__<index>:{groupId}:{artifactId}:{version}` for an extra index
+(e.g., `maven:org.apache.commons:commons-lang3:3.14.0`, `maven__corp:com.mycompany:lib:1.0.0`)
 
 ### Security
 
@@ -454,9 +594,38 @@ repositories {
 
 3. **Gem filename parsing** handles hyphenated gem names correctly by scanning from right to find the last hyphen followed by a digit. Platform-specific gems (e.g., `nokogiri-1.16.0-x86_64-linux.gem`) have the platform suffix stripped from the version.
 
+### Multi-Upstream Indexes
+
+`upstreams.rubygems` accepts the structured `{ default, extra_indexes }` form, with
+the same resolution semantics as [npm](#multi-upstream-indexes) (see [issue #32](https://github.com/shieldoo/shieldoo-gate/issues/32)):
+
+- **Resolution.** Per-gem metadata fans out across indexes (ordered fallback +
+  `packages` glob scoping): `/api/v1/gems/{name}.json`,
+  `/api/v1/versions/{name}.json`, and the compact-index `/info/{name}` (the path
+  modern Bundler uses). A scoped-miss is a hard **404** + namespaced `BLOCKED`
+  audit. RubyGems clients construct the `.gem` URL themselves, so the
+  **download leg is the unconditional scan chokepoint**.
+- **Download.** `/gems/{file}` recovers the serving index by **re-resolving the
+  gem name**; artifacts store under `rubygems__<index>`.
+- **Fail-closed rewrite.** RubyGems' only metadata download URL is `gem_uri` in
+  `/api/v1/gems/{name}.json`. For extra indexes it is rewritten through the proxy
+  and **fails closed (502)** if its host is not the index/files host (or the body
+  is not valid JSON). `/api/v1/versions/*` carries no download URL and is relayed.
+- **Auth & limitations.** Per-index credentials come from `auth.token_env` only
+  and are stripped on cross-host/scheme redirects. `files_host` is PyPI-only and
+  **rejected at config load**. Extra indexes **must be `packages`-scoped** (the
+  flat `/gems/` download leg recovers the index by name). **Whole-index files**
+  (`/versions`, `/names`, `/specs*.4.8.gz`, `/quick/Marshal.4.8/*`) and the
+  legacy `/api/v1/dependencies` are served from the **default only** and **cannot
+  enumerate private gems** — by the settled ordered-fallback (non-merge) design a
+  private gem is discoverable **by name** (via `/info/{name}` or
+  `/api/v1/gems/{name}.json`), which is how Bundler/`gem` fetch gems in the
+  dependency graph, but it will not appear in a full-index listing.
+
 ### Artifact ID Format
 
-`rubygems:{name}:{version}` (e.g., `rubygems:rails:7.1.3`, `rubygems:aws-sdk-core:3.0.0`)
+`rubygems:{name}:{version}:{filename}` for the default index;
+`rubygems__<index>:{name}:{version}:{filename}` for an extra index.
 
 ### Security
 
@@ -465,7 +634,7 @@ repositories {
 
 ### Known Limitations
 
-- **Compact index API** (`/api/v1/dependencies`, `/info/{name}`) is not yet implemented. Modern Bundler may fall back to the legacy full index API which is slower. If Bundler compatibility is critical, compact index support should be added.
+- **Compact index `/info/{name}`** is served (and fans out across indexes), but the compact-index master files `/versions` / `/names` and the legacy `/api/v1/dependencies` are default-only (see the multi-index limitations above). Modern Bundler resolves gems by name via `/info/{name}`, which is supported.
 - **Gem push** is not supported -- this is a read-only proxy.
 
 ### Client Configuration
@@ -509,13 +678,37 @@ gem "rails"
 
 4. **Zip downloads** (`.zip`) trigger the scan-on-download flow. The adapter downloads the module source zip from upstream, scans it, and either serves or blocks it. Blocked modules return HTTP 410 Gone (Go convention).
 
-5. **Metadata and list requests** (`.info`, `.mod`, `list`, `@latest`) are proxied directly to the upstream without scanning.
+5. **Metadata and list requests** (`.info`, `.mod`, `list`, `@latest`) are proxied to the upstream without scanning (they carry no download URLs).
 
 6. **License detection:** Trivy does not support the Go ecosystem, so the adapter scans LICENSE-family files (`LICENSE`, `LICENCE`, `COPYING`, `UNLICENSE` plus common extensions like `.md`/`.txt`) at the module root inside the downloaded zip using [`google/licensecheck`](https://pkg.go.dev/github.com/google/licensecheck). Matches with ≥75% coverage are normalized to SPDX IDs, forwarded to the scanner engine via `scanArtifact.ExtraLicenses` for policy enforcement, and asynchronously persisted to `sbom_metadata` (generator `gomod-licensecheck`) so licenses appear in the admin UI and the `/licenses` API.
 
+### Multi-Upstream Indexes
+
+`upstreams.gomod` accepts the structured `{ default, extra_indexes }` form, with
+the same resolution semantics as [npm](#multi-upstream-indexes) (see [issue #32](https://github.com/shieldoo/shieldoo-gate/issues/32)):
+
+- **No metadata rewrite surface.** GOPROXY metadata (`@v/list`, `.info`, `.mod`,
+  `@latest`) carries **no download URLs** — the `go` client constructs
+  `…/@v/{ver}.zip` against the configured GOPROXY (the gate) itself. So the gate
+  fans metadata out across indexes (resolve by module path, ordered fallback +
+  glob scoping) and relays it **verbatim** (size-capped); the `.zip` download
+  route is the unconditional scan chokepoint.
+- **Download.** `.zip` recovers the serving index by **re-resolving the module
+  path**; artifacts store under `go__<index>`. A scoped-miss is a hard **404** +
+  namespaced `BLOCKED` audit.
+- **Auth & limitations.** Per-index credentials come from `auth.token_env` only,
+  stripped on cross-host/scheme redirects. `files_host` is PyPI-only and
+  **rejected**. Scopes match the **case-sensitive decoded** module path (e.g.
+  `github.com/mycompany/*`). Extra indexes **must be `packages`-scoped** (the
+  download leg recovers the index by module path). Operators should set
+  `GOPRIVATE`/`GONOSUMDB` on the client for the private module path so the `go`
+  client does not consult `sum.golang.org` for private modules.
+
 ### Artifact ID Format
 
-`go:{module_path}:{version}` (e.g., `go:github.com/rs/zerolog:v1.33.0`)
+`go:{module_path}:{version}` for the default index;
+`go__<index>:{module_path}:{version}` for an extra index
+(e.g., `go:github.com/rs/zerolog:v1.33.0`, `go__corp:github.com/mycompany/lib:v1.0.0`).
 
 ### Security
 

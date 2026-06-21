@@ -111,11 +111,11 @@ func TestCache_HitAndMiss(t *testing.T) {
 	result := &pomResult{Licenses: []string{"Apache-2.0"}}
 
 	// Miss
-	assert.Nil(t, c.get(coords))
+	assert.Nil(t, c.get(coords.String()))
 
 	// Put + hit
-	c.put(coords, result)
-	got := c.get(coords)
+	c.put(coords.String(), result)
+	got := c.get(coords.String())
 	require.NotNil(t, got)
 	assert.Equal(t, []string{"Apache-2.0"}, got.Licenses)
 }
@@ -123,10 +123,10 @@ func TestCache_HitAndMiss(t *testing.T) {
 func TestCache_TTLExpiration(t *testing.T) {
 	c := newPOMCache(10, 1*time.Millisecond)
 	coords := Coords{GroupID: "org.apache", ArtifactID: "apache", Version: "23"}
-	c.put(coords, &pomResult{Licenses: []string{"Apache-2.0"}})
+	c.put(coords.String(), &pomResult{Licenses: []string{"Apache-2.0"}})
 
 	time.Sleep(5 * time.Millisecond)
-	assert.Nil(t, c.get(coords), "expired entry should return nil")
+	assert.Nil(t, c.get(coords.String()), "expired entry should return nil")
 }
 
 func TestCache_EvictsOldest(t *testing.T) {
@@ -136,15 +136,15 @@ func TestCache_EvictsOldest(t *testing.T) {
 	c2 := Coords{GroupID: "b", ArtifactID: "2", Version: "2"}
 	c3 := Coords{GroupID: "c", ArtifactID: "3", Version: "3"}
 
-	c.put(c1, &pomResult{Licenses: []string{"L1"}})
+	c.put(c1.String(), &pomResult{Licenses: []string{"L1"}})
 	time.Sleep(time.Millisecond) // ensure different insertion times
-	c.put(c2, &pomResult{Licenses: []string{"L2"}})
+	c.put(c2.String(), &pomResult{Licenses: []string{"L2"}})
 	time.Sleep(time.Millisecond)
-	c.put(c3, &pomResult{Licenses: []string{"L3"}}) // should evict c1
+	c.put(c3.String(), &pomResult{Licenses: []string{"L3"}}) // should evict c1
 
-	assert.Nil(t, c.get(c1), "oldest entry should be evicted")
-	assert.NotNil(t, c.get(c2))
-	assert.NotNil(t, c.get(c3))
+	assert.Nil(t, c.get(c1.String()), "oldest entry should be evicted")
+	assert.NotNil(t, c.get(c2.String()))
+	assert.NotNil(t, c.get(c3.String()))
 }
 
 // ---------------------------------------------------------------------------
@@ -314,7 +314,7 @@ func TestResolver_NoLicensesNoParent(t *testing.T) {
 
 func TestResolver_PomURL(t *testing.T) {
 	resolver := NewResolver("https://repo1.maven.org/maven2", nil, Config{})
-	url := resolver.pomURL(Coords{
+	url := resolver.pomURL("https://repo1.maven.org/maven2", Coords{
 		GroupID:    "com.mysql",
 		ArtifactID: "mysql-connector-j",
 		Version:    "8.4.0",
@@ -392,4 +392,39 @@ func TestResolver_RealMavenCentral_Slf4jApi(t *testing.T) {
 	})
 	require.NotEmpty(t, licenses)
 	t.Logf("slf4j-api licenses: %v", licenses)
+}
+
+func TestResolveFrom_PinsToBaseURLAndSendsAuth(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/xml")
+		_, _ = w.Write([]byte(`<project><licenses><license><name>Apache-2.0</name></license></licenses></project>`))
+	}))
+	defer srv.Close()
+	resolver := NewResolver("https://default.invalid", srv.Client(), Config{MaxDepth: 5})
+	licenses := resolver.ResolveFrom(context.Background(), Coords{
+		GroupID: "com.mycompany", ArtifactID: "lib", Version: "1.0.0",
+	}, srv.URL, "Bearer tok-xyz")
+	require.Equal(t, []string{"Apache-2.0"}, licenses)
+	assert.Equal(t, "Bearer tok-xyz", gotAuth)
+}
+
+func TestResolveFrom_CacheIsolatedByBaseURL(t *testing.T) {
+	// Two servers return different licenses for the SAME GAV. The per-(baseURL,GAV)
+	// cache key must keep them distinct (no cross-index bleed).
+	srvA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<project><licenses><license><name>Apache-2.0</name></license></licenses></project>`))
+	}))
+	defer srvA.Close()
+	srvB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<project><licenses><license><name>MIT</name></license></licenses></project>`))
+	}))
+	defer srvB.Close()
+	resolver := NewResolver("https://default.invalid", srvA.Client(), Config{MaxDepth: 5})
+	c := Coords{GroupID: "com.mycompany", ArtifactID: "lib", Version: "1.0.0"}
+	a := resolver.ResolveFrom(context.Background(), c, srvA.URL, "")
+	b := resolver.ResolveFrom(context.Background(), c, srvB.URL, "")
+	assert.Equal(t, []string{"Apache-2.0"}, a)
+	assert.Equal(t, []string{"MIT"}, b) // NOT the cached Apache-2.0 from srvA
 }

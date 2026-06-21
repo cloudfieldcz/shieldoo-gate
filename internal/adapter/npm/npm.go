@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -33,7 +34,8 @@ type NPMAdapter struct {
 	cache            cache.CacheStore
 	scanEngine       *scanner.Engine
 	policyEngine     *policy.Engine
-	upstreamURL      string
+	upstreamURL      string // default index base (back-compat; == resolver default)
+	resolver         *adapter.UpstreamResolver
 	router           http.Handler
 	httpClient       *http.Client
 	tagMutabilityCfg config.TagMutabilityConfig
@@ -45,16 +47,28 @@ func NewNPMAdapter(
 	cacheStore cache.CacheStore,
 	scanEngine *scanner.Engine,
 	policyEngine *policy.Engine,
-	upstreamURL string,
+	upstreams config.UpstreamSet,
 	tagMutabilityCfg config.TagMutabilityConfig,
 ) *NPMAdapter {
+	defaultURL := upstreams.DefaultOr("https://registry.npmjs.org")
+	resolver, err := adapter.NewUpstreamResolver("npm", config.UpstreamSet{
+		Default:      defaultURL,
+		ExtraIndexes: upstreams.ExtraIndexes,
+	})
+	if err != nil {
+		// Validation happened at config load; a build error here is a programming bug.
+		panic(fmt.Sprintf("npm: building upstream resolver: %v", err))
+	}
 	a := &NPMAdapter{
 		db:               db,
 		cache:            cacheStore,
 		scanEngine:       scanEngine,
 		policyEngine:     policyEngine,
-		upstreamURL:      strings.TrimRight(upstreamURL, "/"),
-		httpClient:        adapter.NewProxyHTTPClient(5 * time.Minute),
+		upstreamURL:      strings.TrimRight(defaultURL, "/"),
+		resolver:         resolver,
+		// Redirect-safe client (Phase 2): strips per-index Authorization on a
+		// cross-host/scheme redirect so private-index tokens never leak.
+		httpClient:       adapter.NewRedirectSafeClient(5 * time.Minute),
 		tagMutabilityCfg: tagMutabilityCfg,
 	}
 	a.router = a.buildRouter()
@@ -63,6 +77,9 @@ func NewNPMAdapter(
 
 // Ecosystem implements adapter.Adapter.
 func (a *NPMAdapter) Ecosystem() scanner.Ecosystem { return scanner.EcosystemNPM }
+
+// DB exposes the adapter's database handle for tests.
+func (a *NPMAdapter) DB() *config.GateDB { return a.db }
 
 // HealthCheck implements adapter.Adapter.
 func (a *NPMAdapter) HealthCheck(ctx context.Context) error {
@@ -138,7 +155,7 @@ func (a *NPMAdapter) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 	if a.blockIfTyposquat(w, r, pkg, "") {
 		return
 	}
-	a.proxyUpstreamRewrite(w, r, "/"+pkg)
+	a.serveMetadataFanOut(w, r, pkg, "/"+pkg)
 }
 
 // handleVersionMetadata proxies version-specific metadata JSON.
@@ -159,8 +176,21 @@ func (a *NPMAdapter) handleVersionMetadata(w http.ResponseWriter, r *http.Reques
 func (a *NPMAdapter) handleTarballDownload(w http.ResponseWriter, r *http.Request) {
 	pkg := chi.URLParam(r, "package")
 	tarball := chi.URLParam(r, "tarball")
-	upstreamPath := "/" + pkg + "/-/" + tarball
-	a.downloadScanServe(w, r, a.upstreamURL+upstreamPath, pkg, tarball)
+	idx := a.firstIndexFor(pkg)
+	upstreamURL := strings.TrimRight(idx.URL, "/") + "/" + pkg + "/-/" + tarball
+	a.downloadScanServe(w, r, upstreamURL, pkg, tarball, idx)
+}
+
+// firstIndexFor recovers the serving index for a download by re-resolving the
+// package name (the npm download routes carry the package id, so resolution is
+// deterministic — no /ext-packages/ route needed). Returns the default index
+// when resolution is empty (a scoped-miss tarball: the download then fails on
+// the absent upstream, which is correct — no public fallback).
+func (a *NPMAdapter) firstIndexFor(pkg string) adapter.ResolvedIndex {
+	if idxs := a.resolver.ResolveForPackage(pkg); len(idxs) > 0 {
+		return idxs[0]
+	}
+	return adapter.ResolvedIndex{} // default index (Name "", URL "")
 }
 
 // handleScopedMetadata proxies metadata for @scope/package, rewriting tarball
@@ -179,7 +209,7 @@ func (a *NPMAdapter) handleScopedMetadata(w http.ResponseWriter, r *http.Request
 	if a.blockIfTyposquat(w, r, "@"+scope+"/"+pkg, "") {
 		return
 	}
-	a.proxyUpstreamRewrite(w, r, "/@"+scope+"/"+pkg)
+	a.serveMetadataFanOut(w, r, "@"+scope+"/"+pkg, "/@"+scope+"/"+pkg)
 }
 
 // handleScopedVersionMetadata proxies version metadata for @scope/package/version.
@@ -214,13 +244,16 @@ func (a *NPMAdapter) handleScopedTarballDownload(w http.ResponseWriter, r *http.
 		adapter.WriteJSONError(w, http.StatusBadRequest, adapter.ErrorResponse{Error: "invalid package name"})
 		return
 	}
-	upstreamPath := "/@" + scope + "/" + pkg + "/-/" + tarball
 	fullPkg := "@" + scope + "/" + pkg
-	a.downloadScanServe(w, r, a.upstreamURL+upstreamPath, fullPkg, tarball)
+	idx := a.firstIndexFor(fullPkg)
+	upstreamURL := strings.TrimRight(idx.URL, "/") + "/@" + scope + "/" + pkg + "/-/" + tarball
+	a.downloadScanServe(w, r, upstreamURL, fullPkg, tarball, idx)
 }
 
-// downloadScanServe is the core scan pipeline for npm tarballs.
-func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, upstreamURL, pkgName, tarball string) {
+// downloadScanServe is the core scan pipeline for npm tarballs. idx is the
+// serving index recovered by re-resolution; its name namespaces the artifact ID
+// (eco__<index>) and its auth header is attached to the upstream download.
+func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, upstreamURL, pkgName, tarball string, idx adapter.ResolvedIndex) {
 	ctx := r.Context()
 
 	// Extract version from tarball name: pkgname-1.2.3.tgz
@@ -228,7 +261,9 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 
 	// Sanitize package name for use as artifact ID component.
 	safeNamePart := strings.NewReplacer("/", "_", "@", "").Replace(pkgName)
-	artifactID := fmt.Sprintf("%s:%s:%s", string(scanner.EcosystemNPM), safeNamePart, version)
+	eco := adapter.NamespacedEcosystem(string(scanner.EcosystemNPM), idx.Name)
+	artifactID := fmt.Sprintf("%s:%s:%s", eco, safeNamePart, version)
+	authHeader := a.resolver.AuthHeader(idx)
 
 	// 1. Check cache.
 	cachedPath, cacheErr := a.cache.Get(ctx, artifactID)
@@ -279,7 +314,7 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 		})
 		// Trigger async sandbox scan (non-blocking).
 		adapter.TriggerAsyncScan(r.Context(), scanner.Artifact{
-			ID: artifactID, Ecosystem: scanner.EcosystemNPM, Name: pkgName, Version: version, LocalPath: cachedPath,
+			ID: artifactID, Ecosystem: scanner.Ecosystem(eco), Name: pkgName, Version: version, LocalPath: cachedPath,
 		}, cachedPath, a.db, a.policyEngine)
 		return
 	}
@@ -330,8 +365,8 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 		return
 	}
 
-	// 3. Download.
-	tmpPath, size, sha, err := downloadToTemp(pctx, upstreamURL, a.httpClient)
+	// 3. Download (with per-index auth, if the serving index is authenticated).
+	tmpPath, size, sha, err := downloadToTempAuthed(pctx, upstreamURL, authHeader, a.httpClient)
 	if err != nil {
 		http.Error(w, "failed to fetch upstream package", http.StatusBadGateway)
 		return
@@ -349,10 +384,12 @@ func (a *NPMAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, u
 		return
 	}
 
-	// 3. Build scanner artifact.
+	// 3. Build scanner artifact. Ecosystem carries the namespaced segment
+	// (npm__<index>) so the persisted artifact row + cache isolate per index,
+	// matching the PyPI reference (the artifact ID already encodes it).
 	scanArtifact := scanner.Artifact{
 		ID:          artifactID,
-		Ecosystem:   scanner.EcosystemNPM,
+		Ecosystem:   scanner.Ecosystem(eco),
 		Name:        pkgName,
 		Version:     version,
 		LocalPath:   tmpPath,
@@ -510,81 +547,152 @@ func (a *NPMAdapter) proxyUpstream(w http.ResponseWriter, r *http.Request, path 
 	_, _ = io.Copy(w, resp.Body)
 }
 
-// proxyUpstreamRewrite fetches the upstream metadata JSON and rewrites tarball
-// URLs so that npm clients download packages through the proxy's scan pipeline
-// rather than directly from the upstream registry.
-//
-// The upstream registry embeds absolute tarball URLs such as:
-//
-//	"tarball":"https://registry.npmjs.org/is-odd/-/is-odd-3.0.1.tgz"
-//
-// This method replaces the upstream origin (a.upstreamURL + "/") with the
-// proxy's own origin ("http://" + r.Host + "/") so the npm client follows
-// URLs that route back through the proxy.
-func (a *NPMAdapter) proxyUpstreamRewrite(w http.ResponseWriter, r *http.Request, path string) {
-	target, err := url.JoinPath(a.upstreamURL, path)
-	if err != nil {
-		http.Error(w, "bad upstream path", http.StatusInternalServerError)
-		return
-	}
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
-	if err != nil {
-		http.Error(w, "upstream request error", http.StatusInternalServerError)
-		return
-	}
-	if accept := r.Header.Get("Accept"); accept != "" {
-		req.Header.Set("Accept", accept)
-	}
-
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		http.Error(w, "upstream unreachable", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	// Cap metadata responses at 200 MB to prevent DoS from malicious upstreams.
-	// Read one extra byte to distinguish "fits" from "exceeds": silently truncating
-	// the JSON would corrupt the packument (npm clients fail with "Unterminated string").
-	const maxMetadataSize = 200 << 20
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataSize+1))
-	if err != nil {
-		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
-		return
-	}
-	if int64(len(body)) > maxMetadataSize {
-		http.Error(w, "upstream metadata exceeds size limit", http.StatusBadGateway)
-		return
-	}
-
-	// Rewrite upstream tarball URLs to proxy-relative URLs so downloads pass
-	// through the scan pipeline. Detect scheme from the incoming request.
+// proxyOrigin returns the gate's own "<scheme>://<host>" origin (no trailing
+// slash), used to rewrite upstream download URLs so clients route back through
+// the scan pipeline.
+func proxyOrigin(r *http.Request) string {
 	scheme := "http"
 	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
 		scheme = "https"
 	}
-	old := []byte(`"` + a.upstreamURL + "/")
-	replacement := []byte(`"` + scheme + "://" + r.Host + "/")
-	rewritten := strings.ReplaceAll(string(body), string(old), string(replacement))
+	return scheme + "://" + r.Host
+}
 
+// serveMetadataFanOut tries each resolved index for the package's metadata,
+// rewriting the FIRST index that has it (200) so tarball downloads route back
+// through the proxy. The default index uses the legacy serving-origin string
+// replace (byte-identical to today); extra indexes use the JSON-aware
+// fail-closed adapter.RewriteNPMPackumentTarballs. A claimed-namespace miss
+// (no serving index) → 404 + namespaced BLOCKED audit (no public fallback).
+func (a *NPMAdapter) serveMetadataFanOut(w http.ResponseWriter, r *http.Request, pkg, path string) {
+	for _, idx := range a.resolver.ResolveForPackage(pkg) {
+		served, err := a.tryServeMetadata(w, r, idx, path)
+		if err != nil {
+			a.resolver.ObserveProbe(idx.Name, "error")
+			continue
+		}
+		if served {
+			a.resolver.ObserveProbe(idx.Name, "hit")
+			return
+		}
+		a.resolver.ObserveProbe(idx.Name, "miss")
+	}
+
+	if claimants := a.resolver.ClaimingIndexNames(pkg); len(claimants) > 0 {
+		a.resolver.ObserveScopedMiss()
+		eco := adapter.NamespacedEcosystem(string(scanner.EcosystemNPM), claimants[0])
+		md, _ := json.Marshal(map[string]any{"claiming_indexes": claimants})
+		safe := strings.NewReplacer("/", "_", "@", "").Replace(pkg)
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
+			EventType:    model.EventBlocked,
+			ArtifactID:   fmt.Sprintf("%s:%s:*", eco, safe),
+			ClientIP:     r.RemoteAddr,
+			UserAgent:    r.UserAgent(),
+			Reason:       "scoped private-index package not found on any claiming index (no public fallback)",
+			MetadataJSON: string(md),
+		})
+	}
+	adapter.WriteJSONError(w, http.StatusNotFound, adapter.ErrorResponse{Error: "not found", Artifact: pkg})
+}
+
+// tryServeMetadata fetches one index's metadata at path. Returns (true,nil) when
+// served (200, rewritten + relayed); (false,nil) on 404; (false,err) on
+// transport / non-200 / read error. A rewrite failure for an EXTRA index is FAIL
+// CLOSED: it writes a 502 and returns (true,nil) so no other index is tried (the
+// page we could not safely route must never reach the client).
+func (a *NPMAdapter) tryServeMetadata(w http.ResponseWriter, r *http.Request, idx adapter.ResolvedIndex, path string) (bool, error) {
+	target := strings.TrimRight(idx.URL, "/") + path
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
+	if err != nil {
+		return false, err
+	}
+	if accept := r.Header.Get("Accept"); accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+	if h := a.resolver.AuthHeader(idx); h != "" {
+		req.Header.Set("Authorization", h)
+	}
+	resp, err := a.resolver.Client().Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("npm: index %q returned %d", idx.Name, resp.StatusCode)
+	}
+
+	// Cap metadata responses at 200 MB to prevent DoS from malicious upstreams.
+	// Read one extra byte to distinguish "fits" from "exceeds" so we error out
+	// cleanly instead of silently truncating the packument JSON.
+	const maxMetadataSize = 200 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataSize+1))
+	if err != nil {
+		return false, err
+	}
+	if int64(len(body)) > maxMetadataSize {
+		return false, fmt.Errorf("npm: index %q metadata exceeds size limit", idx.Name)
+	}
+
+	var rewritten []byte
+	if idx.Name == "" {
+		// DEFAULT index: legacy serving-origin string replace (byte-identical).
+		old := []byte(`"` + a.upstreamURL + "/")
+		rewritten = []byte(strings.ReplaceAll(string(body), string(old), `"`+proxyOrigin(r)+"/"))
+	} else {
+		// EXTRA index: JSON-aware fail-closed tarball rewrite.
+		var rerr error
+		rewritten, rerr = adapter.RewriteNPMPackumentTarballs(body, idx, proxyOrigin(r))
+		if rerr != nil {
+			log.Error().Err(rerr).Str("index", idx.Name).Msg("SECURITY: npm packument rewrite failed, refusing to serve")
+			http.Error(w, "upstream metadata could not be safely rewritten", http.StatusBadGateway)
+			return true, nil
+		}
+	}
+
+	relayMetadataHeaders(w, resp, idx.Name)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(rewritten)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(rewritten)
+	return true, nil
+}
+
+// relayMetadataHeaders copies upstream response headers. Extra (low-trust)
+// indexes get an allowlist only (Content-Type/ETag/Last-Modified) to prevent a
+// private index from injecting Set-Cookie/CSP/Link; the default index relays all
+// headers (minus Content-Length, which the rewrite changed).
+func relayMetadataHeaders(w http.ResponseWriter, resp *http.Response, indexName string) {
+	if indexName != "" {
+		for _, h := range []string{"Content-Type", "ETag", "Last-Modified"} {
+			if v := resp.Header.Get(h); v != "" {
+				w.Header().Set(h, v)
+			}
+		}
+		return
+	}
 	for key, vals := range resp.Header {
 		if strings.EqualFold(key, "Content-Length") {
-			continue // length may have changed after rewrite
+			continue
 		}
 		for _, v := range vals {
 			w.Header().Add(key, v)
 		}
 	}
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(rewritten)))
-	w.WriteHeader(resp.StatusCode)
-	_, _ = w.Write([]byte(rewritten))
 }
 
-// downloadToTemp downloads url to a temp file, returning (path, size, sha256hex, error).
-func downloadToTemp(ctx context.Context, rawURL string, client *http.Client) (string, int64, string, error) {
+// downloadToTempAuthed downloads url to a temp file, returning (path, size,
+// sha256hex, error). When authHeader is non-empty it is sent as the
+// Authorization header (per-index private-registry credential); the client must
+// be redirect-safe so the header is stripped on a cross-host/scheme redirect.
+func downloadToTempAuthed(ctx context.Context, rawURL, authHeader string, client *http.Client) (string, int64, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", 0, "", fmt.Errorf("npm: download: building request: %w", err)
+	}
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
 	}
 	resp, err := client.Do(req)
 	if err != nil {

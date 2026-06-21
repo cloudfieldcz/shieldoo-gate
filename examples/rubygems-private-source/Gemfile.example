@@ -1,0 +1,7 @@
+# Point the source at the gate. With proxy auth enabled, embed PROJECT:TOKEN in
+# the URL userinfo (use `default` as the project if you don't care about
+# segmentation). The gate fans out across the default + scoped private sources.
+source "http://default:test-token-123@localhost:8086"
+
+gem "mycompany-gem"   # routed to the scoped private source (packages: ["mycompany-*"])
+gem "rake"            # routed to the public default (rubygems.org)

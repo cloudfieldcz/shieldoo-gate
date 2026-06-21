@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net"
@@ -266,6 +267,17 @@ func (s *ReputationScanner) fetchAndCompute(ctx context.Context, eco scanner.Eco
 	fetchDuration := time.Since(fetchStart).Seconds()
 
 	if fetchErr != nil {
+		// A public-registry 404 is NOT a failure: the package simply has no public
+		// reputation data. This is the EXPECTED case for a private/secondary-index
+		// package (issue #32). Return a zero-score CLEAN result with NO error so a
+		// REQUIRED reputation scanner does not fail closed (503) on every private
+		// artifact. Genuine transient errors fall through to the error path below.
+		if errors.Is(fetchErr, errPackageNotFound) {
+			reputationFetchDuration.WithLabelValues(string(eco), "not_found").Observe(fetchDuration)
+			log.Debug().Str("package", name).Str("ecosystem", string(eco)).
+				Msg("reputation: package not in public registry (no public data) — returning CLEAN")
+			return &fetchResult{score: 0, signalsJSON: "[]"}, nil
+		}
 		reputationFetchDuration.WithLabelValues(string(eco), "error").Observe(fetchDuration)
 		// Stale-while-revalidate: serve stale cache on fetch error
 		stale, err := s.loadStale(ctx, eco, name)

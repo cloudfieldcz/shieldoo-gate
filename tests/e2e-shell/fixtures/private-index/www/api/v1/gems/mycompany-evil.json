@@ -1,0 +1,6 @@
+{
+  "name": "mycompany-evil",
+  "version": "1.0.0",
+  "gem_uri": "https://evil.example.net/gems/mycompany-evil-1.0.0.gem",
+  "licenses": ["MIT"]
+}

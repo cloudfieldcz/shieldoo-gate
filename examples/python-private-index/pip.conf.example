@@ -1,0 +1,21 @@
+# pip.conf.example — point pip at Shieldoo Gate (multi-index setup)
+#
+# Copy this file to one of:
+#   ~/.pip/pip.conf         (user-level)
+#   $VIRTUAL_ENV/pip.conf   (virtualenv-level)
+#   /etc/pip.conf           (system-level)
+#
+# Credentials use HTTP Basic Auth userinfo: <project-label>:<token>
+#   - username = project label (e.g. "python-demo" or any [a-z0-9][a-z0-9_-]{0,63})
+#   - password = API token (gate proxy token, NOT the upstream index credential)
+#
+# The gate's upstream credentials (token_env) are held server-side only and
+# are never included here.
+#
+# Port note: the reference docker-compose exposes the PyPI proxy on host port
+# 5010 (container port 5000) to avoid conflicts with macOS AirPlay Receiver
+# on Monterey+. Adjust if your deployment uses a different host port or a
+# public hostname (e.g. https://pypi.gate.example.com).
+
+[global]
+index-url = http://python-demo:test-token-123@localhost:5010/simple/

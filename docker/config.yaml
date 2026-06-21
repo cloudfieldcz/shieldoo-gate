@@ -22,10 +22,17 @@ ports:
   admin: 8080
 
 upstreams:
-  pypi: "https://pypi.org"
-  npm: "https://registry.npmjs.org"
-  nuget: "https://api.nuget.org"
-  maven: "https://repo1.maven.org/maven2"
+  # Structured `default:` form (functionally identical to a bare string). To front a
+  # private/secondary index later, add `extra_indexes:` under an ecosystem — see
+  # config.example.yaml. An index `url` is the registry base; the gate appends /simple/.
+  pypi:
+    default: "https://pypi.org"
+  npm:
+    default: "https://registry.npmjs.org"
+  nuget:
+    default: "https://api.nuget.org"
+  maven:
+    default: "https://repo1.maven.org/maven2"
   maven_resolver:
     enabled: true                    # resolve licenses from parent POM chain (fail-open)
     cache_size: 4096                 # in-memory LRU entries for parent POMs
@@ -33,8 +40,10 @@ upstreams:
     max_depth: 5                     # max parent chain depth (hardcode ceiling: 10)
     fetch_timeout: "3s"              # per-POM HTTP timeout
     resolver_timeout: "5s"           # total timeout for entire parent chain walk
-  rubygems: "https://rubygems.org"
-  gomod: "https://proxy.golang.org"
+  rubygems:
+    default: "https://rubygems.org"
+  gomod:
+    default: "https://proxy.golang.org"
   docker:
     default_registry: "https://registry-1.docker.io"
     allowed_registries:

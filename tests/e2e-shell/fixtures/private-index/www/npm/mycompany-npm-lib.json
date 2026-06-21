@@ -1,0 +1,17 @@
+{
+  "name": "mycompany-npm-lib",
+  "dist-tags": { "latest": "1.0.0" },
+  "versions": {
+    "1.0.0": {
+      "name": "mycompany-npm-lib",
+      "version": "1.0.0",
+      "main": "index.js",
+      "license": "MIT",
+      "dist": {
+        "shasum": "0281d7c3730b1a876df1043ec4b6fd510d8b6ccb",
+        "integrity": "sha512-jjDLndqfCTtim7/iJIMxWPrUfiPkJCC/l1Le8+Kk2ap1DRrLnXm+0C97/0NpWg7LsLtIfeShWvQfApzaETe1iw==",
+        "tarball": "https://private-index:8443/mycompany-npm-lib/-/mycompany-npm-lib-1.0.0.tgz"
+      }
+    }
+  }
+}

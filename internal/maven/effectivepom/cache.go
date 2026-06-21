@@ -38,10 +38,11 @@ func newPOMCache(maxSize int, ttl time.Duration) *pomCache {
 	}
 }
 
-// get returns the cached POM result for the given coordinates, or nil if not
-// found or expired.
-func (c *pomCache) get(coords Coords) *pomResult {
-	key := coords.String()
+// get returns the cached POM result for the given key, or nil if not found or
+// expired. The key is supplied by the caller (the resolver builds it from the
+// serving index base URL + GAV coordinates, so the same GAV fetched from two
+// different indexes is cached distinctly — no cross-index license bleed).
+func (c *pomCache) get(key string) *pomResult {
 	c.mu.RLock()
 	entry, ok := c.entries[key]
 	c.mu.RUnlock()
@@ -58,10 +59,9 @@ func (c *pomCache) get(coords Coords) *pomResult {
 	return entry.result
 }
 
-// put stores a POM result in the cache. If the cache is at capacity, it evicts
-// the oldest entry (by insertion time).
-func (c *pomCache) put(coords Coords, result *pomResult) {
-	key := coords.String()
+// put stores a POM result under the given key. If the cache is at capacity, it
+// evicts the oldest entry (by insertion time).
+func (c *pomCache) put(key string, result *pomResult) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

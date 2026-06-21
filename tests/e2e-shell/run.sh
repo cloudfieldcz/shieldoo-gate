@@ -34,13 +34,19 @@ done
 # Source helpers and test files
 source "${SCRIPT_DIR}/helpers.sh"
 source "${SCRIPT_DIR}/test_pypi.sh"
+source "${SCRIPT_DIR}/test_pypi_multi_index.sh"
 source "${SCRIPT_DIR}/test_npm.sh"
+source "${SCRIPT_DIR}/test_npm_multi_index.sh"
 source "${SCRIPT_DIR}/test_nuget.sh"
+source "${SCRIPT_DIR}/test_nuget_multi_index.sh"
 source "${SCRIPT_DIR}/test_docker.sh"
 source "${SCRIPT_DIR}/test_docker_registry.sh"
 source "${SCRIPT_DIR}/test_maven.sh"
+source "${SCRIPT_DIR}/test_maven_multi_index.sh"
 source "${SCRIPT_DIR}/test_rubygems.sh"
+source "${SCRIPT_DIR}/test_rubygems_multi_index.sh"
 source "${SCRIPT_DIR}/test_gomod.sh"
+source "${SCRIPT_DIR}/test_gomod_multi_index.sh"
 source "${SCRIPT_DIR}/test_api.sh"
 source "${SCRIPT_DIR}/test_ai_scanner.sh"
 source "${SCRIPT_DIR}/test_version_diff.sh"
@@ -111,13 +117,19 @@ main() {
 
     # 5. Run test suites
     test_pypi
+    test_pypi_multi_index
     test_npm
+    test_npm_multi_index
     test_nuget
+    test_nuget_multi_index
     test_docker
     test_docker_registry
     test_maven
+    test_maven_multi_index
     test_rubygems
+    test_rubygems_multi_index
     test_gomod
+    test_gomod_multi_index
     test_api
     test_ai_scanner
     test_version_diff

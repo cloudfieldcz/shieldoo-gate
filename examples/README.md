@@ -50,8 +50,14 @@ Each example here uses a **different project label** so you can see the per-proj
 | [maven-example](maven-example/) | Maven `:8085` | `maven-demo` | `commons-lang3` | String utilities |
 | [rubygems-example](rubygems-example/) | RubyGems `:8086` | `rubygems-demo` | `rake` | Build automation |
 | [go-example](go-example/) | Go Modules `:8087` | `go-demo` | `zerolog` | Structured logging |
+| [python-private-index](python-private-index/) | PyPI `:5010` | `python-demo` | _(your private pkg)_ | Multi-upstream-index: public default + vendor index + scoped private index with auth. Requires your own private index + token — see the README. |
+| [npm-private-registry](npm-private-registry/) | npm `:4873` | `npm-demo` | _(your private pkg)_ | Multi-upstream-index: public default + scoped private npm registry with auth. Requires your own private registry + token — see the README. |
+| [nuget-private-feed](nuget-private-feed/) | NuGet `:5001` | `dotnet-demo` | _(your private pkg)_ | Multi-upstream-index: public default + scoped private NuGet V3 feed with auth. Requires your own private feed + token — see the README. |
+| [rubygems-private-source](rubygems-private-source/) | RubyGems `:8086` | `rubygems-demo` | _(your private gem)_ | Multi-upstream-index: public default + scoped private gem source with auth. Requires your own private source + token — see the README. |
+| [gomod-private-proxy](gomod-private-proxy/) | Go Modules `:8087` | `go-demo` | _(your private module)_ | Multi-upstream-index: public default + scoped private GOPROXY with auth. Requires your own private GOPROXY + token — see the README. |
+| [maven-private-repo](maven-private-repo/) | Maven `:8085` | `maven-demo` | _(your private artifact)_ | Multi-upstream-index: public default + scoped private Maven repo with auth. Requires your own private repo + token — see the README. |
 
-All six examples share the same token (`test-token-123`, hard-coded in
+All examples share the same token (`test-token-123`, hard-coded in
 `docker/docker-compose.yml`). **If you don't care about per-project
 segmentation**, you can substitute any of the `*-demo` usernames with `default`
 — all unknown-but-valid labels auto-create a `projects` row in lazy mode.

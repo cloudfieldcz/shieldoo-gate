@@ -21,13 +21,14 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
   - [Authentication](configuration.md#authentication-v11) — OIDC admin API authentication (v1.1)
   - [Alerts](configuration.md#alerts-v11) — webhook, Slack, and email notification channels
 - [Deployment](deployment.md) — Docker Compose, Kubernetes (Helm), local development, client configuration, testing
+- [E2E Testing](development/e2e-testing.md) — the E2E shell suite: stack architecture, the test harness, full test inventory, and an in-depth guide to how **multi-upstream-index** behaviour is tested (the scan+cache release gate)
 - [Local Keycloak (OIDC) dev environment](development/local-keycloak.md) — run Keycloak locally to test the admin-UI login/logout flow
 
 ### Reference
 
 - [API Reference](api/) — OpenAPI 3.1 spec for the REST API
 - [`shdg` CLI](cli/shdg.md) — push CycloneDX SBOMs to the vulnerability-scan API from CI
-- [Architecture Decision Records](adr/) — ADR-001 through ADR-016 (latest: [ADR-016 — RP-initiated logout (OIDC end-session)](adr/ADR-016-rp-initiated-logout.md))
+- [Architecture Decision Records](adr/) — ADR-001 through ADR-017 (latest: [ADR-017 — Multi-upstream indexes via ordered fallback + name scoping](adr/ADR-017-multi-upstream-indexes.md))
 - [`SECURITY.md`](../SECURITY.md) — how to report a vulnerability (GitHub Private Vulnerability Reporting), SLA, safe harbor, scope
 - [Planned Features](features/index.md) — phased roadmap with 15 proposed features across enterprise foundation, advanced detection, compliance, developer experience, and advanced deployment
 

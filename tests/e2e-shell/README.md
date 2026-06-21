@@ -2,6 +2,12 @@
 
 End-to-end test suite that validates the full Shieldoo Gate stack using real package manager clients.
 
+> **Canonical reference:** [`docs/development/e2e-testing.md`](../../docs/development/e2e-testing.md)
+> is the complete, up-to-date guide — stack architecture, the test-CA / https-only flow, per-ecosystem
+> and per-scanner coverage, the multi-upstream-index scenario matrix, and a recipe for adding scenarios.
+> This README is a quick lite summary; the canonical mode is the containerized runner
+> (`run_all.sh` via `docker compose`), not the host `run.sh` subset.
+
 ## What it tests
 
 - **PyPI** — package installation through the proxy (`uv pip install`)

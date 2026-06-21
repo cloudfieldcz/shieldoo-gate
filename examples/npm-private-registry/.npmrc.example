@@ -1,0 +1,5 @@
+# Point npm at the Shieldoo Gate npm endpoint (default port 4873).
+# With proxy auth enabled, embed <project-label>:<token> as Basic-auth userinfo.
+registry=http://default:test-token-123@localhost:4873/
+# Private packages resolve through the gate's configured extra_indexes (npm__corp),
+# get scanned + cached, and are served back — never fetched directly from the private registry.

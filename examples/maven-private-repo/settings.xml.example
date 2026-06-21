@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Maven settings.xml that routes ALL repository traffic through Shieldoo Gate.
+
+  The <mirror> with <mirrorOf>*</mirrorOf> forces every repository (including
+  Maven Central and any project-declared repos) through the gate, so artifacts
+  are scanned + cached before reaching the build. The gate fans out across its
+  configured default + scoped private indexes per coordinate.
+
+  With proxy auth enabled, set <username> to your project label and <password>
+  to the shared token (see ../README.md). Omit the <server> block if the gate
+  runs without proxy auth.
+-->
+<settings>
+  <mirrors>
+    <mirror>
+      <id>shieldoo-gate</id>
+      <name>Shieldoo Gate</name>
+      <url>http://localhost:8085</url>
+      <mirrorOf>*</mirrorOf>
+    </mirror>
+  </mirrors>
+  <servers>
+    <server>
+      <id>shieldoo-gate</id>
+      <username>default</username>
+      <password>test-token-123</password>
+    </server>
+  </servers>
+</settings>

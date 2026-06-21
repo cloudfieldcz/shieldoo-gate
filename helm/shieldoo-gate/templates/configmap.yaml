@@ -20,12 +20,20 @@ data:
       admin: {{ .Values.ports.admin }}
 
     upstreams:
-      pypi: {{ .Values.upstreams.pypi | quote }}
-      npm: {{ .Values.upstreams.npm | quote }}
-      nuget: {{ .Values.upstreams.nuget | quote }}
-      maven: {{ .Values.upstreams.maven | quote }}
-      rubygems: {{ .Values.upstreams.rubygems | quote }}
-      gomod: {{ .Values.upstreams.gomod | quote }}
+      # Each non-docker ecosystem is a structured UpstreamSet ({ default, extra_indexes }).
+      # Render the whole subtree so optional extra_indexes added in values carry through.
+      pypi:
+        {{- toYaml .Values.upstreams.pypi | nindent 8 }}
+      npm:
+        {{- toYaml .Values.upstreams.npm | nindent 8 }}
+      nuget:
+        {{- toYaml .Values.upstreams.nuget | nindent 8 }}
+      maven:
+        {{- toYaml .Values.upstreams.maven | nindent 8 }}
+      rubygems:
+        {{- toYaml .Values.upstreams.rubygems | nindent 8 }}
+      gomod:
+        {{- toYaml .Values.upstreams.gomod | nindent 8 }}
       docker:
         default_registry: {{ .Values.upstreams.docker.defaultRegistry | quote }}
         {{- if .Values.upstreams.docker.allowedRegistries }}

@@ -85,6 +85,26 @@ func NewResolver(upstreamURL string, client *http.Client, cfg Config) *Resolver 
 // Errors are logged but never propagated — the resolver is a best-effort
 // enrichment, not a gate.
 func (r *Resolver) Resolve(ctx context.Context, c Coords) []string {
+	return r.ResolveFrom(ctx, c, r.upstreamURL, "")
+}
+
+// ResolveFrom walks the parent POM chain for the coordinates against a SPECIFIC
+// base URL (the serving upstream index the artifact was fetched from) with an
+// optional Authorization header (the index's per-index credential). The entire
+// walk is pinned to baseURL — parents are NOT re-resolved across indexes
+// (best-effort license enrichment, fail-open; pinning avoids a dependency-
+// confusion surface). The per-(baseURL,GAV) cache key prevents cross-index
+// license bleed.
+//
+// Returns nil (not an error) on network failure, depth/cycle limits, or no
+// licenses found. Errors are logged, never propagated — the resolver is
+// best-effort enrichment, not a gate.
+func (r *Resolver) ResolveFrom(ctx context.Context, c Coords, baseURL, authHeader string) []string {
+	baseURL = strings.TrimRight(baseURL, "/")
+	if baseURL == "" {
+		baseURL = r.upstreamURL
+	}
+
 	// Apply resolver-level timeout (caps the entire parent chain walk).
 	ctx, cancel := context.WithTimeout(ctx, r.resolverTimeout)
 	defer cancel()
@@ -101,8 +121,10 @@ func (r *Resolver) Resolve(ctx context.Context, c Coords) []string {
 		}
 		seen[key] = true
 
-		// Cache hit?
-		if cached := r.cache.get(current); cached != nil {
+		// Cache hit? Keyed by (baseURL, GAV) so the same GAV from a different
+		// index is not served stale license data.
+		cacheKey := baseURL + "|" + key
+		if cached := r.cache.get(cacheKey); cached != nil {
 			if len(cached.Licenses) > 0 {
 				return cached.Licenses
 			}
@@ -114,15 +136,15 @@ func (r *Resolver) Resolve(ctx context.Context, c Coords) []string {
 			return nil
 		}
 
-		// Fetch the standalone .pom from upstream.
-		result, err := r.fetchAndParse(ctx, current)
+		// Fetch the standalone .pom from the serving index.
+		result, err := r.fetchAndParse(ctx, current, baseURL, authHeader)
 		if err != nil {
 			log.Warn().Err(err).Str("coords", key).Msg("effectivepom: fetch/parse failed, failing open")
 			return nil
 		}
 
 		// Cache the result (even empty — prevents re-fetching dead ends).
-		r.cache.put(current, result)
+		r.cache.put(cacheKey, result)
 
 		if len(result.Licenses) > 0 {
 			return result.Licenses
@@ -139,9 +161,9 @@ func (r *Resolver) Resolve(ctx context.Context, c Coords) []string {
 	return nil
 }
 
-// fetchAndParse downloads a standalone .pom and parses it.
-func (r *Resolver) fetchAndParse(ctx context.Context, c Coords) (*pomResult, error) {
-	pomURL := r.pomURL(c)
+// fetchAndParse downloads a standalone .pom from baseURL (with optional auth) and parses it.
+func (r *Resolver) fetchAndParse(ctx context.Context, c Coords, baseURL, authHeader string) (*pomResult, error) {
+	pomURL := r.pomURL(baseURL, c)
 
 	// Per-POM fetch timeout.
 	fetchCtx, cancel := context.WithTimeout(ctx, r.fetchTimeout)
@@ -150,6 +172,9 @@ func (r *Resolver) fetchAndParse(ctx context.Context, c Coords) (*pomResult, err
 	req, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, pomURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("building request for %s: %w", pomURL, err)
+	}
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
 	}
 
 	resp, err := r.client.Do(req)
@@ -162,7 +187,8 @@ func (r *Resolver) fetchAndParse(ctx context.Context, c Coords) (*pomResult, err
 		return nil, fmt.Errorf("fetching %s: HTTP %d", pomURL, resp.StatusCode)
 	}
 
-	// Reject cross-host redirects to prevent credential theft via open redirect.
+	// Defence in depth (the client is also redirect-safe): reject a cross-host
+	// redirect so a private POM fetch's credential cannot be exfiltrated.
 	if resp.Request != nil && resp.Request.URL != nil {
 		origHost := mustParseHost(pomURL)
 		finalHost := resp.Request.URL.Host
@@ -174,12 +200,12 @@ func (r *Resolver) fetchAndParse(ctx context.Context, c Coords) (*pomResult, err
 	return parsePOM(resp.Body)
 }
 
-// pomURL constructs the Maven Central URL for a standalone .pom file:
-// {upstream}/{groupPath}/{artifactId}/{version}/{artifactId}-{version}.pom
-func (r *Resolver) pomURL(c Coords) string {
+// pomURL constructs the standalone .pom URL against baseURL:
+// {baseURL}/{groupPath}/{artifactId}/{version}/{artifactId}-{version}.pom
+func (r *Resolver) pomURL(baseURL string, c Coords) string {
 	groupPath := strings.ReplaceAll(c.GroupID, ".", "/")
 	return fmt.Sprintf("%s/%s/%s/%s/%s-%s.pom",
-		r.upstreamURL, groupPath, c.ArtifactID, c.Version, c.ArtifactID, c.Version)
+		baseURL, groupPath, c.ArtifactID, c.Version, c.ArtifactID, c.Version)
 }
 
 // mustParseHost extracts the host from a URL, returning "" on error.

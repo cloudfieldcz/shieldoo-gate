@@ -389,13 +389,40 @@ func TestFetchPyPIMetadata_ValidResponse_ParsesCorrectly(t *testing.T) {
 	assert.Len(t, meta.Maintainers, 1)
 }
 
-func TestFetchPyPIMetadata_404_ReturnsError(t *testing.T) {
+func TestFetchPyPIMetadata_404_ReturnsNotFoundSentinel(t *testing.T) {
+	// A public-registry 404 must be the errPackageNotFound sentinel (not a generic
+	// error) so the scanner treats a private-index package as "no public data /
+	// CLEAN" rather than a required-scanner failure (issue #32 reputation gotcha).
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer server.Close()
 	_, err := fetchPyPIMetadataFrom(server.URL, server.Client(), "nonexistent")
-	assert.Error(t, err)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errPackageNotFound)
+}
+
+func TestFetchNPMMetadata_404_ReturnsNotFoundSentinel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+	_, err := fetchNPMMetadataFrom(server.URL, server.Client(), "nonexistent")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errPackageNotFound)
+}
+
+func TestFetchPyPIMetadata_500_ReturnsGenericError(t *testing.T) {
+	// A genuine transient failure (5xx) must NOT be the not-found sentinel — it
+	// stays a real (retryable) error so a required reputation scanner still fails
+	// closed when the reputation backend is actually unhealthy.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	_, err := fetchPyPIMetadataFrom(server.URL, server.Client(), "boom")
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, errPackageNotFound)
 }
 
 func TestFetchNPMMetadata_ValidResponse_ParsesCorrectly(t *testing.T) {

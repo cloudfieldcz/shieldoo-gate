@@ -492,18 +492,16 @@ func main() {
 		log.Info().Str("url", cfg.ThreatFeed.URL).Dur("interval", refreshInterval).Msg("threat feed client started")
 	}
 
-	// Resolve upstream URLs with sensible defaults
-	pypiUpstream := fallback(cfg.Upstreams.PyPI, "https://pypi.org")
-	npmUpstream := fallback(cfg.Upstreams.NPM, "https://registry.npmjs.org")
-	nugetUpstream := fallback(cfg.Upstreams.NuGet, "https://api.nuget.org")
-	mavenUpstream := fallback(cfg.Upstreams.Maven, "https://repo1.maven.org/maven2")
-	rubygemsUpstream := fallback(cfg.Upstreams.RubyGems, "https://rubygems.org")
-	gomodUpstream := fallback(cfg.Upstreams.GoMod, "https://proxy.golang.org")
+	// Resolve upstream URLs with sensible defaults.
+	// Phase 1: each ecosystem still uses only the default URL (DefaultOr) — behaviour
+	// is identical to the previous single-string config. Later phases consume the
+	// full UpstreamSet (extra_indexes) per ecosystem.
+	mavenUpstream := cfg.Upstreams.Maven.DefaultOr("https://repo1.maven.org/maven2")
 	// Init all 7 adapters
 	tagMutCfg := cfg.Policy.TagMutability
-	pypiAdapter := pypi.NewPyPIAdapter(db, cacheStore, scanEngine, policyEngine, pypiUpstream, tagMutCfg)
-	npmAdapter := npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine, npmUpstream, tagMutCfg)
-	nugetAdapter := nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, nugetUpstream, tagMutCfg)
+	pypiAdapter := pypi.NewPyPIAdapter(db, cacheStore, scanEngine, policyEngine, cfg.Upstreams.PyPI, tagMutCfg)
+	npmAdapter := npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine, cfg.Upstreams.NPM, tagMutCfg)
+	nugetAdapter := nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, cfg.Upstreams.NuGet, tagMutCfg)
 	dockerAdapter := docker.NewDockerAdapter(db, cacheStore, blobStore, scanEngine, policyEngine, cfg.Upstreams.Docker)
 	// Init effective-POM resolver for Maven license enrichment (if enabled).
 	var pomResolver *effectivepom.Resolver
@@ -522,12 +520,12 @@ func main() {
 		if d, err := time.ParseDuration(cfg.Upstreams.MavenResolver.ResolverTimeout); err == nil {
 			pomResolverCfg.ResolverTimeout = d
 		}
-		pomResolver = effectivepom.NewResolver(mavenUpstream, adapter.NewProxyHTTPClient(5*time.Minute), pomResolverCfg)
+		pomResolver = effectivepom.NewResolver(mavenUpstream, adapter.NewRedirectSafeClient(5*time.Minute), pomResolverCfg)
 		log.Info().Str("upstream", mavenUpstream).Msg("maven effective-POM resolver enabled")
 	}
-	mavenAdapter := maven.NewMavenAdapter(db, cacheStore, scanEngine, policyEngine, mavenUpstream, pomResolver)
-	rubygemsAdapter := rubygems.NewRubyGemsAdapter(db, cacheStore, scanEngine, policyEngine, rubygemsUpstream)
-	gomodAdapter := gomod.NewGoModAdapter(db, cacheStore, scanEngine, policyEngine, gomodUpstream)
+	mavenAdapter := maven.NewMavenAdapter(db, cacheStore, scanEngine, policyEngine, cfg.Upstreams.Maven, pomResolver)
+	rubygemsAdapter := rubygems.NewRubyGemsAdapter(db, cacheStore, scanEngine, policyEngine, cfg.Upstreams.RubyGems)
+	gomodAdapter := gomod.NewGoModAdapter(db, cacheStore, scanEngine, policyEngine, cfg.Upstreams.GoMod)
 
 	// Init admin API server
 	apiServer := api.NewServer(db, cacheStore, scanEngine, policyEngine)

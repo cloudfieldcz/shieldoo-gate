@@ -1,0 +1,21 @@
+{
+  "count": 1,
+  "items": [
+    {
+      "@id": "https://private-index:8443/v3/registration/mycompany.nuget.lib/index.json#page",
+      "count": 1,
+      "items": [
+        {
+          "@id": "https://private-index:8443/v3/registration/mycompany.nuget.lib/1.0.0.json",
+          "packageContent": "https://private-index:8443/v3-flatcontainer/mycompany.nuget.lib/1.0.0/mycompany.nuget.lib.1.0.0.nupkg",
+          "catalogEntry": {
+            "id": "mycompany.nuget.lib",
+            "version": "1.0.0",
+            "licenseExpression": "MIT",
+            "licenseUrl": "https://licenses.example.org/MIT"
+          }
+        }
+      ]
+    }
+  ]
+}

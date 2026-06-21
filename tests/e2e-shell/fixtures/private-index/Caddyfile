@@ -1,0 +1,24 @@
+{
+	auto_https off
+}
+private-index:8443 {
+	tls /certs/server.pem /certs/server-key.pem
+	root * /srv/www
+
+	# npm packument: GET /<pkg> must return the JSON packument, while
+	# GET /<pkg>/-/<tgz> (the tarball) is served as a static file. A package name
+	# cannot be both a file and a directory, so route the bare-package request to
+	# the committed www/npm/<pkg>.json document. (E2E fixtures are mycompany-npm-*.)
+	@npm_packument path_regexp npmpkg ^/(mycompany-npm-[^/]+)$
+	handle @npm_packument {
+		rewrite * /npm/{re.npmpkg.1}.json
+		header Content-Type application/json
+		file_server
+	}
+
+	# Everything else (PyPI /simple + /packages, npm /<pkg>/-/<tgz> tarballs,
+	# NuGet /v3/registration + /v3-flatcontainer) is served as static files.
+	handle {
+		file_server browse
+	}
+}

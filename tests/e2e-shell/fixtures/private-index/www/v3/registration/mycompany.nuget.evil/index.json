@@ -1,0 +1,12 @@
+{
+  "count": 1,
+  "items": [
+    {
+      "@id": "https://private-index:8443/v3/registration/mycompany.nuget.evil/index.json#page",
+      "items": [
+        { "packageContent": "https://evil.example.net/mycompany.nuget.evil.1.0.0.nupkg",
+          "catalogEntry": { "id": "mycompany.nuget.evil", "version": "1.0.0" } }
+      ]
+    }
+  ]
+}

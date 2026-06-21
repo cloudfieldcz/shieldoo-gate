@@ -80,7 +80,7 @@ log:
 	assert.Equal(t, 5000, cfg.Ports.PyPI)
 	assert.Equal(t, 4873, cfg.Ports.NPM)
 	assert.Equal(t, 8080, cfg.Ports.Admin)
-	assert.Equal(t, "https://pypi.org", cfg.Upstreams.PyPI)
+	assert.Equal(t, "https://pypi.org", cfg.Upstreams.PyPI.Default)
 	assert.Equal(t, "local", cfg.Cache.Backend)
 	assert.Equal(t, "/tmp/cache", cfg.Cache.Local.Path)
 	assert.Equal(t, "sqlite", cfg.Database.Backend)
@@ -441,4 +441,107 @@ func TestValidate_InvalidScannerRetryBackoff_ReturnsError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "scanners.retry.backoff")
+}
+
+func TestLoad_PyPIBareString_DecodesToDefault(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`
+upstreams:
+  pypi: "https://pypi.org"
+  npm: "https://registry.npmjs.org"
+cache:
+  backend: "local"
+  local:
+    path: "/tmp/cache"
+database:
+  backend: "sqlite"
+  sqlite:
+    path: "/tmp/gate.db"
+`), 0o600))
+	cfg, err := Load(cfgPath)
+	require.NoError(t, err)
+	assert.Equal(t, "https://pypi.org", cfg.Upstreams.PyPI.Default)
+	assert.Empty(t, cfg.Upstreams.PyPI.ExtraIndexes)
+	assert.Equal(t, "https://registry.npmjs.org", cfg.Upstreams.NPM.Default)
+}
+
+func TestLoad_PyPIStructured_ParsesExtraIndexes(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`
+upstreams:
+  pypi:
+    default: "https://pypi.org"
+    extra_indexes:
+      - name: "hexaly"
+        url: "https://pip.hexaly.com/hexaly/"
+cache:
+  backend: "local"
+  local:
+    path: "/tmp/cache"
+database:
+  backend: "sqlite"
+  sqlite:
+    path: "/tmp/gate.db"
+`), 0o600))
+	cfg, err := Load(cfgPath)
+	require.NoError(t, err)
+	assert.Equal(t, "https://pypi.org", cfg.Upstreams.PyPI.Default)
+	require.Len(t, cfg.Upstreams.PyPI.ExtraIndexes, 1)
+	assert.Equal(t, "hexaly", cfg.Upstreams.PyPI.ExtraIndexes[0].Name)
+	assert.Equal(t, "https://pip.hexaly.com/hexaly/", cfg.Upstreams.PyPI.ExtraIndexes[0].URL)
+}
+
+// Regression: overriding viper's DecodeHook drops its built-in comma-slice hook.
+// We re-add mapstructure.StringToSliceHookFunc(","); this proves an existing
+// []string config field still decodes from BOTH a YAML list and a comma env var.
+func TestLoad_StringSliceHook_StillWorksAfterDecodeHookOverride(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`
+upstreams:
+  pypi: "https://pypi.org"
+scanners:
+  typosquat:
+    combosquat_suffixes: ["-utils", "-helper"]
+cache:
+  backend: "local"
+  local:
+    path: "/tmp/cache"
+database:
+  backend: "sqlite"
+  sqlite:
+    path: "/tmp/gate.db"
+`), 0o600))
+	cfg, err := Load(cfgPath)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"-utils", "-helper"}, cfg.Scanners.Typosquat.CombosquatSuffixes)
+
+	// Comma env override into the same []string field still splits.
+	t.Setenv("SGW_SCANNERS_TYPOSQUAT_COMBOSQUAT_SUFFIXES", "-x,-y,-z")
+	cfg2, err := Load(cfgPath)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"-x", "-y", "-z"}, cfg2.Scanners.Typosquat.CombosquatSuffixes)
+}
+
+func TestLoad_PyPIEnvOverride_PopulatesDefault(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte(`
+upstreams:
+  pypi: "https://pypi.org"
+cache:
+  backend: "local"
+  local:
+    path: "/tmp/cache"
+database:
+  backend: "sqlite"
+  sqlite:
+    path: "/tmp/gate.db"
+`), 0o600))
+	t.Setenv("SGW_UPSTREAMS_PYPI", "https://mirror.internal.example.com")
+	cfg, err := Load(cfgPath)
+	require.NoError(t, err)
+	assert.Equal(t, "https://mirror.internal.example.com", cfg.Upstreams.PyPI.Default)
 }

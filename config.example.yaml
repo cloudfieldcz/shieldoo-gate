@@ -22,10 +22,83 @@ ports:
   admin: 8080
 
 upstreams:
-  pypi: "https://pypi.org"
-  npm: "https://registry.npmjs.org"
-  nuget: "https://api.nuget.org"
-  maven: "https://repo1.maven.org/maven2"
+  # Back-compat: a bare string still works and behaves exactly as before.
+  # pypi: "https://pypi.org"
+  #
+  # Multi-index form: an ordered default + optional extra indexes. A bare string
+  # is equivalent to { default: "<url>" }. Extra indexes are tried in order after
+  # the default (or, when a `packages` glob scope matches, ONLY the scoped indexes
+  # are tried — a scoped-namespace miss is a hard 404, never a public fallback,
+  # which prevents dependency-confusion). All index URLs must be https.
+  # Index `name` must match ^[a-z0-9-]+$ (no underscores; used in artifact-ID namespacing).
+  #
+  # `url` is the registry BASE only — the gate appends the PEP 503 `/simple/<pkg>/`
+  # path itself (same as the bare `default` above). Do NOT include `/simple/` in the
+  # URL or it will be doubled. The index must serve its simple API at `<url>/simple/`.
+  # A base MAY include a mount path (e.g. a Maven nexus `…/repository/maven-releases`
+  # below) — the gate appends only the ecosystem's own metadata sub-path to it, so
+  # there is no doubling as long as you do not include that sub-path yourself.
+  pypi:
+    default: "https://pypi.org"
+    extra_indexes:
+      - name: "hexaly"                       # unscoped fallback (public vendor index)
+        url: "https://pip.hexaly.com"
+      - name: "corp"                         # private index, pinned to a namespace
+        url: "https://pkgs.internal.example.com"
+        packages: ["mycompany-*", "acme-*"]  # only these globs route here
+        files_host: "https://files.internal.example.com/"  # optional separate file CDN (PyPI only)
+        auth:
+          type: "basic"                      # "bearer" | "basic"
+          token_env: "SGW_CORP_INDEX_TOKEN"  # credential read from this env var only — never plaintext
+  # npm multi-index: same shape as pypi. The download leg recovers the serving
+  # index by re-resolving the package name (no /ext-packages/ route), so the
+  # private registry must expose the standard /{pkg} packument + /{pkg}/-/{tgz}
+  # tarball layout. `files_host` is PyPI-only and ignored here (npm tarballs share
+  # the registry origin). Extra-index packuments are JSON-rewritten fail-closed:
+  # a tarball whose host is not the registry host returns 502 (never bypasses scan).
+  npm:
+    default: "https://registry.npmjs.org"
+    # extra_indexes:
+    #   - name: "corp"
+    #     url: "https://npm.internal.example.com"
+    #     packages: ["@mycompany/*", "mycompany-*"]
+    #     auth:
+    #       type: "bearer"
+    #       token_env: "SGW_NPM_CORP_TOKEN"
+  # nuget multi-index: same shape. Per-package registration
+  # (/v3/registration/{id}/index.json) fans out across indexes; the service index
+  # (/v3/index.json) is served from the default only (it is index-wide). Downloads
+  # recover the serving index by re-resolution. Extra-index registration docs are
+  # rewritten then verified fail-closed: any packageContent/@id host that is not
+  # the feed host returns 502.
+  nuget:
+    default: "https://api.nuget.org"
+    # extra_indexes:
+    #   - name: "corp"
+    #     url: "https://nuget.internal.example.com"
+    #     packages: ["MyCompany.*"]
+    #     auth:
+    #       type: "bearer"
+    #       token_env: "SGW_NUGET_CORP_TOKEN"
+  # maven multi-index: per-coordinate requests (maven-metadata.xml, .pom,
+  # checksums, and the .jar/.war/.aar/.zip download) fan out across indexes with
+  # ordered fallback + glob scoping on the groupId:artifactId coordinate. Maven
+  # embeds no download URLs in metadata (clients construct artifact URLs from the
+  # coordinate), so metadata is relayed verbatim — there is nothing to rewrite.
+  # Artifact downloads recover the serving index by re-resolving the coordinate
+  # and store under maven__<index>; the effective-POM resolver walks the parent
+  # POM chain against the same serving index (with its auth). Extra indexes MUST
+  # be `packages`-scoped (the flat coordinate download leg recovers the index by
+  # re-resolution). `files_host` is PyPI-only and rejected here.
+  maven:
+    default: "https://repo1.maven.org/maven2"
+    # extra_indexes:
+    #   - name: "corp"
+    #     url: "https://nexus.internal.example.com/repository/maven-releases"
+    #     packages: ["com.mycompany:*", "com.acme:*"]   # REQUIRED: extra indexes must be scoped
+    #     auth:
+    #       type: "bearer"                # "bearer" | "basic"
+    #       token_env: "SGW_MAVEN_CORP_TOKEN"
   maven_resolver:
     enabled: true                    # resolve licenses from parent POM chain (fail-open)
     cache_size: 4096                 # in-memory LRU entries for parent POMs
@@ -33,8 +106,41 @@ upstreams:
     max_depth: 5                     # max parent chain depth (hardcode ceiling: 10)
     fetch_timeout: "3s"              # per-POM HTTP timeout
     resolver_timeout: "5s"           # total timeout for entire parent chain walk
-  rubygems: "https://rubygems.org"
-  gomod: "https://proxy.golang.org"
+  # rubygems multi-index: per-gem metadata (/api/v1/gems/{name}.json,
+  # /api/v1/versions/{name}.json, and the compact-index /info/{name}) fans out
+  # across indexes with ordered fallback + glob scoping; gem_uri in the gem JSON
+  # is rewritten fail-closed for extra indexes (foreign host → 502). Downloads
+  # (/gems/{file}) recover the serving index by re-resolution and store under
+  # rubygems__<index>. Whole-index files (/versions, /names, /specs*.4.8.gz,
+  # /quick/Marshal.4.8/*) are default-only and cannot enumerate private gems
+  # (ordered-fallback, non-merge): a private gem is discoverable only by name.
+  # Extra indexes MUST be `packages`-scoped (the flat /gems/ download leg recovers
+  # the index by name). `files_host` is PyPI-only and rejected here.
+  rubygems:
+    default: "https://rubygems.org"
+    # extra_indexes:
+    #   - name: "corp"
+    #     url: "https://gems.internal.example.com"
+    #     packages: ["mycompany-*"]
+    #     auth:
+    #       type: "bearer"
+    #       token_env: "SGW_RUBYGEMS_CORP_TOKEN"
+  # gomod multi-index: per-module metadata (@v/list, .info, .mod, @latest) fans
+  # out across indexes (verbatim relay — GOPROXY metadata has no download URLs, so
+  # there is nothing to rewrite). .zip downloads recover the serving index by
+  # re-resolving the module path and store under go__<index>. Extra indexes MUST
+  # be `packages`-scoped (scopes match the case-sensitive decoded module path,
+  # e.g. "github.com/mycompany/*"). Set GOPRIVATE/GONOSUMDB on the client for the
+  # private module path so the go client does not consult sum.golang.org.
+  gomod:
+    default: "https://proxy.golang.org"
+    # extra_indexes:
+    #   - name: "corp"
+    #     url: "https://goproxy.internal.example.com"
+    #     packages: ["github.com/mycompany/*"]
+    #     auth:
+    #       type: "bearer"
+    #       token_env: "SGW_GOMOD_CORP_TOKEN"
   docker:
     default_registry: "https://registry-1.docker.io"
     allowed_registries:

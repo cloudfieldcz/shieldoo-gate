@@ -45,7 +45,7 @@ func setupTestRubyGemsWithTyposquat(t *testing.T, upstreamHandler http.HandlerFu
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
 		MinimumConfidence:   0.7,
 	}, nil)
-	return rubygems.NewRubyGemsAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL), upstream
+	return rubygems.NewRubyGemsAdapter(db, cacheStore, scanEngine, policyEngine, config.UpstreamSet{Default: upstream.URL}), upstream
 }
 
 func setupTestRubyGemsOverrideAware(t *testing.T, upstreamHandler http.HandlerFunc) (*rubygems.RubyGemsAdapter, *httptest.Server, *config.GateDB) {
@@ -74,7 +74,7 @@ func setupTestRubyGemsOverrideAware(t *testing.T, upstreamHandler http.HandlerFu
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
 		MinimumConfidence:   0.7,
 	}, db)
-	a := rubygems.NewRubyGemsAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL)
+	a := rubygems.NewRubyGemsAdapter(db, cacheStore, scanEngine, policyEngine, config.UpstreamSet{Default: upstream.URL})
 	return a, upstream, db
 }
 

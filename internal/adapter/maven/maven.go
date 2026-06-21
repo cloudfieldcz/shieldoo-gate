@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -46,7 +47,8 @@ type MavenAdapter struct {
 	cache        cache.CacheStore
 	scanEngine   *scanner.Engine
 	policyEngine *policy.Engine
-	upstream     string
+	upstream     string // default index base (back-compat; == resolver default)
+	resolver     *adapter.UpstreamResolver
 	router       http.Handler
 	httpClient   *http.Client
 	pomResolver  *effectivepom.Resolver // nil when effective-POM resolution is disabled
@@ -71,20 +73,42 @@ func NewMavenAdapter(
 	cacheStore cache.CacheStore,
 	scanEngine *scanner.Engine,
 	policyEngine *policy.Engine,
-	upstream string,
+	upstreams config.UpstreamSet,
 	pomResolver *effectivepom.Resolver,
 ) *MavenAdapter {
+	defaultURL := upstreams.DefaultOr("https://repo1.maven.org/maven2")
+	resolver, err := adapter.NewUpstreamResolver("maven", config.UpstreamSet{
+		Default:      defaultURL,
+		ExtraIndexes: upstreams.ExtraIndexes,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("maven: building upstream resolver: %v", err))
+	}
 	a := &MavenAdapter{
 		db:           db,
 		cache:        cacheStore,
 		scanEngine:   scanEngine,
 		policyEngine: policyEngine,
-		upstream:     strings.TrimRight(upstream, "/"),
-		httpClient:   adapter.NewProxyHTTPClient(5 * time.Minute),
-		pomResolver:  pomResolver,
+		upstream:     strings.TrimRight(defaultURL, "/"),
+		resolver:     resolver,
+		// redirect-safe: per-index credentials must be stripped on cross-host/scheme redirect.
+		httpClient:  adapter.NewRedirectSafeClient(5 * time.Minute),
+		pomResolver: pomResolver,
 	}
 	a.router = a.buildRouter()
 	return a
+}
+
+// DB exposes the adapter's database handle for tests.
+func (a *MavenAdapter) DB() *config.GateDB { return a.db }
+
+// idxURL returns the index URL, falling back to the default upstream for the
+// default index (empty Name/URL).
+func (a *MavenAdapter) idxURL(idx adapter.ResolvedIndex) string {
+	if idx.URL != "" {
+		return idx.URL
+	}
+	return a.upstream
 }
 
 // Ecosystem implements adapter.Adapter.
@@ -140,9 +164,15 @@ func (a *MavenAdapter) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// Remove leading slash from cleaned path.
 	cleaned = strings.TrimPrefix(cleaned, "/")
 
-	// maven-metadata.xml at any level is pass-through.
+	// maven-metadata.xml at any level — fan out per coordinate (verbatim relay,
+	// no download URLs to rewrite). Root-level metadata with no parseable
+	// coordinate relays from the default index only.
 	if strings.HasSuffix(cleaned, "/maven-metadata.xml") || cleaned == "maven-metadata.xml" {
-		a.proxyPassThrough(w, r, cleaned)
+		if g, art, ok := parseMetadataCoord(cleaned); ok {
+			a.serveFanOut(w, r, g, art, cleaned)
+		} else {
+			a.serveDefaultPassThrough(w, r, cleaned)
+		}
 		return
 	}
 
@@ -155,18 +185,14 @@ func (a *MavenAdapter) handleRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if parsed.passThru {
-		a.proxyPassThrough(w, r, cleaned)
-		return
-	}
-
 	if parsed.scannable {
-		a.downloadScanServe(w, r, parsed, cleaned)
+		idx := a.firstIndexFor(coordName(parsed.groupID, parsed.artifactID))
+		a.downloadScanServe(w, r, idx, parsed, cleaned)
 		return
 	}
 
-	// Fallback: proxy anything else directly.
-	a.proxyPassThrough(w, r, cleaned)
+	// Pass-through (.pom, checksums, .asc, unknown) — fan out per coordinate.
+	a.serveFanOut(w, r, parsed.groupID, parsed.artifactID, cleaned)
 }
 
 // parseMavenPath parses a Maven repository URL path into its components.
@@ -254,6 +280,65 @@ func mavenArtifactID(groupID, artifactID, version string) string {
 	return fmt.Sprintf("%s:%s:%s:%s", string(scanner.EcosystemMaven), groupID, artifactID, version)
 }
 
+// coordName is the resolution/scoping key for a Maven artifact: the
+// "groupId:artifactId" form. CanonicalPackageName is identity for Maven, so a
+// `packages` glob like "com.mycompany:*" matches this verbatim.
+func coordName(groupID, artifactID string) string {
+	return groupID + ":" + artifactID
+}
+
+// parseMetadataCoord extracts (groupId, artifactId) from a maven-metadata.xml
+// request path for upstream resolution. It handles both the artifact-level form
+// (g/a/maven-metadata.xml) and the version-level form
+// (g/a/{version}/maven-metadata.xml, used by SNAPSHOT resolution) by dropping a
+// trailing segment that looks like a version. Returns ok=false for root-level or
+// too-short paths (the caller then relays from the default index only). The
+// version-level heuristic only affects which index a VERSION LISTING is fetched
+// from — the artifact (.jar) download always resolves on the exact parsed
+// coordinate, so a heuristic miss is never a scan bypass.
+func parseMetadataCoord(cleanPath string) (groupID, artifactID string, ok bool) {
+	base := strings.TrimSuffix(cleanPath, "maven-metadata.xml")
+	base = strings.Trim(base, "/")
+	if base == "" {
+		return "", "", false
+	}
+	segs := strings.Split(base, "/")
+	// Drop a trailing version segment (version-level / SNAPSHOT metadata).
+	if len(segs) >= 3 && looksLikeVersion(segs[len(segs)-1]) {
+		segs = segs[:len(segs)-1]
+	}
+	if len(segs) < 2 {
+		return "", "", false // need at least group + artifact
+	}
+	artifactID = segs[len(segs)-1]
+	groupID = strings.Join(segs[:len(segs)-1], ".")
+	return groupID, artifactID, true
+}
+
+// looksLikeVersion reports whether a Maven path segment is most likely a version
+// rather than an artifactId. Maven versions conventionally start with a digit or
+// end with "-SNAPSHOT"; artifactIds conventionally do not start with a digit.
+func looksLikeVersion(s string) bool {
+	if s == "" {
+		return false
+	}
+	if strings.HasSuffix(s, "-SNAPSHOT") {
+		return true
+	}
+	return s[0] >= '0' && s[0] <= '9'
+}
+
+// firstIndexFor recovers the serving index for a download by re-resolving the
+// coordinate (the artifact route carries groupId+artifactId). Returns the default
+// index when resolution is empty (a scoped-miss download: the fetch then 404s on
+// the absent upstream — correct, no public fallback).
+func (a *MavenAdapter) firstIndexFor(coord string) adapter.ResolvedIndex {
+	if idxs := a.resolver.ResolveForPackage(coord); len(idxs) > 0 {
+		return idxs[0]
+	}
+	return adapter.ResolvedIndex{} // default
+}
+
 // handleTyposquatPreScan runs the typosquat scanner on coordName
 // (groupId:artifactId form) before any upstream call. Returns true if the
 // request was blocked (response already written). Returns false if the name
@@ -327,8 +412,10 @@ func typosquatBlockReason(result scanner.ScanResult) string {
 	return "typosquat pre-scan: " + string(result.Verdict)
 }
 
-// proxyPassThrough forwards a request to the upstream Maven repository without scanning.
-func (a *MavenAdapter) proxyPassThrough(w http.ResponseWriter, r *http.Request, repoPath string) {
+// serveDefaultPassThrough forwards a request to the DEFAULT upstream verbatim
+// (used for root-level maven-metadata.xml with no parseable coordinate). This is
+// the pre-feature behaviour, byte-identical to today.
+func (a *MavenAdapter) serveDefaultPassThrough(w http.ResponseWriter, r *http.Request, repoPath string) {
 	target, err := url.JoinPath(a.upstream, repoPath)
 	if err != nil {
 		http.Error(w, "bad upstream path", http.StatusInternalServerError)
@@ -342,14 +429,12 @@ func (a *MavenAdapter) proxyPassThrough(w http.ResponseWriter, r *http.Request, 
 	if accept := r.Header.Get("Accept"); accept != "" {
 		req.Header.Set("Accept", accept)
 	}
-
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
 		http.Error(w, "upstream unreachable", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
-
 	for key, vals := range resp.Header {
 		for _, v := range vals {
 			w.Header().Add(key, v)
@@ -359,17 +444,119 @@ func (a *MavenAdapter) proxyPassThrough(w http.ResponseWriter, r *http.Request, 
 	_, _ = io.Copy(w, resp.Body)
 }
 
+// serveFanOut tries each resolved index for a per-coordinate metadata/POM/
+// checksum request, serving the first that has it (200) verbatim. The default
+// index relays all headers (status-identical to today); extra (low-trust) indexes
+// relay a header allowlist only and are size-capped. A claimed-namespace miss →
+// 404 + namespaced BLOCKED audit (no public fallback — dependency-confusion guard).
+func (a *MavenAdapter) serveFanOut(w http.ResponseWriter, r *http.Request, groupID, artifactID, repoPath string) {
+	coord := coordName(groupID, artifactID)
+	for _, idx := range a.resolver.ResolveForPackage(coord) {
+		served, err := a.tryServeMetadata(w, r, idx, repoPath)
+		if err != nil {
+			a.resolver.ObserveProbe(idx.Name, "error")
+			continue
+		}
+		if served {
+			a.resolver.ObserveProbe(idx.Name, "hit")
+			return
+		}
+		a.resolver.ObserveProbe(idx.Name, "miss")
+	}
+	if claimants := a.resolver.ClaimingIndexNames(coord); len(claimants) > 0 {
+		a.resolver.ObserveScopedMiss()
+		eco := adapter.NamespacedEcosystem(string(scanner.EcosystemMaven), claimants[0])
+		md, _ := json.Marshal(map[string]any{"claiming_indexes": claimants})
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
+			EventType:    model.EventBlocked,
+			ArtifactID:   fmt.Sprintf("%s:%s:%s:%s", eco, groupID, artifactID, adapter.TyposquatPlaceholderVersion),
+			ClientIP:     r.RemoteAddr,
+			UserAgent:    r.UserAgent(),
+			Reason:       "scoped private-index artifact not found on any claiming index (no public fallback)",
+			MetadataJSON: string(md),
+		})
+	}
+	http.Error(w, "not found", http.StatusNotFound)
+}
+
+// tryServeMetadata fetches one index's metadata/POM/checksum at repoPath.
+// (true,nil)=served; (false,nil)=404; (false,err)=transport/non-200/oversize. The
+// body is relayed verbatim (size-capped — Maven metadata carries no download URLs).
+func (a *MavenAdapter) tryServeMetadata(w http.ResponseWriter, r *http.Request, idx adapter.ResolvedIndex, repoPath string) (bool, error) {
+	target, err := url.JoinPath(strings.TrimRight(a.idxURL(idx), "/"), repoPath)
+	if err != nil {
+		return false, err
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
+	if err != nil {
+		return false, err
+	}
+	if accept := r.Header.Get("Accept"); accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+	if h := a.resolver.AuthHeader(idx); h != "" {
+		req.Header.Set("Authorization", h)
+	}
+	resp, err := a.resolver.Client().Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("maven: index %q returned %d", idx.Name, resp.StatusCode)
+	}
+	// Cap the metadata body from a low-trust extra index (POMs/metadata/checksums
+	// are small). Read fully so the size guard runs before bytes reach the client;
+	// fail closed on exceed.
+	const maxMetadataSize = 16 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataSize+1))
+	if err != nil {
+		return false, err
+	}
+	if int64(len(body)) > maxMetadataSize {
+		return false, fmt.Errorf("maven: index %q metadata exceeds size limit", idx.Name)
+	}
+	if idx.Name == "" {
+		for key, vals := range resp.Header {
+			if strings.EqualFold(key, "Content-Length") {
+				continue
+			}
+			for _, v := range vals {
+				w.Header().Add(key, v)
+			}
+		}
+	} else {
+		for _, h := range []string{"Content-Type", "ETag", "Last-Modified"} {
+			if v := resp.Header.Get(h); v != "" {
+				w.Header().Set(h, v)
+			}
+		}
+	}
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
+	return true, nil
+}
+
 // downloadScanServe implements the full download -> scan -> policy -> serve pipeline.
-func (a *MavenAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, parsed *parsedPath, repoPath string) {
+func (a *MavenAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, idx adapter.ResolvedIndex, parsed *parsedPath, repoPath string) {
 	ctx := r.Context()
 
-	artifactID := mavenArtifactID(parsed.groupID, parsed.artifactID, parsed.version)
-	coordName := parsed.groupID + ":" + parsed.artifactID
+	// Namespace the artifact ID by the serving index (eco__<index>); the default
+	// index keeps the bare eco. The scanner Ecosystem carries the SAME namespaced
+	// segment so the persisted artifact row + cache isolate per index (the release
+	// gate: a private artifact is queryable under maven__<index>).
+	eco := adapter.NamespacedEcosystem(string(scanner.EcosystemMaven), idx.Name)
+	artifactID := fmt.Sprintf("%s:%s:%s:%s", eco, parsed.groupID, parsed.artifactID, parsed.version)
+	coordNm := parsed.groupID + ":" + parsed.artifactID
 
 	// Pre-scan for typosquatting BEFORE contacting upstream.
 	// The typosquat scanner only needs the coordinate name — no file content.
 	// Active policy overrides (package- or version-scoped) suppress the block.
-	if a.handleTyposquatPreScan(w, r, coordName, parsed.version) {
+	if a.handleTyposquatPreScan(w, r, coordNm, parsed.version) {
 		return
 	}
 
@@ -421,7 +608,7 @@ func (a *MavenAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 		})
 		// Trigger async sandbox scan (non-blocking).
 		adapter.TriggerAsyncScan(r.Context(), scanner.Artifact{
-			ID: artifactID, Ecosystem: scanner.EcosystemMaven, Name: parsed.groupID + ":" + parsed.artifactID, Version: parsed.version, LocalPath: cachedPath,
+			ID: artifactID, Ecosystem: scanner.Ecosystem(eco), Name: parsed.groupID + ":" + parsed.artifactID, Version: parsed.version, LocalPath: cachedPath,
 		}, cachedPath, a.db, a.policyEngine)
 		return
 	}
@@ -467,14 +654,14 @@ func (a *MavenAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	// 3. Download to temp file.
-	upstreamURL, err := url.JoinPath(a.upstream, repoPath)
+	// 3. Download to temp file from the resolved serving index (with per-index auth).
+	upstreamURL, err := url.JoinPath(strings.TrimRight(a.idxURL(idx), "/"), repoPath)
 	if err != nil {
 		http.Error(w, "bad upstream path", http.StatusInternalServerError)
 		return
 	}
 
-	tmpPath, size, sha, err := downloadToTemp(pctx, upstreamURL, a.httpClient)
+	tmpPath, size, sha, err := downloadToTempAuthed(pctx, upstreamURL, a.resolver.AuthHeader(idx), a.httpClient)
 	if err != nil {
 		log.Error().Err(err).Str("artifact", artifactID).Msg("maven: failed to download from upstream")
 		http.Error(w, "failed to fetch upstream artifact", http.StatusBadGateway)
@@ -493,10 +680,12 @@ func (a *MavenAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	// 4. Build scanner.Artifact.
+	// 4. Build scanner.Artifact. Ecosystem carries the namespaced segment
+	// (maven__<index>) so the persisted artifact row + cache isolate per index;
+	// the artifact ID already encodes it.
 	scanArtifact := scanner.Artifact{
 		ID:          artifactID,
-		Ecosystem:   scanner.EcosystemMaven,
+		Ecosystem:   scanner.Ecosystem(eco),
 		Name:        parsed.groupID + ":" + parsed.artifactID,
 		Version:     parsed.version,
 		LocalPath:   tmpPath,
@@ -515,7 +704,7 @@ func (a *MavenAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 			ArtifactID: parsed.artifactID,
 			Version:    parsed.version,
 		}
-		if rawLicenses := a.pomResolver.Resolve(pctx, coords); len(rawLicenses) > 0 {
+		if rawLicenses := a.pomResolver.ResolveFrom(pctx, coords, strings.TrimRight(a.idxURL(idx), "/"), a.resolver.AuthHeader(idx)); len(rawLicenses) > 0 {
 			// Normalize license strings to canonical SPDX IDs before passing
 			// to the scanner engine. E.g. "The GNU General Public License, v2
 			// with Universal FOSS Exception, v1.0" → "GPL-2.0-only".
@@ -678,11 +867,17 @@ func (a *MavenAdapter) persistArtifact(
 	return adapter.InsertScanResults(a.db, artifactID, scanResults)
 }
 
-// downloadToTemp downloads url into a temporary file, returning (path, size, sha256hex, error).
-func downloadToTemp(ctx context.Context, rawURL string, client *http.Client) (string, int64, string, error) {
+// downloadToTempAuthed downloads url into a temporary file, returning (path,
+// size, sha256hex, error). When authHeader is non-empty it is sent as the
+// Authorization header (per-index private-repo credential); the client must be
+// redirect-safe so the header is stripped on a cross-host/scheme redirect.
+func downloadToTempAuthed(ctx context.Context, rawURL, authHeader string, client *http.Client) (string, int64, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", 0, "", fmt.Errorf("maven: download: building request: %w", err)
+	}
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
 	}
 	resp, err := client.Do(req)
 	if err != nil {

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Point NuGet at the Shieldoo Gate NuGet V3 endpoint (default port 5001).
+     Private packages (e.g. MyCompany.*) resolve through the gate's configured
+     extra_indexes (nuget__corp), get scanned + cached, and are served back —
+     never fetched directly from the private feed. -->
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="shieldoo-gate" value="http://localhost:5001/v3/index.json" />
+  </packageSources>
+  <!-- With proxy auth enabled, supply <project-label>:<token> credentials: -->
+  <packageSourceCredentials>
+    <shieldoo-gate>
+      <add key="Username" value="default" />
+      <add key="ClearTextPassword" value="test-token-123" />
+    </shieldoo-gate>
+  </packageSourceCredentials>
+</configuration>

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -53,7 +54,8 @@ type GoModAdapter struct {
 	cache        cache.CacheStore
 	scanEngine   *scanner.Engine
 	policyEngine *policy.Engine
-	upstream     string
+	upstream     string // default index base (back-compat; == resolver default)
+	resolver     *adapter.UpstreamResolver
 	router       http.Handler
 	httpClient   *http.Client
 }
@@ -64,18 +66,40 @@ func NewGoModAdapter(
 	cacheStore cache.CacheStore,
 	scanEngine *scanner.Engine,
 	policyEngine *policy.Engine,
-	upstream string,
+	upstreams config.UpstreamSet,
 ) *GoModAdapter {
+	defaultURL := upstreams.DefaultOr("https://proxy.golang.org")
+	resolver, err := adapter.NewUpstreamResolver("go", config.UpstreamSet{
+		Default:      defaultURL,
+		ExtraIndexes: upstreams.ExtraIndexes,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("gomod: building upstream resolver: %v", err))
+	}
 	a := &GoModAdapter{
 		db:           db,
 		cache:        cacheStore,
 		scanEngine:   scanEngine,
 		policyEngine: policyEngine,
-		upstream:     strings.TrimRight(upstream, "/"),
-		httpClient:   adapter.NewProxyHTTPClient(5 * time.Minute),
+		upstream:     strings.TrimRight(defaultURL, "/"),
+		resolver:     resolver,
+		// redirect-safe: per-index credentials must be stripped on cross-host/scheme redirect.
+		httpClient: adapter.NewRedirectSafeClient(5 * time.Minute),
 	}
 	a.router = a.buildRouter()
 	return a
+}
+
+// DB exposes the adapter's database handle for tests.
+func (a *GoModAdapter) DB() *config.GateDB { return a.db }
+
+// idxURL returns the index URL, falling back to the default upstream for the
+// default index (empty Name/URL).
+func (a *GoModAdapter) idxURL(idx adapter.ResolvedIndex) string {
+	if idx.URL != "" {
+		return idx.URL
+	}
+	return a.upstream
 }
 
 // Ecosystem implements adapter.Adapter.
@@ -141,11 +165,118 @@ func (a *GoModAdapter) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	switch parsed.reqType {
 	case reqZipDownload:
-		a.downloadScanServe(w, r, parsed, rawPath)
+		idx := a.firstIndexFor(parsed.modulePath)
+		a.downloadScanServe(w, r, idx, parsed, rawPath)
 	default:
-		// list, info, mod, latest — all pass-through
-		a.proxyPassThrough(w, r, rawPath)
+		// list, info, mod, latest — fan out across indexes (verbatim relay; GOPROXY
+		// metadata carries no download URLs, so there is nothing to rewrite).
+		a.serveMetadataFanOut(w, r, parsed.modulePath, rawPath)
 	}
+}
+
+// firstIndexFor recovers the serving index for a download by re-resolving the
+// module path (the .zip route carries it). Returns the default index when
+// resolution is empty (a scoped-miss download: the fetch then 404s on the absent
+// upstream — correct, no public fallback).
+func (a *GoModAdapter) firstIndexFor(modulePath string) adapter.ResolvedIndex {
+	if idxs := a.resolver.ResolveForPackage(modulePath); len(idxs) > 0 {
+		return idxs[0]
+	}
+	return adapter.ResolvedIndex{} // default
+}
+
+// serveMetadataFanOut tries each resolved index for the module's metadata,
+// serving the first that has it (200) verbatim. A claimed-namespace miss →
+// 404 + namespaced BLOCKED audit (no public fallback — dependency-confusion guard).
+func (a *GoModAdapter) serveMetadataFanOut(w http.ResponseWriter, r *http.Request, modulePath, rawPath string) {
+	for _, idx := range a.resolver.ResolveForPackage(modulePath) {
+		served, err := a.tryServeMetadata(w, r, idx, rawPath)
+		if err != nil {
+			a.resolver.ObserveProbe(idx.Name, "error")
+			continue
+		}
+		if served {
+			a.resolver.ObserveProbe(idx.Name, "hit")
+			return
+		}
+		a.resolver.ObserveProbe(idx.Name, "miss")
+	}
+	if claimants := a.resolver.ClaimingIndexNames(modulePath); len(claimants) > 0 {
+		a.resolver.ObserveScopedMiss()
+		eco := adapter.NamespacedEcosystem(string(scanner.EcosystemGo), claimants[0])
+		md, _ := json.Marshal(map[string]any{"claiming_indexes": claimants})
+		_ = adapter.WriteAuditLogCtx(r.Context(), a.db, model.AuditEntry{
+			EventType:    model.EventBlocked,
+			ArtifactID:   fmt.Sprintf("%s:%s:*", eco, modulePath),
+			ClientIP:     r.RemoteAddr,
+			UserAgent:    r.UserAgent(),
+			Reason:       "scoped private-index module not found on any claiming index (no public fallback)",
+			MetadataJSON: string(md),
+		})
+	}
+	http.Error(w, "not found", http.StatusNotFound)
+}
+
+// tryServeMetadata fetches one index's metadata at rawPath. (true,nil)=served;
+// (false,nil)=404/410; (false,err)=transport/non-200/oversize. The body is
+// relayed verbatim (size-capped — no download URLs to rewrite for GOPROXY).
+func (a *GoModAdapter) tryServeMetadata(w http.ResponseWriter, r *http.Request, idx adapter.ResolvedIndex, rawPath string) (bool, error) {
+	target, err := url.JoinPath(strings.TrimRight(a.idxURL(idx), "/"), rawPath)
+	if err != nil {
+		return false, err
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
+	if err != nil {
+		return false, err
+	}
+	if accept := r.Header.Get("Accept"); accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+	if h := a.resolver.AuthHeader(idx); h != "" {
+		req.Header.Set("Authorization", h)
+	}
+	resp, err := a.resolver.Client().Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
+		return false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("gomod: index %q returned %d", idx.Name, resp.StatusCode)
+	}
+	// Cap the metadata body from a low-trust extra index (GOPROXY list/.info/.mod/
+	// @latest are tiny). Read fully so the size guard runs before bytes reach the
+	// client; fail closed on exceed.
+	const maxMetadataSize = 16 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataSize+1))
+	if err != nil {
+		return false, err
+	}
+	if int64(len(body)) > maxMetadataSize {
+		return false, fmt.Errorf("gomod: index %q metadata exceeds size limit", idx.Name)
+	}
+	if idx.Name == "" {
+		for key, vals := range resp.Header {
+			if strings.EqualFold(key, "Content-Length") {
+				continue
+			}
+			for _, v := range vals {
+				w.Header().Add(key, v)
+			}
+		}
+	} else {
+		for _, h := range []string{"Content-Type", "ETag", "Last-Modified"} {
+			if v := resp.Header.Get(h); v != "" {
+				w.Header().Set(h, v)
+			}
+		}
+	}
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
+	return true, nil
 }
 
 // parseGoModRequest parses a GOPROXY protocol URL path into its components.
@@ -342,43 +473,14 @@ func typosquatBlockReason(result scanner.ScanResult) string {
 	return "typosquat pre-scan: " + string(result.Verdict)
 }
 
-// proxyPassThrough forwards a request to the upstream Go module proxy without scanning.
-func (a *GoModAdapter) proxyPassThrough(w http.ResponseWriter, r *http.Request, rawPath string) {
-	target, err := url.JoinPath(a.upstream, rawPath)
-	if err != nil {
-		http.Error(w, "bad upstream path", http.StatusInternalServerError)
-		return
-	}
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
-	if err != nil {
-		http.Error(w, "upstream request error", http.StatusInternalServerError)
-		return
-	}
-	if accept := r.Header.Get("Accept"); accept != "" {
-		req.Header.Set("Accept", accept)
-	}
-
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		http.Error(w, "upstream unreachable", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	for key, vals := range resp.Header {
-		for _, v := range vals {
-			w.Header().Add(key, v)
-		}
-	}
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
-}
-
 // downloadScanServe implements the full download -> scan -> policy -> serve pipeline for .zip files.
-func (a *GoModAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, parsed *parsedRequest, rawPath string) {
+func (a *GoModAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request, idx adapter.ResolvedIndex, parsed *parsedRequest, rawPath string) {
 	ctx := r.Context()
 
-	artifactID := gomodArtifactID(parsed.modulePath, parsed.version)
+	// Namespace the artifact ID by the serving index (eco__<index>); the default
+	// index keeps the bare eco. The scanner Ecosystem stays canonical (go).
+	eco := adapter.NamespacedEcosystem(string(scanner.EcosystemGo), idx.Name)
+	artifactID := fmt.Sprintf("%s:%s:%s", eco, parsed.modulePath, parsed.version)
 
 	// 1. Check if already in cache with a known status.
 	cachedPath, cacheErr := a.cache.Get(ctx, artifactID)
@@ -430,7 +532,7 @@ func (a *GoModAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 		})
 		// Trigger async sandbox scan (non-blocking).
 		adapter.TriggerAsyncScan(r.Context(), scanner.Artifact{
-			ID: artifactID, Ecosystem: scanner.EcosystemGo, Name: parsed.modulePath, Version: parsed.version, LocalPath: cachedPath,
+			ID: artifactID, Ecosystem: scanner.Ecosystem(eco), Name: parsed.modulePath, Version: parsed.version, LocalPath: cachedPath,
 		}, cachedPath, a.db, a.policyEngine)
 		return
 	}
@@ -478,13 +580,13 @@ func (a *GoModAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 	}
 
 	// 3. Download to temp file.
-	upstreamURL, err := url.JoinPath(a.upstream, rawPath)
+	upstreamURL, err := url.JoinPath(strings.TrimRight(a.idxURL(idx), "/"), rawPath)
 	if err != nil {
 		http.Error(w, "bad upstream path", http.StatusInternalServerError)
 		return
 	}
 
-	tmpPath, size, sha, err := downloadToTemp(pctx, upstreamURL, a.httpClient)
+	tmpPath, size, sha, err := downloadToTempAuthed(pctx, upstreamURL, a.resolver.AuthHeader(idx), a.httpClient)
 	if err != nil {
 		log.Error().Err(err).Str("artifact", artifactID).Msg("gomod: failed to download from upstream")
 		http.Error(w, "failed to fetch upstream artifact", http.StatusBadGateway)
@@ -503,10 +605,12 @@ func (a *GoModAdapter) downloadScanServe(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	// 4. Build scanner.Artifact.
+	// 4. Build scanner.Artifact. Ecosystem carries the namespaced segment
+	// (go__<index>) so the persisted artifact row + cache isolate per index,
+	// matching the PyPI/npm reference (the artifact ID already encodes it).
 	scanArtifact := scanner.Artifact{
 		ID:          artifactID,
-		Ecosystem:   scanner.EcosystemGo,
+		Ecosystem:   scanner.Ecosystem(eco),
 		Name:        parsed.modulePath,
 		Version:     parsed.version,
 		LocalPath:   tmpPath,
@@ -674,11 +778,17 @@ func (a *GoModAdapter) persistArtifact(
 	return adapter.InsertScanResults(a.db, artifactID, scanResults)
 }
 
-// downloadToTemp downloads url into a temporary file, returning (path, size, sha256hex, error).
-func downloadToTemp(ctx context.Context, rawURL string, client *http.Client) (string, int64, string, error) {
+// downloadToTempAuthed downloads url into a temporary file, returning (path,
+// size, sha256hex, error). When authHeader is non-empty it is sent as the
+// Authorization header (per-index private-proxy credential); the client must be
+// redirect-safe so the header is stripped on a cross-host/scheme redirect.
+func downloadToTempAuthed(ctx context.Context, rawURL, authHeader string, client *http.Client) (string, int64, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", 0, "", fmt.Errorf("gomod: download: building request: %w", err)
+	}
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
 	}
 	resp, err := client.Do(req)
 	if err != nil {

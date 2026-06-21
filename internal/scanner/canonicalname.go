@@ -14,13 +14,20 @@ var pypiNameSeparatorRe = regexp.MustCompile(`[-_.]+`)
 // regardless of the source spelling.
 //
 // PyPI: lowercase ASCII with `[-_.]+` collapsed to `-` (PEP 503).
-// Other ecosystems: returned unchanged. If their wire formats start to require
-// normalization (npm scopes already have their own rules, NuGet is
-// case-insensitive, etc.) extend the dispatch here — keeping a single
-// authoritative function for all callers.
+// NuGet: lowercase ASCII. NuGet package ids are officially case-insensitive and
+// NuGet clients lowercase them in V3 registration / flat-container URLs, so the
+// gate must match (and scope-glob) on the lowercased form — otherwise a private
+// index scoped with `MyCompany.*` would never claim the `mycompany.*` requests
+// the client actually sends, silently re-opening dependency-confusion (the very
+// thing `packages` scoping exists to prevent). See issue #32 security review.
+// Other ecosystems: returned unchanged.
 func CanonicalPackageName(eco Ecosystem, name string) string {
-	if eco == EcosystemPyPI {
+	switch eco {
+	case EcosystemPyPI:
 		return strings.ToLower(pypiNameSeparatorRe.ReplaceAllString(name, "-"))
+	case EcosystemNuGet:
+		return strings.ToLower(name)
+	default:
+		return name
 	}
-	return name
 }

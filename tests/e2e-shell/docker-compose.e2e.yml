@@ -9,6 +9,10 @@ services:
     depends_on:
       scanner-bridge:
         condition: service_started
+      ca-init:
+        condition: service_healthy
+      private-index:
+        condition: service_started
     ports:
       - "15010:5000"   # PyPI
       - "14873:4873"   # npm
@@ -31,6 +35,7 @@ services:
       - e2e-trivy-cache:/var/cache/trivy
       - e2e-gate-logs:/var/log/shieldoo-gate
       - ./config.e2e.yaml:/etc/shieldoo-gate/config.yaml:ro
+      - e2e-ca:/shared:ro
     environment:
       SGW_SCANNERS_GUARDDOG_BRIDGE_SOCKET: /tmp/shieldoo-bridge.sock
       # AI scanner: set SGW_SCANNERS_AI_ENABLED=true to enable in e2e
@@ -45,6 +50,7 @@ services:
       # bootstrap_labels (config.e2e.yaml) + per-project license-policy
       # overrides (test_license_policy.sh).
       SGW_PROJECTS_MODE: "${SGW_PROJECTS_MODE:-lazy}"
+      SSL_CERT_FILE: /shared/cabundle.pem   # system roots + test CA (Go honours this)
     networks:
       - proxy-net
       - internal-net
@@ -142,6 +148,51 @@ services:
     restart: "no"
     command: ["./run_all.sh"]
 
+  # Builds a CA bundle = gate image's system roots + the test CA, into a shared
+  # volume. The gate trusts it via SSL_CERT_FILE, so the HTTPS private index is
+  # reachable WITHOUT relaxing the production https-only upstream invariant.
+  #
+  # IMPORTANT: this writes the bundle then STAYS ALIVE (tail -f). The Makefile runs
+  # `up --abort-on-container-exit`, which tears the whole stack down (SIGKILL) the
+  # moment ANY container exits. A one-shot ca-init that exits 0 would therefore
+  # abort the run and kill the scanner-bridge/dind/push-registry early — breaking
+  # every bridge-backed scan (the entire pypi/npm/nuget suite). Keeping ca-init
+  # running, and gating dependents on `service_healthy` (bundle file present)
+  # instead of `service_completed_successfully`, avoids the early abort.
+  ca-init:
+    image: caddy:2.8.4-alpine
+    volumes:
+      - ./fixtures/private-index/test-ca.pem:/test-ca.pem:ro
+      - e2e-ca:/shared
+    command:
+      - sh
+      - -c
+      - "cat /etc/ssl/certs/ca-certificates.crt /test-ca.pem > /shared/cabundle.pem && echo ca-bundle-ready && tail -f /dev/null"
+    healthcheck:
+      test: ["CMD", "test", "-s", "/shared/cabundle.pem"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 2s
+    networks:
+      - internal-net
+    restart: "no"
+
+  private-index:
+    image: caddy:2.8.4-alpine
+    container_name: shieldoo-e2e-private-index
+    depends_on:
+      ca-init:
+        condition: service_healthy
+    volumes:
+      - ./fixtures/private-index/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./fixtures/private-index/www:/srv/www:ro
+      - ./fixtures/private-index/server.pem:/certs/server.pem:ro
+      - ./fixtures/private-index/server-key.pem:/certs/server-key.pem:ro
+    networks:
+      - internal-net
+    restart: "no"
+
 networks:
   proxy-net:
     driver: bridge
@@ -154,3 +205,4 @@ volumes:
   e2e-gate-cache:
   e2e-trivy-cache:
   e2e-gate-logs:
+  e2e-ca:

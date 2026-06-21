@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,7 +38,7 @@ func setupTestNuGet(t *testing.T, upstreamHandler http.HandlerFunc) (*nuget.NuGe
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
 		MinimumConfidence:   0.7,
 	}, nil)
-	return nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL, config.TagMutabilityConfig{}), upstream
+	return nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, config.UpstreamSet{Default: upstream.URL}, config.TagMutabilityConfig{}), upstream
 }
 
 func TestNuGetAdapter_Ecosystem_ReturnsNuGet(t *testing.T) {
@@ -193,7 +194,7 @@ func setupTestNuGetWithTyposquat(t *testing.T, upstreamHandler http.HandlerFunc)
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
 		MinimumConfidence:   0.7,
 	}, nil)
-	return nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL, config.TagMutabilityConfig{}), upstream
+	return nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, config.UpstreamSet{Default: upstream.URL}, config.TagMutabilityConfig{}), upstream
 }
 
 // setupTestNuGetOverrideAware wires the typosquat scanner AND the policy
@@ -226,7 +227,7 @@ func setupTestNuGetOverrideAware(t *testing.T, upstreamHandler http.HandlerFunc)
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
 		MinimumConfidence:   0.7,
 	}, db)
-	a := nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL, config.TagMutabilityConfig{})
+	a := nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine, config.UpstreamSet{Default: upstream.URL}, config.TagMutabilityConfig{})
 	return a, upstream, db
 }
 
@@ -383,4 +384,109 @@ func TestNuGetAdapter_LegitimatePackage_NotBlocked(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code,
 		"legitimate package must not be blocked by typosquat pre-scan")
 	assert.True(t, upstreamHit)
+}
+
+// ---- Multi-upstream-index tests (Phase 5, issue #32) ----
+
+func newMultiIndexNuGet(t *testing.T, defaultURL string, extras []config.UpstreamIndex) *nuget.NuGetAdapter {
+	t.Helper()
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+	cacheStore, err := local.NewLocalCacheStore(t.TempDir(), 10)
+	require.NoError(t, err)
+	scanEngine := scanner.NewEngine(nil, 30*time.Second, 0)
+	policyEngine := policy.NewEngine(policy.EngineConfig{
+		BlockIfVerdict: scanner.VerdictMalicious, QuarantineIfVerdict: scanner.VerdictSuspicious, MinimumConfidence: 0.7,
+	}, nil)
+	return nuget.NewNuGetAdapter(db, cacheStore, scanEngine, policyEngine,
+		config.UpstreamSet{Default: defaultURL, ExtraIndexes: extras}, config.TagMutabilityConfig{})
+}
+
+func TestNuGetAdapter_ExtraIndexRegistration_RewritesThroughProxy(t *testing.T) {
+	var feed *httptest.Server
+	feed = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v3/registration/mycompany.lib/index.json" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"count":1,"items":[{"@id":"` + feed.URL + `/v3/registration/mycompany.lib/page.json",` +
+				`"items":[{"catalogEntry":{"packageContent":"` + feed.URL + `/v3-flatcontainer/mycompany.lib/1.0.0/mycompany.lib.1.0.0.nupkg",` +
+				`"licenseUrl":"https://licenses.example.org/MIT"}}]}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(feed.Close)
+	a := newMultiIndexNuGet(t, "https://api.invalid", []config.UpstreamIndex{
+		{Name: "private", URL: feed.URL, Packages: []string{"mycompany.*"}},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v3/registration/mycompany.lib/index.json", nil)
+	req.Host = "gate.example.com"
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	assert.NotContains(t, body, feed.URL, "serving feed origin must be rewritten away")
+	assert.Contains(t, body, "http://gate.example.com/v3-flatcontainer/mycompany.lib/1.0.0/")
+	assert.Contains(t, body, "https://licenses.example.org/MIT") // non-download URL untouched
+}
+
+func TestNuGetAdapter_ScopedMiss_Returns404AndAudits(t *testing.T) {
+	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(feed.Close)
+	a := newMultiIndexNuGet(t, "https://api.invalid", []config.UpstreamIndex{
+		{Name: "corp", URL: feed.URL, Packages: []string{"mycompany.*"}},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v3/registration/mycompany.ghost/index.json", nil)
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestNuGetAdapter_ExtraIndexForeignPackageContent_FailsClosed(t *testing.T) {
+	var feed *httptest.Server
+	feed = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v3/registration/mycompany.evil/index.json" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"items":[{"catalogEntry":{"packageContent":"https://evil.cdn/x.nupkg"}}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(feed.Close)
+	a := newMultiIndexNuGet(t, "https://api.invalid", []config.UpstreamIndex{
+		{Name: "private", URL: feed.URL, Packages: []string{"mycompany.*"}},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v3/registration/mycompany.evil/index.json", nil)
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusBadGateway, rec.Code) // fail closed
+}
+
+func TestNuGetAdapter_ExtraIndexNupkgDownload_ScansAndNamespaces(t *testing.T) {
+	var sentAuth string
+	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sentAuth = r.Header.Get("Authorization")
+		if strings.HasSuffix(r.URL.Path, "/mycompany.lib.1.0.0.nupkg") {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("dummy-nupkg-bytes"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(feed.Close)
+	t.Setenv("SGW_NUGET_CORP_TOK", "tok-abc")
+	a := newMultiIndexNuGet(t, "https://api.invalid", []config.UpstreamIndex{{
+		Name: "corp", URL: feed.URL, Packages: []string{"mycompany.*"},
+		Auth: &config.UpstreamAuth{Type: "bearer", TokenEnv: "SGW_NUGET_CORP_TOK"},
+	}})
+	req := httptest.NewRequest(http.MethodGet, "/v3-flatcontainer/mycompany.lib/1.0.0/mycompany.lib.1.0.0.nupkg", nil)
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "Bearer tok-abc", sentAuth)
+	status, err := adapter.GetArtifactStatus(a.DB(), "nuget__corp:mycompany.lib:1.0.0")
+	require.NoError(t, err)
+	require.NotNil(t, status)
 }

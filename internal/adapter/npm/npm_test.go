@@ -3,6 +3,7 @@ package npm_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,7 +46,7 @@ func setupTestNPMWithTyposquat(t *testing.T, upstreamHandler http.HandlerFunc) (
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
 		MinimumConfidence:   0.7,
 	}, nil)
-	return npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL, config.TagMutabilityConfig{}), upstream
+	return npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine, config.UpstreamSet{Default: upstream.URL}, config.TagMutabilityConfig{}), upstream
 }
 
 func setupTestNPM(t *testing.T, upstreamHandler http.HandlerFunc) (*npm.NPMAdapter, *httptest.Server) {
@@ -66,7 +67,7 @@ func setupTestNPM(t *testing.T, upstreamHandler http.HandlerFunc) (*npm.NPMAdapt
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
 		MinimumConfidence:   0.7,
 	}, nil)
-	return npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL, config.TagMutabilityConfig{}), upstream
+	return npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine, config.UpstreamSet{Default: upstream.URL}, config.TagMutabilityConfig{}), upstream
 }
 
 func TestNPMAdapter_Ecosystem_ReturnsNPM(t *testing.T) {
@@ -290,7 +291,7 @@ func setupTestNPMOverrideAware(t *testing.T, upstreamHandler http.HandlerFunc) (
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
 		MinimumConfidence:   0.7,
 	}, db)
-	a := npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL, config.TagMutabilityConfig{})
+	a := npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine, config.UpstreamSet{Default: upstream.URL}, config.TagMutabilityConfig{})
 	return a, upstream, db
 }
 
@@ -420,4 +421,101 @@ func TestNPMAdapter_ScopedMetadata_RewritesTarballURLs(t *testing.T) {
 	body := w.Body.String()
 	assert.NotContains(t, body, upstreamURL+"/@scope/pkg")
 	assert.Contains(t, body, "http://localhost:14873/@scope/pkg/-/pkg-1.0.0.tgz")
+}
+
+// ---- Multi-upstream-index tests (Phase 5, issue #32) ----
+
+func newMultiIndexNPM(t *testing.T, defaultURL string, extras []config.UpstreamIndex) *npm.NPMAdapter {
+	t.Helper()
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() { db.Close() })
+	cacheStore, err := local.NewLocalCacheStore(t.TempDir(), 10)
+	require.NoError(t, err)
+	scanEngine := scanner.NewEngine(nil, 30*time.Second, 0)
+	policyEngine := policy.NewEngine(policy.EngineConfig{
+		BlockIfVerdict: scanner.VerdictMalicious, QuarantineIfVerdict: scanner.VerdictSuspicious, MinimumConfidence: 0.7,
+	}, nil)
+	return npm.NewNPMAdapter(db, cacheStore, scanEngine, policyEngine,
+		config.UpstreamSet{Default: defaultURL, ExtraIndexes: extras}, config.TagMutabilityConfig{})
+}
+
+func TestNPMAdapter_ExtraIndexPackument_RewritesTarballThroughProxy(t *testing.T) {
+	var corp *httptest.Server
+	corp = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/mycompany-lib" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"name":"mycompany-lib","versions":{"1.0.0":{"dist":{"tarball":"` +
+				corp.URL + `/mycompany-lib/-/mycompany-lib-1.0.0.tgz","shasum":"deadbeef"}}}}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(corp.Close)
+	a := newMultiIndexNPM(t, "https://registry.invalid", []config.UpstreamIndex{{Name: "private", URL: corp.URL}})
+	req := httptest.NewRequest(http.MethodGet, "/mycompany-lib", nil)
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `/mycompany-lib/-/mycompany-lib-1.0.0.tgz`)
+	assert.Contains(t, rec.Body.String(), `"shasum":"deadbeef"`)   // integrity preserved
+	assert.NotContains(t, rec.Body.String(), corp.URL+"/mycompany") // serving origin rewritten away
+}
+
+func TestNPMAdapter_ScopedMiss_Returns404AndAudits(t *testing.T) {
+	corp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(corp.Close)
+	a := newMultiIndexNPM(t, "https://registry.invalid", []config.UpstreamIndex{
+		{Name: "corp", URL: corp.URL, Packages: []string{"mycompany-*"}},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/mycompany-secret", nil)
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestNPMAdapter_ExtraIndexForeignTarball_FailsClosed(t *testing.T) {
+	corp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/mycompany-lib" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"versions":{"1.0.0":{"dist":{"tarball":"https://evil.cdn/x-1.0.0.tgz"}}}}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(corp.Close)
+	a := newMultiIndexNPM(t, "https://registry.invalid", []config.UpstreamIndex{{Name: "private", URL: corp.URL}})
+	req := httptest.NewRequest(http.MethodGet, "/mycompany-lib", nil)
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusBadGateway, rec.Code) // fail closed
+}
+
+func TestNPMAdapter_ExtraIndexTarballDownload_ScansAndNamespaces(t *testing.T) {
+	var sentAuth string
+	corp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sentAuth = r.Header.Get("Authorization")
+		if strings.HasSuffix(r.URL.Path, "/mycompany-lib-1.0.0.tgz") {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("dummy-tgz-bytes"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(corp.Close)
+	t.Setenv("SGW_NPM_CORP_TOK", "tok-xyz")
+	a := newMultiIndexNPM(t, "https://registry.invalid", []config.UpstreamIndex{{
+		Name: "corp", URL: corp.URL, Packages: []string{"mycompany-*"},
+		Auth: &config.UpstreamAuth{Type: "bearer", TokenEnv: "SGW_NPM_CORP_TOK"},
+	}})
+	req := httptest.NewRequest(http.MethodGet, "/mycompany-lib/-/mycompany-lib-1.0.0.tgz", nil)
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code) // no scanners → clean → served
+	assert.Equal(t, "Bearer tok-xyz", sentAuth)
+	status, err := adapter.GetArtifactStatus(a.DB(), "npm__corp:mycompany-lib:1.0.0")
+	require.NoError(t, err)
+	require.NotNil(t, status)
 }

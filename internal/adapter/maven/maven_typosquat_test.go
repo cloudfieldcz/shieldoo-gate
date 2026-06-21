@@ -47,7 +47,7 @@ func setupTestMavenWithTyposquat(t *testing.T, upstreamHandler http.HandlerFunc)
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
 		MinimumConfidence:   0.7,
 	}, nil)
-	return maven.NewMavenAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL, nil), upstream
+	return maven.NewMavenAdapter(db, cacheStore, scanEngine, policyEngine, config.UpstreamSet{Default: upstream.URL}, nil), upstream
 }
 
 // setupTestMavenOverrideAware wires the typosquat scanner AND the policy
@@ -79,7 +79,7 @@ func setupTestMavenOverrideAware(t *testing.T, upstreamHandler http.HandlerFunc)
 		QuarantineIfVerdict: scanner.VerdictSuspicious,
 		MinimumConfidence:   0.7,
 	}, db)
-	a := maven.NewMavenAdapter(db, cacheStore, scanEngine, policyEngine, upstream.URL, nil)
+	a := maven.NewMavenAdapter(db, cacheStore, scanEngine, policyEngine, config.UpstreamSet{Default: upstream.URL}, nil)
 	return a, upstream, db
 }
 

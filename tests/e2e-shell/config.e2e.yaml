@@ -19,12 +19,59 @@ ports:
   admin: 8080
 
 upstreams:
-  pypi: "https://pypi.org"
-  npm: "https://registry.npmjs.org"
-  nuget: "https://api.nuget.org"
-  maven: "https://repo1.maven.org/maven2"
-  rubygems: "https://rubygems.org"
-  gomod: "https://proxy.golang.org"
+  pypi:
+    default: "https://pypi.org"
+    extra_indexes:
+      # NOTE: the index `url` is the registry BASE — the gate appends the PEP 503
+      # `/simple/<pkg>/` path itself (same contract as the bare `default` above).
+      # Do NOT include `/simple/` here or it would be doubled.
+      - name: "private"                                  # unscoped fallback
+        url: "https://private-index:8443"
+      - name: "corp"                                     # scoped namespace
+        url: "https://private-index:8443"
+        packages: ["acme-*"]
+  npm:
+    default: "https://registry.npmjs.org"
+    extra_indexes:
+      # Scoped private npm registry served by the shared private-index Caddy.
+      # url is the registry BASE (no path) so the rewritten /<pkg>/-/<tgz>
+      # tarball routes back to the gate's bare npm download route.
+      - name: "private"
+        url: "https://private-index:8443"
+        packages: ["mycompany-*"]
+  nuget:
+    default: "https://api.nuget.org"
+    extra_indexes:
+      # Scoped private NuGet V3 feed (same Caddy host). Per-package registration
+      # fans out; packageContent rewrites back to the gate's /v3-flatcontainer/ route.
+      - name: "private"
+        url: "https://private-index:8443"
+        packages: ["mycompany.*"]
+  maven:
+    default: "https://repo1.maven.org/maven2"
+    extra_indexes:
+      # Scoped private Maven repo served by the shared private-index Caddy under
+      # /maven. Metadata/POM/checksums relay verbatim (no download URLs); the
+      # .jar download routes back to the gate's scanned download route.
+      - name: "private"
+        url: "https://private-index:8443/maven"
+        packages: ["com.mycompany:*"]
+  rubygems:
+    default: "https://rubygems.org"
+    extra_indexes:
+      # Scoped private gem source served by the shared private-index Caddy.
+      # gem_uri rewrites back to the gate's /gems/ scanned route.
+      - name: "private"
+        url: "https://private-index:8443"
+        packages: ["mycompany-*"]
+  gomod:
+    default: "https://proxy.golang.org"
+    extra_indexes:
+      # Scoped private GOPROXY (same Caddy host). Metadata relayed verbatim; the
+      # .zip download routes back to the gate's scanned download route.
+      - name: "private"
+        url: "https://private-index:8443"
+        packages: ["github.com/mycompany/*"]
   docker:
     default_registry: "https://registry-1.docker.io"
     allowed_registries:
