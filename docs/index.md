@@ -211,7 +211,7 @@ make test-e2e
 
 ## Contributing
 
-Shieldoo Gate welcomes contributions under Apache 2.0. See `CONTRIBUTING.md` for guidelines and [`SECURITY.md`](../SECURITY.md) for responsible disclosure. Threat intelligence contributions (malicious package reports) are especially welcome — submit as OSV-format JSON with evidence.
+Shieldoo Gate welcomes contributions under Apache 2.0. See [`CONTRIBUTING.md`](../CONTRIBUTING.md) for the development workflow and PR conventions, [`CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md) (Contributor Covenant 2.1) for community standards, and [`SECURITY.md`](../SECURITY.md) for responsible disclosure. Threat intelligence contributions (malicious package reports) are especially welcome — submit as OSV-format JSON with evidence.
 
 ## Security
 

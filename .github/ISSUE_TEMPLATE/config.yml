@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/cloudfieldcz/shieldoo-gate/security/advisories/new
+    about: Do NOT open a public issue for security vulnerabilities. Report privately via GitHub Private Vulnerability Reporting (see SECURITY.md).
+  - name: 💬 Questions & discussion
+    url: https://github.com/cloudfieldcz/shieldoo-gate/discussions
+    about: Ask questions and discuss usage in GitHub Discussions.
+  - name: 🧪 Report a malicious package (threat intel)
+    url: https://github.com/cloudfieldcz/shieldoo-gate/issues/new?labels=threat-intel
+    about: Submit malicious package reports as OSV-format JSON with evidence (see CONTRIBUTING.md).

@@ -40,14 +40,15 @@
 
 ### P3 — Extras
 - [x] **T9 — Branch protection** on `main`. ✅ Done 2026-06-22 via `gh api -X PUT .../branches/main/protection`. Required checks: `Go build / vet / test`, `UI lint / build`, `CodeQL (go)`, `CodeQL (javascript-typescript)`, `govulncheck (Go CVEs)`; strict (up-to-date); enforce-admins; 1 approving review + require code-owner review + dismiss-stale; require conversation resolution; no force-push, no deletions.
+  - **UPDATE 2026-06-22:** `enforce_admins` disabled (was enabled) at operator request — admins can now merge through protection without the temporary-disable dance (used once to land PR #65, whose code-owner review the sole author could not self-supply). All other rules (required checks, code-owner review, no force-push) still apply to non-admins.
 - [x] **T10 — Pin actions to SHA in `release.yml`.** ✅ Done 2026-06-19 as part of **T6** — `release.yml` is currently the only workflow, so T6 covered it. See T6.
 - [x] **T11 — Secret scanning + push protection.** ✅ Done 2026-06-22 via `gh api -X PATCH repos/... security_and_analysis` — both `secret_scanning` and `secret_scanning_push_protection` now `enabled` (free for this public repo).
 
 ### P4 — GitHub Community Standards (not security-critical; close the checklist)
 Surfaced by Insights → Community Standards. None are part of the original security finding; tracked here so the checklist can go fully green.
-- [ ] **T12 — `CONTRIBUTING.md`.** Already referenced from `docs/index.md` and `CLAUDE.md` but the file does not exist — add it (build/test/lint workflow, PR conventions, link to `SECURITY.md`).
-- [ ] **T13 — `CODE_OF_CONDUCT.md`** (Contributor Covenant 2.1).
-- [ ] **T14 — Issue + PR templates** under `.github/` (`ISSUE_TEMPLATE/`, `PULL_REQUEST_TEMPLATE.md`).
+- [x] **T12 — `CONTRIBUTING.md`.** ✅ Done 2026-06-22. Root `CONTRIBUTING.md`: dev setup (`make proto/build/test/lint`), E2E suites, one-module-per-change + version-pinning rules, Conventional Commits, PR conventions (target `main`, CODEOWNERS review, CLAUDE.md security invariants), threat-intel (OSV JSON). Linked from `docs/index.md`. Resolves the existing dangling reference.
+- [x] **T13 — `CODE_OF_CONDUCT.md`** (Contributor Covenant 2.1). ✅ Done 2026-06-22. Verbatim Contributor Covenant 2.1 (fetched from the EthicalSource release source, TOML frontmatter stripped); enforcement contact = `valda@cloudfield.cz`. Linked from `docs/index.md`.
+- [x] **T14 — Issue + PR templates** under `.github/`. ✅ Done 2026-06-22. `ISSUE_TEMPLATE/bug_report.yml` + `feature_request.yml` (GitHub issue forms), `ISSUE_TEMPLATE/config.yml` (`blank_issues_enabled: false` + contact links: security PVR, Discussions, threat-intel), and `PULL_REQUEST_TEMPLATE.md` (scope/test/lint/docs/security-invariant checklist). Security-vuln link steers reports away from public issues.
 - [ ] **T15 — Repo "Description"** (GitHub About) + **"Repository admins accept content reports"** toggle. **MANUAL (repo-admin):** set the About description and enable content reports in repo settings.
 
 ## Notes
