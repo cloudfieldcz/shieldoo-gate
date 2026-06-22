@@ -11,7 +11,7 @@
 # if any native extension lost a shared lib it needs.
 
 # ---- Builder: toolchain + dependency install ----
-FROM python:3.13.14-slim@sha256:c33f0bc4364a6881bed1ec0cc2665e6c53c87a43e774aaeab88e6f17af105e4f AS builder
+FROM python:3.14.6-slim@sha256:44dd04494ee8f3b538294360e7c4b3acb87c8268e4d0a4828a6500b1eff50061 AS builder
 
 ARG SGW_TOKEN=""
 # Basic-auth username = project label on a self-hosted Shieldoo Gate. We use
@@ -46,7 +46,7 @@ COPY proto/ proto/
 RUN python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. proto/scanner.proto
 
 # ---- Runtime: clean image, no build toolchain or -dev headers ----
-FROM python:3.13.14-slim@sha256:c33f0bc4364a6881bed1ec0cc2665e6c53c87a43e774aaeab88e6f17af105e4f AS runtime
+FROM python:3.14.6-slim@sha256:44dd04494ee8f3b538294360e7c4b3acb87c8268e4d0a4828a6500b1eff50061 AS runtime
 
 # Pull Debian-security patches for base-image OS packages on top of the pinned
 # base tag, then strip perl. The tag (python:3.13.14-slim) is pinned for
