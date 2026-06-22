@@ -11,7 +11,7 @@ pytest-asyncio==1.4.0
 cryptography==49.0.0          # CVE-2026-39892 / GHSA-537c-gmf6-5ccf (OpenSSL in wheels)
 urllib3==2.7.0                # CVE-2026-44431 / CVE-2026-44432
 pygments==2.20.0              # CVE-2026-4539
-python-multipart==0.0.31      # CVE-2026-40347 / CVE-2026-42561 / CVE-2026-53539
+python-multipart==0.0.32      # CVE-2026-40347 / CVE-2026-42561 / CVE-2026-53539
 idna==3.18                    # CVE-2026-45409 / GHSA-65pc-fj4g-8rjx
 starlette==1.3.1              # PYSEC-2026-161 / CVE-2026-48818 / CVE-2026-54283
 pyjwt[crypto]==2.13.0         # PYSEC-2026-175 / -177 / -178 / -179
