@@ -40,17 +40,15 @@ Resolving a tag to its commit SHA (dereferencing annotated tags):
 gh api repos/<owner>/<repo>/git/ref/tags/<tag> --jq '.object.sha'
 ```
 
-SHAs are refreshed **manually** for now. Automated bumping (Dependabot
-`github-actions` ecosystem) is deferred together with the rest of T2 — see
-Consequences.
+SHAs are auto-bumped by Dependabot's `github-actions` ecosystem
+(`.github/dependabot.yml`, weekly); manual re-resolution remains a fallback.
 
 ## Consequences
 
 The release pipeline now runs only reviewed action code; a hijacked upstream tag
 can no longer inject steps into a build that pushes signed images. The cost is
 the same staleness trade-off as ADR-014: a pinned SHA does not pick up an
-action's security fixes until someone re-resolves it. Until Dependabot's
-`github-actions` updater is enabled, SHAs must be refreshed manually on a regular
-cadence (at minimum when bumping a major). The trailing version comment keeps the
-diff readable and makes a stale pin easy to spot in review. Enabling automated
-action-SHA bumping remains an open follow-up.
+action's security fixes until someone re-resolves it. Dependabot's
+`github-actions` updater (`.github/dependabot.yml`) now re-resolves SHAs weekly;
+manual refresh remains a fallback (at minimum when bumping a major). The trailing
+version comment keeps the diff readable and makes a stale pin easy to spot in review.

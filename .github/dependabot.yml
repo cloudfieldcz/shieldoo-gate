@@ -1,0 +1,67 @@
+# Dependabot — automated dependency & digest bumps.
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates
+#
+# Rationale: this is the auto-bump mechanism deferred in the
+# 2026-06-18 security hardening plan (T2). It keeps the digest-pinned
+# base images (ADR-014) and SHA-pinned GitHub Actions (ADR-015) from
+# freezing on potentially-vulnerable layers.
+version: 2
+
+updates:
+  # Go core proxy & API (go.mod at repo root).
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      gomod-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Admin UI (React/Vite).
+  - package-ecosystem: "npm"
+    directory: "/ui"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      npm-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Python scanner bridge (pinned requirements.txt compiled via uv).
+  - package-ecosystem: "pip"
+    directory: "/scanner-bridge"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps)"
+
+  # Base image digests — production Dockerfiles + e2e test runner.
+  - package-ecosystem: "docker"
+    directories:
+      - "/docker"
+      - "/scanner-bridge"
+      - "/tests/e2e-shell"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "build(docker)"
+
+  # GitHub Actions SHA pins (release.yml + future workflows).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "build(ci)"
