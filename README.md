@@ -3,6 +3,8 @@
 > **The supply chain firewall for every package your developers and CI pull.**
 > Open-source, self-hosted, multi-ecosystem. Docker, PyPI, npm, NuGet, Maven, RubyGems, Go Modules — one proxy, one policy, one audit trail.
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cloudfieldcz/shieldoo-gate/badge)](https://scorecard.dev/viewer/?uri=github.com/cloudfieldcz/shieldoo-gate)
+
 Shieldoo Gate sits between your developers, CI runners, and the public package registries. Every artifact — every Python wheel, every npm tarball, every Docker layer, every NuGet `.nupkg` — is intercepted, scanned, and only then served. Malicious packages are blocked before they ever touch a developer laptop, a build agent, or a production image.
 
 ---

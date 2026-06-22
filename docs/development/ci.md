@@ -10,6 +10,7 @@ kept current by Dependabot (`.github/dependabot.yml`).
 |---|---|---|---|
 | **CI** | `.github/workflows/ci.yml` | PR + push to `main` | Build, vet, and test the Go core; lint and build the React UI |
 | **Security scan** | `.github/workflows/codeql.yml` | PR + push to `main` + weekly | CodeQL SAST (Go + TS) and `govulncheck` (Go CVEs) |
+| **Scorecard** | `.github/workflows/scorecard.yml` | PR + push to `main` + weekly + `branch_protection_rule` | OpenSSF Scorecard supply-chain posture; publishes the public score behind the README badge |
 | **Release** | `.github/workflows/release.yml` | tag `vX.Y.Z` | Build/push images, cross-compile `shdg`, dogfood SBOM scan, GitHub release |
 
 ### CI (`ci.yml`)
@@ -40,6 +41,30 @@ and `docker/Dockerfile`.
 
 The weekly schedule re-scans already-merged code so newly-disclosed CVEs still
 surface.
+
+### Scorecard (`scorecard.yml`)
+
+[OpenSSF Scorecard](https://github.com/ossf/scorecard) scores the repository
+against supply-chain best practices (branch protection, pinned dependencies,
+least-privilege token permissions, signed releases, dangerous workflow patterns,
+…). For a supply-chain security tool this score is the public credibility
+metric, so it is published and surfaced via the README badge.
+
+- **Top-level `permissions: read-all`**; the analysis job widens only
+  `security-events: write` (SARIF → Security tab) and `id-token: write` (OIDC
+  for `publish_results`, Sigstore-backed).
+- **`publish_results`** is gated to non-PR runs (`github.event_name != 'pull_request'`)
+  — the public score must come from the default branch. PR runs exist only to
+  prove the workflow is green before merge.
+- **Triggers:** `branch_protection_rule` (re-score when protection changes, the
+  highest-weighted check), weekly cron, push to `main`, and `pull_request`.
+- The score is viewable at
+  [scorecard.dev/viewer](https://scorecard.dev/viewer/?uri=github.com/cloudfieldcz/shieldoo-gate)
+  and via deps.dev.
+
+> A few checks (Branch-Protection, Signed-Releases) only score once the
+> corresponding controls land — see the security-hardening plan (T7 signing,
+> T9 branch protection). The score climbs as those tasks complete.
 
 ## UI linting
 
