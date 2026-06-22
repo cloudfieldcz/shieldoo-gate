@@ -8,7 +8,7 @@ pytest-asyncio==1.4.0
 
 # Security-driven transitive pins — fixes flagged by the Shieldoo vuln scanner
 # Bump alongside `uv pip compile` runs; keep one CVE reference per line.
-cryptography==48.0.1          # CVE-2026-39892 / GHSA-537c-gmf6-5ccf (OpenSSL in wheels)
+cryptography==49.0.0          # CVE-2026-39892 / GHSA-537c-gmf6-5ccf (OpenSSL in wheels)
 urllib3==2.7.0                # CVE-2026-44431 / CVE-2026-44432
 pygments==2.20.0              # CVE-2026-4539
 python-multipart==0.0.31      # CVE-2026-40347 / CVE-2026-42561 / CVE-2026-53539
