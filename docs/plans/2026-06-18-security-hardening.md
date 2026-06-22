@@ -1,7 +1,7 @@
 # Security & Supply-Chain Hardening Plan
 
 **Date:** 2026-06-18
-**Status:** In progress — implement task by task
+**Status:** ✅ Done 2026-06-22 — all 15 tasks complete (T1–T15). One non-blocking defense-in-depth follow-up remains: bind the dogfooded SBOM to the image digest (see [ADR-018](../adr/ADR-018-build-provenance-and-signing.md)).
 **Trigger:** Security finding — public repo lacks `SECURITY.md`/VDP and security CI (only `release.yml`, no CodeQL); base images pinned by tag (not digest).
 
 ## Context (verified state on 2026-06-18)
@@ -49,7 +49,7 @@ Surfaced by Insights → Community Standards. None are part of the original secu
 - [x] **T12 — `CONTRIBUTING.md`.** ✅ Done 2026-06-22. Root `CONTRIBUTING.md`: dev setup (`make proto/build/test/lint`), E2E suites, one-module-per-change + version-pinning rules, Conventional Commits, PR conventions (target `main`, CODEOWNERS review, CLAUDE.md security invariants), threat-intel (OSV JSON). Linked from `docs/index.md`. Resolves the existing dangling reference.
 - [x] **T13 — `CODE_OF_CONDUCT.md`** (Contributor Covenant 2.1). ✅ Done 2026-06-22. Verbatim Contributor Covenant 2.1 (fetched from the EthicalSource release source, TOML frontmatter stripped); enforcement contact = `valda@cloudfield.cz`. Linked from `docs/index.md`.
 - [x] **T14 — Issue + PR templates** under `.github/`. ✅ Done 2026-06-22. `ISSUE_TEMPLATE/bug_report.yml` + `feature_request.yml` (GitHub issue forms), `ISSUE_TEMPLATE/config.yml` (`blank_issues_enabled: false` + contact links: security PVR, Discussions, threat-intel), and `PULL_REQUEST_TEMPLATE.md` (scope/test/lint/docs/security-invariant checklist). Security-vuln link steers reports away from public issues.
-- [ ] **T15 — Repo "Description"** (GitHub About) + **"Repository admins accept content reports"** toggle. **MANUAL (repo-admin):** set the About description and enable content reports in repo settings.
+- [x] **T15 — Repo "Description"** (GitHub About) + **"Repository admins accept content reports"** toggle. ✅ Done 2026-06-22 (manual, repo-admin). About description set; Settings → Moderation options → Reported content → "All users" enabled.
 
 ## Notes
 - Several tasks (enable PVR, branch protection, secret scanning, signing keys) require repo-admin actions on GitHub that Claude cannot do — these will be flagged for the user to do manually.
