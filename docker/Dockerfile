@@ -61,7 +61,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
 FROM aquasec/trivy:0.71.2@sha256:f5d0e600ecda7449e2a9b272805aef698631d3bb3f3a739a750de2c6819acdc9 AS trivy
 
 # Stage 3: Runtime image
-FROM alpine:3.20.10@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc AS runtime
+FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS runtime
 
 RUN apk add --no-cache ca-certificates sqlite-libs
 
