@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import type { ReactElement } from 'react'
 import { Ban, AlertTriangle, CheckCircle2, X, Info, Save } from 'lucide-react'
 import type {
   LicenseAction,
@@ -32,7 +33,7 @@ export interface LicensePolicyEditorProps {
 
 type Bucket = 'blocked' | 'warned' | 'allowed'
 
-const BUCKETS: { key: Bucket; label: string; action: LicenseAction; icon: JSX.Element; bg: string; text: string; hover: string; muted: string; ring: string }[] = [
+const BUCKETS: { key: Bucket; label: string; action: LicenseAction; icon: ReactElement; bg: string; text: string; hover: string; muted: string; ring: string }[] = [
   {
     key: 'blocked',
     label: 'Blocked',

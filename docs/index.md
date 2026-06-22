@@ -70,7 +70,7 @@ Shieldoo Gate Protocol Adapter
 ## Technology Stack
 
 - **Go 1.25+** — core proxy, API, built-in scanners
-- **TypeScript + React 18** — admin UI
+- **TypeScript + React 19** — admin UI
 - **Python 3.13+** — GuardDog scanner bridge (gRPC sidecar)
 - **SQLite** (default single-node) / **PostgreSQL** (HA mode, v1.1)
 
