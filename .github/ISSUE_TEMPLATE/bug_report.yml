@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a reproducible bug in Shieldoo Gate
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug! **Do not report security vulnerabilities here** —
+        use [private reporting](https://github.com/cloudfieldcz/shieldoo-gate/security)
+        instead (see `SECURITY.md`).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps, config, and the client command (pip/npm/docker/…) used.
+      placeholder: |
+        1. Configure '...'
+        2. Run '...'
+        3. See error
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected component
+      options:
+        - Proxy / adapter (docker, pypi, npm, nuget, …)
+        - Scanner integration (guarddog, trivy, osv)
+        - Cache / storage backend
+        - Policy engine
+        - REST API
+        - Admin UI
+        - shdg CLI
+        - Other / not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `shdg version` or the Docker image tag.
+      placeholder: "1.2.3"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste relevant log output. **Scrub secrets** (tokens, Authorization headers, API keys).
+      render: text
+    validations:
+      required: false
