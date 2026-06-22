@@ -58,7 +58,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
 # Trivy < 0.66 cannot decode CycloneDX 1.6 SBOMs; shdg generates 1.6 by default,
 # so the gate must run a Trivy that supports it or every push-from-CI scan will
 # silently fall back to OSV-only and miss CVSS-derived severities.
-FROM aquasec/trivy:0.71.1@sha256:53570e6911c2361ebe7995228088cf83a6b9b73e7f3cdca44bd8f8f425e80fa7 AS trivy
+FROM aquasec/trivy:0.71.2@sha256:f5d0e600ecda7449e2a9b272805aef698631d3bb3f3a739a750de2c6819acdc9 AS trivy
 
 # Stage 3: Runtime image
 FROM alpine:3.20.10@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc AS runtime
