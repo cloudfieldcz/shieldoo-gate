@@ -53,7 +53,7 @@ export default function IgnoreModal({
         package_version: finding.package_version,
       })
       setDraft(r.reason)
-    } catch (e) {
+    } catch {
       setError('AI draft unavailable')
     } finally {
       setDraftLoading(false)
@@ -84,8 +84,9 @@ export default function IgnoreModal({
         against_run_id: scanRunID,
       })
       onCreated()
-    } catch (e: any) {
-      setError(e?.response?.data?.error ?? 'Failed to create ignore')
+    } catch (e) {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error
+      setError(msg ?? 'Failed to create ignore')
     } finally {
       setSubmitting(false)
     }

@@ -21,6 +21,7 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
   - [Authentication](configuration.md#authentication-v11) — OIDC admin API authentication (v1.1)
   - [Alerts](configuration.md#alerts-v11) — webhook, Slack, and email notification channels
 - [Deployment](deployment.md) — Docker Compose, Kubernetes (Helm), local development, client configuration, testing
+- [Continuous Integration & Security Scanning](development/ci.md) — the `ci.yml` (build/lint/test) and `codeql.yml` (CodeQL + govulncheck) workflows, plus UI ESLint config
 - [E2E Testing](development/e2e-testing.md) — the E2E shell suite: stack architecture, the test harness, full test inventory, and an in-depth guide to how **multi-upstream-index** behaviour is tested (the scan+cache release gate)
 - [Local Keycloak (OIDC) dev environment](development/local-keycloak.md) — run Keycloak locally to test the admin-UI login/logout flow
 

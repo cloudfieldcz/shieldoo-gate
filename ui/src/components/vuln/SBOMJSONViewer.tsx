@@ -3,7 +3,7 @@
 type Props = { sbom: unknown }
 
 export default function SBOMJSONViewer({ sbom }: Props) {
-  let pretty = ''
+  let pretty: string
   try {
     pretty = JSON.stringify(sbom, null, 2)
   } catch {
