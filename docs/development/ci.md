@@ -11,7 +11,7 @@ kept current by Dependabot (`.github/dependabot.yml`).
 | **CI** | `.github/workflows/ci.yml` | PR + push to `main` | Build, vet, and test the Go core; lint and build the React UI |
 | **Security scan** | `.github/workflows/codeql.yml` | PR + push to `main` + weekly | CodeQL SAST (Go + TS) and `govulncheck` (Go CVEs) |
 | **Scorecard** | `.github/workflows/scorecard.yml` | PR + push to `main` + weekly + `branch_protection_rule` | OpenSSF Scorecard supply-chain posture; publishes the public score behind the README badge |
-| **Release** | `.github/workflows/release.yml` | tag `vX.Y.Z` | Build/push images, cross-compile `shdg`, dogfood SBOM scan, GitHub release |
+| **Release** | `.github/workflows/release.yml` | tag `vX.Y.Z` | Build/push images, cross-compile `shdg`, dogfood SBOM scan, sign + attest provenance, GitHub release |
 
 ### CI (`ci.yml`)
 
@@ -63,8 +63,33 @@ metric, so it is published and surfaced via the README badge.
   and via deps.dev.
 
 > A few checks (Branch-Protection, Signed-Releases) only score once the
-> corresponding controls land — see the security-hardening plan (T7 signing,
-> T9 branch protection). The score climbs as those tasks complete.
+> corresponding controls land — Branch-Protection (T9) and Signed-Releases
+> (T7) are now in place; the score reflects them after the next default-branch
+> run (and, for Signed-Releases, the next `vX.Y.Z` tag).
+
+### Release signing & provenance (`release.yml`)
+
+Every released artifact is signed and carries SLSA build provenance using
+**keyless Sigstore** (Fulcio certs from the GitHub Actions OIDC token, recorded
+in Rekor — no long-lived signing key). See
+[ADR-018](../adr/ADR-018-build-provenance-and-signing.md) for the rationale.
+
+- **Images** — built with `provenance: mode=max` + `sbom: true` (BuildKit
+  attaches SLSA provenance + a CycloneDX SBOM as OCI referrers),
+  `actions/attest-build-provenance` (GitHub-hosted provenance, pushed to the
+  registry), and `cosign sign` **by digest**.
+- **`shdg` binaries** — one `actions/attest-build-provenance` attestation over
+  all five archives.
+- **Dogfooded SBOMs** — persisted via `shdg scan --sbom-output`, attached to the
+  release (`*.cdx.json`), folded into `SHA256SUMS`, and signed with
+  `cosign sign-blob --bundle`. The signed bytes are the same ones uploaded to
+  the gate. Fail-closed guards reject an incomplete `SHA256SUMS` or an empty SBOM.
+
+Permissions are least-privilege: top-level `contents: read`, with each job
+widening only the scopes it needs (`packages`/`id-token`/`attestations` on the
+image and release jobs). New actions are SHA-pinned per
+[ADR-015](../adr/ADR-015-sha-pin-github-actions.md). The release notes for each
+tag embed the exact `cosign verify` / `gh attestation verify` commands.
 
 ## UI linting
 
