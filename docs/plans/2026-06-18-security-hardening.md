@@ -36,12 +36,12 @@
 - [x] **T6 — SHA-pin GitHub Actions.** ✅ Done 2026-06-19. All 16 `uses:` refs in `release.yml` (the only workflow) pinned to full 40-char commit SHA with trailing `# vX.Y.Z` comment — 9 distinct actions (checkout, setup-go, upload/download-artifact, docker setup-buildx/login/metadata/build-push, softprops/action-gh-release). SHAs resolved via `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` (annotated tags dereferenced); YAML re-validated. [ADR-015](../adr/ADR-015-sha-pin-github-actions.md) records the decision; linked from `docs/index.md`. **This also satisfies T10** (release.yml is the priority target with `packages: write`).
   - **✅ FOLLOW-UP RESOLVED 2026-06-22:** SHA auto-bump now handled by Dependabot `github-actions` ecosystem (T2).
 - [ ] **T7 — Build provenance / signing**: SLSA provenance attestation + cosign sign image in `release.yml`; sign the dogfooded SBOM too.
-- [ ] **T8 — OpenSSF Scorecard** (`scorecard.yml`): weekly + README badge.
+- [x] **T8 — OpenSSF Scorecard.** ✅ Done 2026-06-22. `.github/workflows/scorecard.yml` — `ossf/scorecard-action` v2.4.3 (SHA-pinned), triggers `branch_protection_rule` + weekly cron + push `main` + `pull_request`; top-level `permissions: read-all`, job widens `security-events: write` + `id-token: write`; SARIF → Security tab; `publish_results` gated to non-PR runs. README badge → scorecard.dev. Docs: `docs/development/ci.md`. PR #65.
 
 ### P3 — Extras
-- [ ] **T9 — Branch protection** on `main`: required CI checks, required review, no force-push.
+- [x] **T9 — Branch protection** on `main`. ✅ Done 2026-06-22 via `gh api -X PUT .../branches/main/protection`. Required checks: `Go build / vet / test`, `UI lint / build`, `CodeQL (go)`, `CodeQL (javascript-typescript)`, `govulncheck (Go CVEs)`; strict (up-to-date); enforce-admins; 1 approving review + require code-owner review + dismiss-stale; require conversation resolution; no force-push, no deletions.
 - [x] **T10 — Pin actions to SHA in `release.yml`.** ✅ Done 2026-06-19 as part of **T6** — `release.yml` is currently the only workflow, so T6 covered it. See T6.
-- [ ] **T11 — Secret scanning + push protection** enabled in repo settings.
+- [x] **T11 — Secret scanning + push protection.** ✅ Done 2026-06-22 via `gh api -X PATCH repos/... security_and_analysis` — both `secret_scanning` and `secret_scanning_push_protection` now `enabled` (free for this public repo).
 
 ### P4 — GitHub Community Standards (not security-critical; close the checklist)
 Surfaced by Insights → Community Standards. None are part of the original security finding; tracked here so the checklist can go fully green.
