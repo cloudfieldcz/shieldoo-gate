@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +10,51 @@ import (
 	"strings"
 	"testing"
 )
+
+// TestRunScan_SbomOutput_WritesUploadedBytesToFile pins the release-pipeline
+// contract: --sbom-output must persist exactly the bytes POSTed to the gate,
+// so the SLSA attestation / cosign signature covers the same SBOM the gate
+// ingested (T7 — dogfooded SBOM signing).
+func TestRunScan_SbomOutput_WritesUploadedBytesToFile(t *testing.T) {
+	tmp := t.TempDir()
+	sbomPath := filepath.Join(tmp, "in.json")
+	outPath := filepath.Join(tmp, "out", "sbom.json") // nested dir must be created
+	content := `{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}`
+	if err := os.WriteFile(sbomPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var received string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		received = string(b)
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]any{"scan_run_id": 1, "component_id": 1})
+	}))
+	defer srv.Close()
+
+	t.Setenv("SHIELDOO_URL", srv.URL)
+	t.Setenv("SHIELDOO_TOKEN", "tok")
+
+	rc := runScan([]string{
+		"--project", "p", "--component", "c",
+		"--sbom", sbomPath, "--sbom-output", outPath,
+		"--ecosystem", "pypi",
+	})
+	if rc != 0 {
+		t.Fatalf("rc=%d, want 0", rc)
+	}
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("--sbom-output file not written: %v", err)
+	}
+	if string(got) != content {
+		t.Errorf("--sbom-output bytes = %q, want %q", got, content)
+	}
+	if received != content {
+		t.Errorf("uploaded bytes = %q, want %q (must match --sbom-output)", received, content)
+	}
+}
 
 func TestRunScan_WithSbomFlag_PostsToGate(t *testing.T) {
 	tmp := t.TempDir()
