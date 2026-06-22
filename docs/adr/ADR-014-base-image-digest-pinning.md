@@ -27,8 +27,8 @@ per-architecture digest, so builds on both `amd64` and `arm64` continue to
 resolve the correct image. This covers `FROM` lines and external
 `COPY --from=<image>` stages (e.g. `ghcr.io/astral-sh/uv`).
 
-Digests are refreshed **manually** when a base tag is bumped. Automated digest
-bumping (Dependabot/Renovate) is deliberately deferred — see Consequences.
+Digests are auto-bumped by Dependabot's `docker` ecosystem (`.github/dependabot.yml`,
+weekly); manual re-resolution remains a fallback when a base tag is bumped out of band.
 
 ## Consequences
 
@@ -39,4 +39,4 @@ ADR-010's build-time `apt-get upgrade` still pulls Debian-security patches on to
 of the pinned Debian bases, and digests must be refreshed on a regular cadence
 (at minimum every release). Re-resolving a tag to its current index digest:
 `docker buildx imagetools inspect <name:tag> --format '{{.Manifest.Digest}}'`.
-Adopting automated digest bumping remains an open follow-up.
+Automated digest bumping is now in place via Dependabot (`.github/dependabot.yml`).

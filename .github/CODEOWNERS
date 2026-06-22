@@ -1,0 +1,20 @@
+# CODEOWNERS — review ownership for Shieldoo Gate
+# https://docs.github.com/articles/about-code-owners
+# Order matters: the last matching pattern takes precedence.
+
+# Default owner for everything in the repo.
+*                       @cloudfieldcz/shdg
+
+# Security-critical paths — explicit review required.
+/internal/scanner/      @cloudfieldcz/shdg
+/internal/auth/         @cloudfieldcz/shdg
+/internal/policy/       @cloudfieldcz/shdg
+
+# Build / supply-chain surface.
+/docker/                @cloudfieldcz/shdg
+/scanner-bridge/Dockerfile  @cloudfieldcz/shdg
+/.github/               @cloudfieldcz/shdg
+
+# Pinned scanner dependencies (Security Invariant #4 — never unpin).
+/scanner-bridge/requirements.txt    @cloudfieldcz/shdg
+/scanner-bridge/requirements.in     @cloudfieldcz/shdg
