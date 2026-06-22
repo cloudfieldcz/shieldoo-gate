@@ -99,6 +99,7 @@ Generate (or re-use) a CycloneDX SBOM and upload it to the gate's
 | `--ecosystem` | enum | `auto` | `auto`, `pypi`, `npm`, `docker`, `go`, `multi`. With `--image` set, only `auto`, `docker`, and `multi` are allowed. |
 | `--dir` | path | `.` | Project directory to scan when generating. Ignored with `--image` (error if explicitly set). |
 | `--skip-dirs` | string | (none) | Comma-separated directories to skip during `trivy fs` (e.g. `examples,tests`). Forwarded as repeated `--skip-dirs` flags. No-op with `--image`/`--sbom`. |
+| `--sbom-output` | path | (none) | Also write the uploaded CycloneDX SBOM to this path (parent dirs created). The bytes are byte-for-byte identical to what is POSTed to the gate, so a release pipeline can attest/sign exactly the SBOM the gate ingested. Works with any source (`--sbom`/`--image`/`--dir`). |
 | `--wait` | bool | `false` | Poll `GET /api/v1/vulnerabilities/scan-runs/{id}` until terminal status. |
 | `--fail-on` | enum | `none` | `critical`, `high`, `none`. Requires `--wait`. |
 | `--timeout` | duration | `10m` | Wait timeout (Go duration string, e.g. `5m`, `30s`). |

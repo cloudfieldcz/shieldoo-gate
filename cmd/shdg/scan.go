@@ -8,20 +8,22 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
 // scanOpts holds parsed CLI flags for the scan subcommand.
 type scanOpts struct {
-	project   string
-	component string
-	sbomPath  string
-	ecosystem string
-	dir       string
-	image     string // image reference for `trivy image` scan; mutually exclusive with --sbom/--dir
-	skipDirs  string // comma-separated list of paths to skip; passed through to `trivy fs --skip-dirs`
-	verbose   bool
+	project    string
+	component  string
+	sbomPath   string
+	ecosystem  string
+	dir        string
+	image      string // image reference for `trivy image` scan; mutually exclusive with --sbom/--dir
+	skipDirs   string // comma-separated list of paths to skip; passed through to `trivy fs --skip-dirs`
+	sbomOutput string // when set, the exact SBOM bytes uploaded to the gate are also written here (for release-time attestation/signing)
+	verbose    bool
 
 	// Phase 2 additions:
 	wait         bool
@@ -57,6 +59,7 @@ func parseScanFlags(args []string, errW io.Writer) (scanOpts, error) {
 	fs.StringVar(&o.dir, "dir", ".", "Project directory to scan (when --sbom and --image not given)")
 	fs.StringVar(&o.image, "image", "", "Image reference to scan (e.g. myorg/api:1.4.2); shells out to `trivy image`")
 	fs.StringVar(&o.skipDirs, "skip-dirs", "", "Comma-separated directories to skip (forwarded to `trivy fs --skip-dirs`). Ignored with --image/--sbom.")
+	fs.StringVar(&o.sbomOutput, "sbom-output", "", "Also write the uploaded CycloneDX SBOM to this path (parent dirs created), for release-time attestation/signing")
 	fs.BoolVar(&o.verbose, "verbose", false, "Verbose log output to stderr")
 	fs.BoolVar(&o.wait, "wait", false, "Wait for scan to complete")
 	fs.StringVar(&o.failOn, "fail-on", "none", "Exit non-zero on new findings: critical|high|none (requires --wait)")
@@ -150,6 +153,21 @@ func validateImageRef(ref string) error {
 	return nil
 }
 
+// writeSBOMOutput persists the CycloneDX SBOM that is about to be uploaded to
+// the gate so the release pipeline can attest/sign exactly those bytes. Parent
+// directories are created so callers can target a nested artifacts dir.
+func writeSBOMOutput(path string, data []byte) error {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create --sbom-output dir %s: %w", dir, err)
+		}
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write --sbom-output %s: %w", path, err)
+	}
+	return nil
+}
+
 func runScan(args []string) int {
 	opts, err := parseScanFlags(args, os.Stderr)
 	if err != nil {
@@ -198,15 +216,17 @@ func executeScan(opts scanOpts, out, errW io.Writer) (int, error) {
 		}
 	}
 
-	var sbom io.Reader
+	// Resolve the SBOM into a byte slice up front: the same bytes are both
+	// POSTed to the gate and (optionally) persisted via --sbom-output, so a
+	// release-time attestation/signature covers exactly what the gate ingested.
+	var sbomBytes []byte
 	switch {
 	case opts.sbomPath != "":
-		f, err := os.Open(opts.sbomPath)
+		b, err := os.ReadFile(opts.sbomPath)
 		if err != nil {
 			return 1, fmt.Errorf("open --sbom: %w", err)
 		}
-		defer f.Close()
-		sbom = f
+		sbomBytes = b
 	case opts.image != "":
 		// Lazily download Trivy and shell out to `trivy image <ref>`.
 		bin, err := ensureTrivy(trivyVersion, defaultTrivyBaseURL)
@@ -217,11 +237,10 @@ func executeScan(opts scanOpts, out, errW io.Writer) (int, error) {
 			fmt.Fprintf(errW, "shdg: using trivy %s at %s\n", trivyVersion, bin)
 			fmt.Fprintf(errW, "shdg: trivy image %s (registry pull may take minutes)\n", opts.image)
 		}
-		sbomBytes, err := generateImageSBOM(bin, opts.image)
+		sbomBytes, err = generateImageSBOM(bin, opts.image)
 		if err != nil {
 			return 1, fmt.Errorf("generate sbom: %w", err)
 		}
-		sbom = bytes.NewReader(sbomBytes)
 	default:
 		// Lazily download Trivy and shell out to `trivy fs <dir>`.
 		bin, err := ensureTrivy(trivyVersion, defaultTrivyBaseURL)
@@ -231,14 +250,22 @@ func executeScan(opts scanOpts, out, errW io.Writer) (int, error) {
 		if opts.verbose {
 			fmt.Fprintf(errW, "shdg: using trivy %s at %s\n", trivyVersion, bin)
 		}
-		sbomBytes, err := generateSBOM(bin, opts.dir, opts.skipDirs)
+		sbomBytes, err = generateSBOM(bin, opts.dir, opts.skipDirs)
 		if err != nil {
 			return 1, fmt.Errorf("generate sbom: %w", err)
 		}
-		sbom = bytes.NewReader(sbomBytes)
 	}
 
-	resp, err := uploadSBOM(baseURL, token, opts.project, opts.component, eco, sbom)
+	if opts.sbomOutput != "" {
+		if err := writeSBOMOutput(opts.sbomOutput, sbomBytes); err != nil {
+			return 1, err
+		}
+		if opts.verbose {
+			fmt.Fprintf(errW, "shdg: wrote SBOM (%d bytes) to %s\n", len(sbomBytes), opts.sbomOutput)
+		}
+	}
+
+	resp, err := uploadSBOM(baseURL, token, opts.project, opts.component, eco, bytes.NewReader(sbomBytes))
 	if err != nil {
 		return 1, err
 	}
