@@ -2,8 +2,9 @@ import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Pencil } from 'lucide-react'
-import { vulnApi, aiApi, type ScanFinding, type Ignore, type Component } from '../api/vulnerabilities'
-import SeverityChip, { severityRank } from '../components/vuln/SeverityChip'
+import { vulnApi, aiApi, type ScanFinding, type Ignore, type Component, type ScanRun } from '../api/vulnerabilities'
+import SeverityChip from '../components/vuln/SeverityChip'
+import { severityRank } from '../components/vuln/severity'
 import SeverityCounts from '../components/vuln/SeverityCounts'
 import TriggerBadge from '../components/vuln/TriggerBadge'
 import ScannerPill from '../components/vuln/ScannerPill'
@@ -360,7 +361,7 @@ function ExpiredIgnoresPanel({ ignores, onRestore }: { ignores: Ignore[]; onRest
   )
 }
 
-function ScanHistoryTable({ scans }: { scans: any[] }) {
+function ScanHistoryTable({ scans }: { scans: ScanRun[] }) {
   if (scans.length === 0) return <div className="text-sm text-gray-400 italic">No scans yet.</div>
   return (
     <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">

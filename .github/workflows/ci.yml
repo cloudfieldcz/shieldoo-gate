@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege: PR CI only reads the repo. No package/content writes here —
+# that belongs to release.yml. Do NOT add secrets such as SGW_TOKEN/SGW_USER:
+# the Makefile reroutes GOPROXY through the production gate when SGW_TOKEN is
+# set, which 403s for unauthenticated CI and breaks `make build`.
+permissions:
+  contents: read
+
+# A newer push to the same PR/branch cancels the in-flight run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Keep in lockstep with go.mod's `go` directive and docker/Dockerfile.
+  GO_VERSION: "1.26.4"
+  # Keep in lockstep with docker/Dockerfile's node base image.
+  NODE_VERSION: "20.19.0"
+
+jobs:
+  go:
+    name: Go build / vet / test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: false
+
+      # `make build` compiles both binaries; go-sqlite3 and `go test -race`
+      # need CGO — gcc is present on ubuntu-latest by default.
+      - name: Build
+        run: make build
+
+      - name: Lint (go vet)
+        run: make lint
+
+      - name: Test
+        run: make test
+
+  ui:
+    name: UI lint / build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      # `npm ci` installs the exact pinned tree from package-lock.json.
+      - name: Install
+        working-directory: ui
+        run: npm ci
+
+      - name: Lint (eslint)
+        working-directory: ui
+        run: npm run lint
+
+      # `npm run build` runs `tsc` first — this is the type-check gate.
+      - name: Build (tsc + vite)
+        working-directory: ui
+        run: npm run build
