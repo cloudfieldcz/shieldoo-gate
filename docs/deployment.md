@@ -81,7 +81,7 @@ The main Dockerfile (`docker/Dockerfile`) uses a multi-stage build:
 
 1. **Node UI builder** — Builds the React admin UI (`npm ci && npm run build`)
 2. **Go builder** — Compiles the Go binary with CGO enabled (required for SQLite)
-3. **Trivy builder** — Copies the Trivy v0.71.1 binary
+3. **Trivy builder** — Copies the Trivy v0.71.2 binary
 4. **Runtime** — Alpine-based image combining all built artifacts
 
 The scanner-bridge has its own Dockerfile (`scanner-bridge/Dockerfile`) that:

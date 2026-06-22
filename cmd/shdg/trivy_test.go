@@ -13,16 +13,16 @@ import (
 
 func TestTrivyCachePath_HonoursOverride(t *testing.T) {
 	t.Setenv("SHDG_CACHE_DIR", "/tmp/shdg-test")
-	got := trivyCachePath("0.71.1")
-	if !strings.HasPrefix(got, "/tmp/shdg-test/trivy-0.71.1") {
+	got := trivyCachePath("0.71.2")
+	if !strings.HasPrefix(got, "/tmp/shdg-test/trivy-0.71.2") {
 		t.Errorf("path %q missing override prefix", got)
 	}
 }
 
 func TestParseChecksums_FindsAsset(t *testing.T) {
-	raw := `aaaa1111  trivy_0.71.1_Linux-64bit.tar.gz
-bbbb2222  trivy_0.71.1_macOS-ARM64.tar.gz`
-	got, err := parseChecksums(raw, "trivy_0.71.1_macOS-ARM64.tar.gz")
+	raw := `aaaa1111  trivy_0.71.2_Linux-64bit.tar.gz
+bbbb2222  trivy_0.71.2_macOS-ARM64.tar.gz`
+	got, err := parseChecksums(raw, "trivy_0.71.2_macOS-ARM64.tar.gz")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ bbbb2222  trivy_0.71.1_macOS-ARM64.tar.gz`
 }
 
 func TestParseChecksums_AssetMissing_Errors(t *testing.T) {
-	if _, err := parseChecksums("aaaa  other.tar.gz", "trivy_0.71.1_Linux-64bit.tar.gz"); err == nil {
+	if _, err := parseChecksums("aaaa  other.tar.gz", "trivy_0.71.2_Linux-64bit.tar.gz"); err == nil {
 		t.Errorf("expected error for missing asset")
 	}
 }
@@ -58,10 +58,10 @@ func TestVerifySHA256_MatchAndMismatch(t *testing.T) {
 // silently shipping (security-review requirement).
 func TestExpectedChecksums_AllPinned(t *testing.T) {
 	required := []string{
-		"trivy_0.71.1_Linux-64bit.tar.gz",
-		"trivy_0.71.1_Linux-ARM64.tar.gz",
-		"trivy_0.71.1_macOS-64bit.tar.gz",
-		"trivy_0.71.1_macOS-ARM64.tar.gz",
+		"trivy_0.71.2_Linux-64bit.tar.gz",
+		"trivy_0.71.2_Linux-ARM64.tar.gz",
+		"trivy_0.71.2_macOS-64bit.tar.gz",
+		"trivy_0.71.2_macOS-ARM64.tar.gz",
 	}
 	for _, asset := range required {
 		v, ok := expectedChecksums[asset]
@@ -135,7 +135,7 @@ func TestExtractTrivyBinary_RejectsDotDotName(t *testing.T) {
 func TestEnsureTrivy_ReusesCachedBinary(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("SHDG_CACHE_DIR", tmp)
-	cachePath := trivyCachePath("0.71.1")
+	cachePath := trivyCachePath("0.71.2")
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestEnsureTrivy_ReusesCachedBinary(t *testing.T) {
 		t.Errorf("ensureTrivy should not download when binary already cached")
 	}))
 	defer srv.Close()
-	got, err := ensureTrivy("0.71.1", srv.URL)
+	got, err := ensureTrivy("0.71.2", srv.URL)
 	if err != nil {
 		t.Fatalf("ensureTrivy: %v", err)
 	}
