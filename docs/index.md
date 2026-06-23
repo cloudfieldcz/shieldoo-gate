@@ -23,6 +23,7 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
 - [Deployment](deployment.md) — Docker Compose, Kubernetes (Helm), local development, client configuration, testing
 - [Continuous Integration & Security Scanning](development/ci.md) — the `ci.yml` (build/lint/test) and `codeql.yml` (CodeQL + govulncheck) workflows, plus UI ESLint config
 - [E2E Testing](development/e2e-testing.md) — the E2E shell suite: stack architecture, the test harness, full test inventory, and an in-depth guide to how **multi-upstream-index** behaviour is tested (the scan+cache release gate)
+- [UI Test Suite](development/ui-e2e.md) — the standalone Playwright suite for the admin UI: visual-regression baselines + interaction flows, run against a dedicated deterministic gate in a pinned browser container (`make test-ui`)
 - [Local Keycloak (OIDC) dev environment](development/local-keycloak.md) — run Keycloak locally to test the admin-UI login/logout flow
 
 ### Reference
@@ -207,6 +208,9 @@ make test-e2e-containerized
 
 # Go E2E tests
 make test-e2e
+
+# UI suite — visual regression + interaction flows (own fresh gate, pinned browser)
+make test-ui
 ```
 
 ## Contributing

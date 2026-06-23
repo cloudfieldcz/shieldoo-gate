@@ -15,13 +15,18 @@ kept current by Dependabot (`.github/dependabot.yml`).
 
 ### CI (`ci.yml`)
 
-Two jobs, both `permissions: contents: read`:
+Three jobs, all `permissions: contents: read`:
 
 - **`go`** — `make build`, `make lint` (`go vet`), `make test` (`go test -race`).
   CGO is on (go-sqlite3 + `-race` require it); gcc is present on
   `ubuntu-latest`.
 - **`ui`** — `npm ci`, `npm run lint` (ESLint 10 flat config), `npm run build`
   (`tsc` + Vite — the type-check gate).
+- **`ui-e2e`** — `make test-ui`: brings up a dedicated fresh open-mode gate and
+  runs the standalone Playwright suite (visual regression + interaction flows)
+  inside the pinned Playwright container, diffing against the committed
+  baselines. On failure it uploads the Playwright HTML report as an artifact.
+  See [UI Test Suite](ui-e2e.md).
 
 > **Never set `SGW_TOKEN` / `SGW_USER` in CI.** The Makefile reroutes `GOPROXY`
 > through the production gate when `SGW_TOKEN` is set, which 403s for

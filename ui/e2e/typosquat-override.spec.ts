@@ -1,14 +1,25 @@
 import { test, expect, request as playwrightRequest } from '@playwright/test'
 
-const ADMIN = 'http://localhost:8080'
-const NPM_PROXY = 'http://localhost:4873'
+// Full functional flow: trigger a typosquat block through the npm proxy, then
+// release it from the Artifacts pane. This needs the npm proxy port reachable
+// and a real npm upstream to re-fetch from after the override — the dev compose
+// provides both. The standalone UI suite's gate exposes neither at these URLs,
+// so the spec self-skips unless SGW_UI_E2E_PROXY signals a suitable stack.
+// ADMIN / NPM_PROXY / proxy creds are env-overridable for that stack.
+const ADMIN = process.env.PLAYWRIGHT_ADMIN_URL ?? 'http://localhost:8080'
+const NPM_PROXY = process.env.PLAYWRIGHT_NPM_PROXY_URL ?? 'http://localhost:4873'
 // edit-distance 2 from "lodash"; npm "security holding package", harmless.
 const TYPO_NAME = 'lodsah'
 const ARTIFACT_ID = `npm:${TYPO_NAME}:*`
 const ARTIFACT_ID_ENC = encodeURIComponent(ARTIFACT_ID)
 // docker-compose well-known dev token; required when proxy auth is enabled.
-const PROXY_USER = 'ci-bot'
-const PROXY_TOKEN = 'test-token-123'
+const PROXY_USER = process.env.PLAYWRIGHT_PROXY_USER ?? 'ci-bot'
+const PROXY_TOKEN = process.env.PLAYWRIGHT_PROXY_TOKEN ?? 'test-token-123'
+
+test.skip(
+  !process.env.SGW_UI_E2E_PROXY,
+  'typosquat override flow needs a proxy-capable stack — set SGW_UI_E2E_PROXY to enable',
+)
 
 test('typosquat block is overridable from the artifacts pane', async ({ page }) => {
   // Admin context: no auth needed for the admin API in the dev compose.
