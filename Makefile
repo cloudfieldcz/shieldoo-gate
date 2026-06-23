@@ -1,6 +1,6 @@
 # Makefile — Shieldoo Gate
 
-.PHONY: build build-gate build-shdg test test-e2e test-e2e-containerized lint clean proto dev-keycloak-up dev-keycloak-down
+.PHONY: build build-gate build-shdg test test-e2e test-e2e-containerized test-ui test-ui-update lint clean proto dev-keycloak-up dev-keycloak-down
 
 BINARY := shieldoo-gate
 CMD_DIR := ./cmd/shieldoo-gate
@@ -76,6 +76,17 @@ test-e2e-containerized:
 		docker compose -f tests/e2e-shell/docker-compose.e2e.yml down -v --remove-orphans; \
 		exit $$rc; \
 	fi
+
+# Standalone UI test suite (visual regression + interaction flows). Brings up
+# its OWN fresh open-mode gate and runs Playwright in the pinned container so
+# baselines are deterministic and dev==CI. Separate from test-e2e-containerized.
+test-ui:
+	bash tests/ui-e2e/run.sh
+
+# Regenerate the committed visual baselines after an intentional UI change.
+# MUST be run via this target (pinned container) so dev and CI match.
+test-ui-update:
+	bash tests/ui-e2e/run.sh --update
 
 lint:
 	go vet ./...

@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "lint": "eslint . --report-unused-disable-directives --max-warnings 0",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:e2e": "playwright test",
+    "test:e2e:update": "playwright test --update-snapshots"
   },
   "dependencies": {
     "@tanstack/react-query": "5.101.0",
@@ -20,7 +22,7 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
-    "@playwright/test": "^1.61.0",
+    "@playwright/test": "1.61.0",
     "@tailwindcss/postcss": "4.3.1",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
