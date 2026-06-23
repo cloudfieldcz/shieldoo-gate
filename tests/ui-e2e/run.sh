@@ -23,9 +23,15 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # that swaps in a creds-free config (AI scanners downgraded to best_effort).
 # Relative volume paths in both files resolve against the FIRST -f file's dir
 # (tests/e2e-shell), so the override's ../e2e-shell/config.ui.yaml lands correctly.
+#
+# --env-file gate.env (deliberately empty) suppresses the default load of
+# tests/e2e-shell/.env, which would otherwise enable the AI scanner + inject
+# Azure creds on a dev laptop and make the dashboard baseline diverge from CI
+# (which has no .env). With it, the gate boots AI-disabled both locally and in
+# CI, so visual baselines are reproducible. See tests/ui-e2e/gate.env.
 COMPOSE_BASE="${REPO_ROOT}/tests/e2e-shell/docker-compose.e2e.yml"
 COMPOSE_OVERRIDE="${SCRIPT_DIR}/docker-compose.ui.yml"
-COMPOSE=(-f "${COMPOSE_BASE}" -f "${COMPOSE_OVERRIDE}")
+COMPOSE=(--env-file "${SCRIPT_DIR}/gate.env" -f "${COMPOSE_BASE}" -f "${COMPOSE_OVERRIDE}")
 SRC_CONFIG="${REPO_ROOT}/tests/e2e-shell/config.e2e.yaml"
 UI_CONFIG="${REPO_ROOT}/tests/e2e-shell/config.ui.yaml"
 
