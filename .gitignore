@@ -71,6 +71,8 @@ examples/dotnet-json/bin/
 examples/dotnet-json/obj/
 tests/e2e-shell/fixtures/nuget/bin/
 tests/e2e-shell/fixtures/nuget/obj/
+# Derived by tests/ui-e2e/run.sh from config.e2e.yaml (AI scanner downgraded to best_effort) — never commit.
+tests/e2e-shell/config.ui.yaml
 *.lscache
 
 # Helm

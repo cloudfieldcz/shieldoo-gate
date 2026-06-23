@@ -19,7 +19,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-COMPOSE_FILE="${REPO_ROOT}/tests/e2e-shell/docker-compose.e2e.yml"
+# The gate stack is the shell-e2e compose, overlaid with a UI-specific override
+# that swaps in a creds-free config (AI scanners downgraded to best_effort).
+# Relative volume paths in both files resolve against the FIRST -f file's dir
+# (tests/e2e-shell), so the override's ../e2e-shell/config.ui.yaml lands correctly.
+COMPOSE_BASE="${REPO_ROOT}/tests/e2e-shell/docker-compose.e2e.yml"
+COMPOSE_OVERRIDE="${SCRIPT_DIR}/docker-compose.ui.yml"
+COMPOSE=(-f "${COMPOSE_BASE}" -f "${COMPOSE_OVERRIDE}")
+SRC_CONFIG="${REPO_ROOT}/tests/e2e-shell/config.e2e.yaml"
+UI_CONFIG="${REPO_ROOT}/tests/e2e-shell/config.ui.yaml"
 
 # docker compose project is named "shieldoo-e2e" (see docker-compose.e2e.yml),
 # so its bridge network is "shieldoo-e2e_proxy-net". The gate is reachable on it
@@ -50,18 +58,24 @@ done
 cleanup() {
   if [ "${KEEP_STACK}" = "true" ]; then
     echo "ui-e2e: leaving gate stack running (--keep). Tear down with:"
-    echo "  docker compose -f ${COMPOSE_FILE} down -v --remove-orphans"
+    echo "  docker compose ${COMPOSE[*]} down -v --remove-orphans"
     return
   fi
   echo "ui-e2e: tearing down gate stack..."
-  docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans 2>/dev/null || true
+  docker compose "${COMPOSE[@]}" down -v --remove-orphans 2>/dev/null || true
 }
 trap cleanup EXIT
 
+# Derive the creds-free UI config from the shell-e2e config: downgrade the
+# AI-backed scanners to best_effort so the gate boots without Azure OpenAI
+# credentials. Regenerated every run so it tracks config.e2e.yaml; git-ignored.
+echo "=== ui-e2e: deriving creds-free config (config.ui.yaml) ==="
+sed -E 's/(ai-scanner|version-diff): "required"/\1: "best_effort"/' "${SRC_CONFIG}" > "${UI_CONFIG}"
+
 echo "=== ui-e2e: building + starting a fresh open-mode gate ==="
-docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans 2>/dev/null || true
-docker compose -f "${COMPOSE_FILE}" build shieldoo-gate scanner-bridge
-docker compose -f "${COMPOSE_FILE}" up -d shieldoo-gate
+docker compose "${COMPOSE[@]}" down -v --remove-orphans 2>/dev/null || true
+docker compose "${COMPOSE[@]}" build shieldoo-gate scanner-bridge
+docker compose "${COMPOSE[@]}" up -d shieldoo-gate
 
 echo "=== ui-e2e: waiting for gate readiness ==="
 # Generous budget: a cold runner downloads the Trivy vuln DB and warms other
@@ -76,7 +90,7 @@ for _ in $(seq 1 150); do
 done
 if ! curl -sf "${GATE_HOST_HEALTH}" >/dev/null 2>&1; then
   echo "ui-e2e: gate did not become ready — dumping gate logs:" >&2
-  docker compose -f "${COMPOSE_FILE}" logs --tail=120 shieldoo-gate >&2 || true
+  docker compose "${COMPOSE[@]}" logs --tail=120 shieldoo-gate >&2 || true
   exit 1
 fi
 

@@ -20,6 +20,16 @@ open-mode (no-auth) gate with an empty DB**, so the rendered pages are
 deterministic by construction. The two suites share only the gate Docker image,
 never a database.
 
+The gate config is also derived rather than shared: [`run.sh`](../../tests/ui-e2e/run.sh)
+`sed`s [`config.e2e.yaml`](../../tests/e2e-shell/config.e2e.yaml) into a
+git-ignored `config.ui.yaml`, downgrading the AI-backed scanners (`ai-scanner`,
+`version-diff`) from `required` to `best_effort`, and the
+[`docker-compose.ui.yml`](../../tests/ui-e2e/docker-compose.ui.yml) overlay mounts
+it in place of the original. This lets the gate boot **without Azure OpenAI
+credentials** — a `required` AI scanner that cannot register would FATAL at
+startup, and those credentials must never be committed. The derivation runs every
+invocation, so it always tracks `config.e2e.yaml`.
+
 ## Determinism
 
 Visual baselines are only stable if rendering is reproducible:
