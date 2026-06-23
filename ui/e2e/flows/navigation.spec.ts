@@ -43,7 +43,9 @@ test('sidebar navigates to every page and highlights the active link', async ({ 
   for (const item of NAV) {
     const link = page.getByRole('navigation').getByRole('link', { name: item.label, exact: true })
     await link.click()
-    await expect(page).toHaveURL(new RegExp(`${item.path.replace(/\//g, '\\/')}$`))
+    // Compare the parsed pathname directly — no regex building (and no fragile
+    // escaping of `item.path`). The predicate form still auto-retries.
+    await expect(page).toHaveURL((url) => url.pathname === item.path)
     // The active NavLink carries the blue background (see Layout.tsx).
     await expect(link).toHaveClass(/bg-blue-600/)
     // The page rendered its heading rather than an error frame.
