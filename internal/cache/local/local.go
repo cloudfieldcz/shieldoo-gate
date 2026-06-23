@@ -175,11 +175,27 @@ func (s *LocalCacheStore) Put(_ context.Context, artifact scanner.Artifact, loca
 
 // Delete removes the artifact directory and all its contents.
 // For 4-segment IDs, only the filename subdirectory is removed, not the entire version directory.
+//
+// SECURITY: validates every name component against validateName before joining
+// into a filesystem path, mirroring Get/Put. The current caller resolves the ID
+// from the artifacts table (already validated at Put time), but re-validating
+// here keeps RemoveAll from becoming a traversal sink if a future caller ever
+// passes an unvalidated ID.
 func (s *LocalCacheStore) Delete(_ context.Context, artifactID string) error {
 	eco, name, version, filename, err := parseArtifactID(artifactID)
 	if err != nil {
 		return err
 	}
+	components := []string{eco, name, version}
+	if filename != "" {
+		components = append(components, filename)
+	}
+	for _, component := range components {
+		if err := validateName(component); err != nil {
+			return err
+		}
+	}
+
 	dir := s.artifactDir(eco, name, version, filename)
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("local cache: removing %s: %w", dir, err)

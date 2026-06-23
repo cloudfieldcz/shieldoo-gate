@@ -166,6 +166,38 @@ func TestLocalCacheStore_Get_RejectsPathTraversal_NullByte(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid")
 }
 
+// Delete applies the same validateName guard as Get/Put, so a future caller
+// that passes an unvalidated artifact ID cannot turn RemoveAll into a traversal
+// sink that wipes directories outside the cache root.
+func TestLocalCacheStore_Delete_RejectsPathTraversal_DotDotInName(t *testing.T) {
+	store, _ := newTestStore(t)
+	err := store.Delete(context.Background(), "pypi:../evil:1.0.0")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid")
+}
+
+func TestLocalCacheStore_Delete_RejectsPathTraversal_AbsolutePath(t *testing.T) {
+	store, _ := newTestStore(t)
+	err := store.Delete(context.Background(), "pypi:/etc:1.0.0")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid")
+}
+
+func TestLocalCacheStore_Delete_RejectsPathTraversal_BackslashInVersion(t *testing.T) {
+	store, _ := newTestStore(t)
+	err := store.Delete(context.Background(), "pypi:evil:1.0.0\\..\\..")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid")
+}
+
+func TestLocalCacheStore_Delete_RejectsPathTraversal_TraversalInFilename(t *testing.T) {
+	store, _ := newTestStore(t)
+	// 4-segment ID: the filename component must also be validated.
+	err := store.Delete(context.Background(), "docker:img:1.0.0:../../escape")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid")
+}
+
 func TestLocalCacheStore_Stats(t *testing.T) {
 	store, _ := newTestStore(t)
 	ctx := context.Background()
