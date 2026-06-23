@@ -28,9 +28,14 @@ COMPOSE_NETWORK="shieldoo-e2e_proxy-net"
 GATE_INTERNAL_URL="http://shieldoo-gate:8080"
 GATE_HOST_HEALTH="http://localhost:18080/api/v1/health"
 
-# Pinned Playwright image (digest-pinned per CLAUDE.md). The tag MUST match the
-# @playwright/test version in ui/package.json (1.61.0) — bump both together.
-PW_IMAGE="mcr.microsoft.com/playwright:v1.61.0-jammy@sha256:264136758e43332108f6420f82c47f639f619ca65301065ceade677763f477ec"
+# Pinned Playwright image (digest-pinned per CLAUDE.md). This is the AMD64
+# manifest digest specifically: pinning the per-arch digest fixes the rendering
+# architecture so baselines are portable — an Apple-Silicon (arm64) dev machine
+# pulls and runs this same amd64 image under emulation, byte-identical to the
+# amd64 CI runner. (The gate compose pins linux/amd64 for the same reason.)
+# The tag MUST match the @playwright/test version in ui/package.json (1.61.0);
+# bump tag + amd64 digest + package.json together.
+PW_IMAGE="mcr.microsoft.com/playwright:v1.61.0-jammy@sha256:19298da4a542f9823673f35f64690518abae7cb07ec925fcf4383b89e2766341"
 
 UPDATE_ARG=""
 KEEP_STACK=false
@@ -59,16 +64,25 @@ docker compose -f "${COMPOSE_FILE}" build shieldoo-gate scanner-bridge
 docker compose -f "${COMPOSE_FILE}" up -d shieldoo-gate
 
 echo "=== ui-e2e: waiting for gate readiness ==="
-for _ in $(seq 1 60); do
+# Generous budget: a cold runner downloads the Trivy vuln DB and warms other
+# scanners on first boot, which can take a few minutes (locally the caches are
+# already warm and it is ~15s). 150 × 2s = 5 min.
+for _ in $(seq 1 150); do
   if curl -sf "${GATE_HOST_HEALTH}" >/dev/null 2>&1; then
     echo "ui-e2e: gate ready"
     break
   fi
   sleep 2
 done
-curl -sf "${GATE_HOST_HEALTH}" >/dev/null 2>&1 || { echo "ui-e2e: gate did not become ready" >&2; exit 1; }
+if ! curl -sf "${GATE_HOST_HEALTH}" >/dev/null 2>&1; then
+  echo "ui-e2e: gate did not become ready — dumping gate logs:" >&2
+  docker compose -f "${COMPOSE_FILE}" logs --tail=120 shieldoo-gate >&2 || true
+  exit 1
+fi
 
 echo "=== ui-e2e: running Playwright in the pinned container ==="
+# Architecture is pinned via the amd64 image digest above (PW_IMAGE), not a
+# --platform flag — the two conflict ("cannot overwrite digest").
 # Anonymous volume on node_modules so the container's Linux install never
 # clobbers the host's node_modules. CI=1 enables retry + html report.
 docker run --rm \
