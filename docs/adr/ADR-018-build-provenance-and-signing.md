@@ -46,6 +46,22 @@ transparency log. No long-lived signing key is stored or managed.
    Signing the *same bytes* the gate ingested means the published SBOM is the
    dogfooded one, not a re-generated approximation.
 
+4. **Scorecard-compatible release assets** (added after initial rollout): the
+   OpenSSF `Signed-Releases` check this ADR targets only inspects GitHub
+   release *assets* and matches on filename suffix — it does not query ghcr OCI
+   referrers, the GitHub attestations API, or recognise the `.cosign.bundle`
+   extension. The Sigstore-native assets above are therefore invisible to it,
+   leaving the check scored 0. To close that gap **without dropping the modern
+   formats**, the release job additionally publishes:
+   - a detached `<archive>.sig` + `<archive>.pem` per `shdg` archive and for
+     `SHA256SUMS` (suffix `.sig` is on Scorecard's signature whitelist), and
+   - the binary SLSA provenance bundle republished as `shdg-<ver>.intoto.jsonl`
+     (the suffix Scorecard reads as provenance).
+
+   These carry the *same* keyless Sigstore material as the bundle/referrer
+   assets — only the filename/extension differs, so both old- and new-style
+   verification work against the same release.
+
 Permissions follow least-privilege: the workflow's top-level floor is
 `contents: read`, and each job widens only what it needs
 (`packages: write` + `id-token: write` + `attestations: write` on the image
@@ -70,6 +86,13 @@ gh attestation verify shdg-<ver>-linux-amd64.tar.gz --repo <owner>/shieldoo-gate
 cosign verify-blob --bundle sbom-gate.cdx.json.cosign.bundle \
   --certificate-identity-regexp 'https://github.com/<owner>/.+' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com sbom-gate.cdx.json
+
+# Binary: detached .sig + .pem (Scorecard-compatible)
+cosign verify-blob \
+  --signature shdg-<ver>-linux-amd64.tar.gz.sig \
+  --certificate shdg-<ver>-linux-amd64.tar.gz.pem \
+  --certificate-identity-regexp 'https://github.com/<owner>/.+' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com shdg-<ver>-linux-amd64.tar.gz
 ```
 
 ## Consequences

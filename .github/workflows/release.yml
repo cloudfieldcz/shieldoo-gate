@@ -445,6 +445,15 @@ jobs:
             echo "  gh attestation verify oci://${REGISTRY}/${REPO_OWNER}/shieldoo-gate:${VERSION} --repo ${REPO_OWNER}/shieldoo-gate"
             echo '  ```'
             echo "- **shdg binaries** — SLSA provenance: \`gh attestation verify shdg-${VERSION}-linux-amd64.tar.gz --repo ${REPO_OWNER}/shieldoo-gate\`"
+            echo "- **Detached signatures** — each archive and \`SHA256SUMS\` also ships a keyless \`*.sig\` + \`*.pem\` cert (recognised by OpenSSF Scorecard):"
+            echo '  ```bash'
+            echo "  cosign verify-blob \\"
+            echo "    --signature shdg-${VERSION}-linux-amd64.tar.gz.sig \\"
+            echo "    --certificate shdg-${VERSION}-linux-amd64.tar.gz.pem \\"
+            echo "    --certificate-identity-regexp 'https://github.com/${REPO_OWNER}/.+' \\"
+            echo "    --certificate-oidc-issuer https://token.actions.githubusercontent.com shdg-${VERSION}-linux-amd64.tar.gz"
+            echo '  ```'
+            echo "  The same provenance is also attached as \`shdg-${VERSION}.intoto.jsonl\`."
             echo "- **SBOMs** — the CycloneDX SBOMs dogfooded through the gate are attached (\`*.cdx.json\`) with a detached cosign bundle (\`*.cdx.json.cosign.bundle\`):"
             echo '  ```bash'
             echo "  cosign verify-blob --bundle sbom-gate.cdx.json.cosign.bundle \\"
@@ -465,6 +474,7 @@ jobs:
       # all five archives). Verify with:
       #   gh attestation verify shdg-<ver>-linux-amd64.tar.gz --repo <owner>/shieldoo-gate
       - name: Attest shdg binary provenance
+        id: attest
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-path: |
@@ -494,6 +504,41 @@ jobs:
           done
           ls -la release/*.cosign.bundle
 
+      # Scorecard-compatible "old style" assets, in addition to the Sigstore
+      # bundles / OCI referrers / GitHub attestations above. OpenSSF Scorecard's
+      # Signed-Releases check ONLY inspects GitHub release assets and matches on
+      # filename suffix — it does not query ghcr referrers or the attestations
+      # API, and does not recognise the `.cosign.bundle` extension. So we also
+      # publish:
+      #   * a detached `<archive>.sig` (+ `.pem` cert) per archive + SHA256SUMS
+      #     — suffix `.sig` is on Scorecard's signature whitelist;
+      #   * the SLSA provenance bundle as `shdg-<ver>.intoto.jsonl` — suffix
+      #     `.intoto.jsonl` is what Scorecard reads as provenance.
+      # Both files carry the *same* keyless Sigstore material as the new-style
+      # assets, just under the names/extensions the scanner pattern-matches.
+      - name: Detached signatures + provenance asset (Scorecard-compatible)
+        env:
+          COSIGN_YES: "true"
+          VERSION: ${{ needs.docker.outputs.version }}
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -eu
+          # Detached keyless signature + cert for every archive and the checksum
+          # manifest (the artifacts a consumer actually downloads and runs).
+          for f in release/*.tar.gz release/*.zip release/SHA256SUMS; do
+            [ -s "${f}" ] || { echo "refusing to sign empty/missing artifact: ${f}" >&2; exit 1; }
+            cosign sign-blob \
+              --output-signature   "${f}.sig" \
+              --output-certificate "${f}.pem" \
+              "${f}"
+          done
+          # Republish the binary SLSA provenance attestation (one Sigstore
+          # bundle covering all five archives) under the .intoto.jsonl suffix
+          # Scorecard recognises. Fail closed if the attest step produced none.
+          [ -s "${BUNDLE_PATH}" ] || { echo "missing provenance bundle from attest step: ${BUNDLE_PATH}" >&2; exit 1; }
+          cp "${BUNDLE_PATH}" "release/shdg-${VERSION}.intoto.jsonl"
+          ls -la release/*.sig release/*.pem release/*.intoto.jsonl
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
         with:
@@ -506,4 +551,7 @@ jobs:
             release/SHA256SUMS
             release/*.cdx.json
             release/*.cosign.bundle
+            release/*.sig
+            release/*.pem
+            release/*.intoto.jsonl
           fail_on_unmatched_files: true
