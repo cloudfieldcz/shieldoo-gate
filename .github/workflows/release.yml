@@ -525,9 +525,18 @@ jobs:
           set -eu
           # Detached keyless signature + cert for every archive and the checksum
           # manifest (the artifacts a consumer actually downloads and runs).
+          # cosign v3 defaults to TUF-provided signing-config + the new
+          # self-contained bundle format, both of which require --bundle and
+          # ignore --output-signature/--output-certificate. Scorecard only
+          # recognises the legacy `.sig` suffix, so force the legacy detached
+          # path explicitly (--use-signing-config=false --new-bundle-format=false).
+          # tlog upload stays on (default) so the signature is still recorded
+          # in Rekor for transparency.
           for f in release/*.tar.gz release/*.zip release/SHA256SUMS; do
             [ -s "${f}" ] || { echo "refusing to sign empty/missing artifact: ${f}" >&2; exit 1; }
             cosign sign-blob \
+              --use-signing-config=false \
+              --new-bundle-format=false \
               --output-signature   "${f}.sig" \
               --output-certificate "${f}.pem" \
               "${f}"
