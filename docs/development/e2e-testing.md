@@ -10,9 +10,9 @@ It is the source of truth for the shell E2E suite.
 > against *real* package-manager clients (`pip`/`uv`, `npm`, `dotnet`, `crane`,
 > `mvn`, `gem`, `go`) and *real* upstreams over *real* TLS. Several classes of bug
 > — a metadata URL rewrite that doubles a path, a CA-trust misconfiguration, a
-> scan **bypass** — only surface here. See the
-> [Phase 4 outcome](../plans/2026-06-19-multi-upstream-indexes-plan-index.md#phase-4-outcome-e2e-executed--release-gate-proven)
-> for a real bug this tier caught that unit tests could not.
+> scan **bypass** — only surface here. See
+> [ADR-017](../adr/ADR-017-multi-upstream-indexes.md) (multi-upstream indexes) for the
+> execution-time security findings this tier caught that unit tests could not.
 
 ---
 
@@ -41,9 +41,9 @@ tail -n 120 /tmp/e2e.log
 status, so a single non-zero assertion fails the command. `down -v` removes the
 named volumes so the next run starts from a clean DB/cache.
 
-### 1.2 The three containerized passes (`make test-e2e-containerized`)
+### 1.2 The four containerized passes (`make test-e2e-containerized`)
 
-`make test-e2e-containerized` runs the **same suite three times** against
+`make test-e2e-containerized` runs the **same suite up to four times** against
 different infrastructure to prove backend-independence. Each pass tears the stack
 down with `down -v` (fresh volumes) before the next:
 
@@ -52,9 +52,12 @@ down with `down -v` (fresh volumes) before the next:
 | 1 | `strict` | SQLite | local FS | off | baseline |
 | 2 | `balanced` | PostgreSQL | S3 (MinIO) | on (PAT) | strict projects + license enforcement + AI triage (`docker-compose.e2e.auth.yml`) |
 | 3 | `permissive` | PostgreSQL | Azure Blob (Azurite) | on | `docker-compose.e2e.azurite.yml` |
+| 4 | `balanced` | SQLite | local FS | off | AI bridge enabled (Azure OpenAI) — exercises the version-diff LLM path; **self-skips** if `tests/e2e-shell/.env` (Azure creds) is missing |
 
 The multi-index tests run in **every** pass. Many auxiliary suites self-skip in
-pass 1 because they require proxy auth or PostgreSQL (see §6 on skips).
+pass 1 because they require proxy auth or PostgreSQL (see §6 on skips). Pass 4
+only runs when `tests/e2e-shell/.env` is present (copy `.env.example` and fill in
+Azure OpenAI credentials), so CI without those secrets effectively runs three passes.
 
 ### 1.3 Host mode (`run.sh`) — a lighter subset
 
@@ -538,9 +541,7 @@ client error means a rewrite/serve bug downstream of the scan.
 ## 10. Known limitations & deferred follow-ups
 
 Two cross-adapter MEDIUM hardening items are tracked as follow-ups (documented, not
-yet fixed — see [ADR-017 §Consequences](../adr/ADR-017-multi-upstream-indexes.md#consequences)
-and the [Phase 6](../plans/2026-06-19-multi-upstream-indexes-plan-6-rubygems-gomod.md)/[Phase 7](../plans/2026-06-19-multi-upstream-indexes-plan-7-maven.md)
-plans):
+yet fixed — see [ADR-017 §Consequences](../adr/ADR-017-multi-upstream-indexes.md#consequences)):
 
 1. **Breaker-open claimed-name download fallback.** If a scoped index's circuit
    breaker is open during an outage, the download leg can fall back to the default
@@ -563,4 +564,3 @@ require simulating an upstream outage and is left for the follow-up work.
   rewrite/scoping/fail-closed rules.
 - [ADR-017 — Multi-Upstream Indexes](../adr/ADR-017-multi-upstream-indexes.md) — the design decision.
 - [Configuration](../configuration.md) — the `upstreams.<eco>.{default,extra_indexes}` schema.
-- [Multi-Upstream Indexes plan index](../plans/2026-06-19-multi-upstream-indexes-plan-index.md) — design, decisions, and execution-time security findings.

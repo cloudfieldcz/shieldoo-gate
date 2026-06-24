@@ -15,11 +15,12 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
 - [Scanners](scanners.md) — scan engine, built-in and external scanners, aggregation, threat feed, [scratch cleanup / temp janitor](scanners.md#scratch-cleanup-temp-janitor)
 - [SBOM Export](sbom.md) — per-project CycloneDX 1.5 SBOM download (`GET /api/v1/projects/{id}/sbom`)
   - [Version-Diff Scanner](scanners/version-diff.md) — AI-driven cross-version semantic analysis (replaces v1.x heuristic, see [ADR-005](adr/ADR-005-ai-driven-version-diff.md))
+- [Vulnerability Scan](vulnerability-scan.md) — push-from-CI CycloneDX SBOM scanning (OSV + Trivy), scheduled rescans, per-component CVE ignore lifecycle, optional AI surfaces (see [ADR-007](adr/ADR-007-vulnerability-scan.md))
 - [Protocol Adapters](adapters.md) — PyPI, npm, NuGet, Docker, Maven, RubyGems, Go Modules proxy implementations and routing
 - [Policy Engine](policy.md) — evaluation order, overrides, allowlists, aggregation rules, policy tiers (v1.2), AI triage
 - [Configuration](configuration.md) — full `config.yaml` reference, environment variables, Go structs
-  - [Authentication](configuration.md#authentication-v11) — OIDC admin API authentication (v1.1)
-  - [Alerts](configuration.md#alerts-v11) — webhook, Slack, and email notification channels
+  - [Authentication](configuration.md) — OIDC admin API authentication (v1.1) — see the `auth:` block in the config reference
+  - [Alerts](configuration.md) — webhook, Slack, and email notification channels — see the `alerts:` block in the config reference
 - [Deployment](deployment.md) — Docker Compose, Kubernetes (Helm), local development, client configuration, testing
 - [Continuous Integration & Security Scanning](development/ci.md) — the `ci.yml` (build/lint/test) and `codeql.yml` (CodeQL + govulncheck) workflows, plus UI ESLint config
 - [E2E Testing](development/e2e-testing.md) — the E2E shell suite: stack architecture, the test harness, full test inventory, and an in-depth guide to how **multi-upstream-index** behaviour is tested (the scan+cache release gate)
@@ -32,7 +33,7 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
 - [`shdg` CLI](cli/shdg.md) — push CycloneDX SBOMs to the vulnerability-scan API from CI
 - [Architecture Decision Records](adr/) — ADR-001 through ADR-018 (latest: [ADR-018 — Build provenance & keyless signing for releases](adr/ADR-018-build-provenance-and-signing.md))
 - [`SECURITY.md`](../SECURITY.md) — how to report a vulnerability (GitHub Private Vulnerability Reporting), SLA, safe harbor, scope
-- [Planned Features](features/index.md) — phased roadmap with 15 proposed features across enterprise foundation, advanced detection, compliance, developer experience, and advanced deployment
+- [Planned Features](features/index.md) — re-baselined roadmap (2026-06-24): where Shieldoo Gate sits vs the package-firewall and ASPM tool families, plus the prioritized, forward-looking backlog (version cooldown, developer CLI, inbound provenance, dependency graph, then compliance/SIEM/RBAC)
 
 ## Architecture
 
@@ -110,7 +111,7 @@ Shieldoo Gate Protocol Adapter
 | — | License policy enforcement (SPDX, per-project overrides) — see [Policy Engine](policy.md) | Done (v1.2) |
 | — | Per-project, per-package overrides — whitelist or blacklist a single package within one project, with revoke (see [ADR-006](adr/ADR-006-per-project-package-overrides.md) and the [Policy Engine](policy.md#policy-overrides) doc) | Done |
 | — | Per-project license overrides — release a license-blocked artifact for one project only, without touching global policy (see [ADR-008](adr/ADR-008-license-overrides-per-project.md) and the [License-block releases live per-project](policy.md#policy-overrides) section) | Done |
-| — | [Vulnerability scan](features/vulnerability-scan.md) — push-from-CI CycloneDX SBOM scanning with OSV+Trivy, scheduled rescans, per-component CVE ignore lifecycle, optional AI surfaces (anomaly detection, ignore-reason drafting, fix-path insights) — see [ADR-007](adr/ADR-007-vulnerability-scan.md) | Done |
+| — | [Vulnerability scan](vulnerability-scan.md) — push-from-CI CycloneDX SBOM scanning with OSV+Trivy, scheduled rescans, per-component CVE ignore lifecycle, optional AI surfaces (anomaly detection, ignore-reason drafting, fix-path insights) — see [ADR-007](adr/ADR-007-vulnerability-scan.md) | Done |
 | — | [`shdg` CLI](cli/shdg.md) — cross-platform CI helper that bundles a SHA-256-pinned Trivy, generates the CycloneDX SBOM from a project directory or a built container image (`--image <ref>` runs `trivy image` to capture OS-layer packages), uploads it, and exits non-zero on new criticals/highs (linux/darwin amd64+arm64, windows/amd64) | Done |
 
 ## Client Authentication — How Basic Auth Maps to Projects (v1.2+)

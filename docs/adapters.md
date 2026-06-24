@@ -173,6 +173,11 @@ index-url = "http://shieldoo-gate:5000/simple/"
 | `GET` | `/{package}` | Package metadata — full package document with all versions |
 | `GET` | `/{package}/{version}` | Version metadata — specific version info |
 | `GET` | `/{package}/-/{tarball}` | **Download tarball** — triggers scan if not cached |
+| `GET` | `/@{scope}/{package}` | Scoped package metadata |
+| `GET` | `/@{scope}/{package}/{version}` | Scoped version metadata |
+| `GET` | `/@{scope}/{package}/-/{tarball}` | **Scoped tarball download** |
+
+Scoped packages are registered as the three explicit `/@{scope}/...` routes above; a `decodeScopedPath` middleware also handles clients that `%2f`-encode the scope separator (`@scope%2fname`).
 
 ### How It Works
 
@@ -180,7 +185,7 @@ index-url = "http://shieldoo-gate:5000/simple/"
 
 2. **Tarball downloads** trigger scanning. The adapter extracts the package name (including scoped packages like `@scope/name`) and version from the tarball filename, downloads the `.tgz` file, scans it, and either serves or blocks it.
 
-3. Scoped packages (`@org/package`) are supported — the `@` scope is preserved in routing.
+3. Scoped packages (`@org/package`) are supported via the dedicated `/@{scope}/...` routes plus `%2f`-decoding middleware.
 
 ### Multi-Upstream Indexes
 

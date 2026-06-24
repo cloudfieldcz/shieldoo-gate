@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-04-15
-**Context window:** [analysis](../plans/2026-04-15-sbom-and-license-policy.md)
+**Context window:** analysis plan `2026-04-15-sbom-and-license-policy.md` (archived)
 
 ## Context
 

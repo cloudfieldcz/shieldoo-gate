@@ -36,6 +36,18 @@ Shieldoo Gate uses **SQLite** (default, WAL mode, foreign keys enabled) or **Pos
 - `025_version_diff_scanner_version.sql` — Adds `scanner_version` to `version_diff_results` plus `(scanner_version)` and `(verdict, diff_at)` indexes
 - `026_project_policy_overrides.sql` — Adds `project_id` and `kind` (allow|deny) columns to `policy_overrides`; replaces the active-override unique index to include `COALESCE(project_id, 0)` and `kind`; adds `idx_policy_overrides_project_lookup`
 - `027_docker_manifest_meta.sql` — Sidecar table storing parsed Docker/OCI manifest metadata (image size, layer count, is_index, is_attestation, media_type)
+- `028_components.sql` — Vuln-scan `components` table (per-project tracked package, push-from-CI), incl. `created_via`
+- `029_scan_runs.sql` — Vuln-scan `scan_runs` table (one ingestion run per component, SBOM pointer + `sbom_sha256`)
+- `030_scan_findings.sql` — Vuln-scan `scan_findings` table (aggregated per `(package, version, CVE-ID)`)
+- `031_cve_ignores.sql` — Per-component CVE ignore lifecycle table + partial unique index on active ignores
+- `032_api_keys_scopes.sql` — Adds the `scopes` column to `api_keys` (least-privilege scope model)
+- `033_anomalies.sql` — AI 3σ anomaly records table (anomaly detector output)
+- `034_anomaly_acknowledgments.sql` — Operator acknowledgment rows for anomalies
+- `035_audit_log_extensions.sql` — Adds FK-shaped (but NOT enforced-FK) columns `component_id`, `scan_run_id`, `ignore_id`, `api_key_id` to `audit_log` (append-only invariant — no cascades)
+- `036_license_overrides_per_project.sql` — Per-project license-block release overrides (ADR-008)
+- `037_docker_blob_refs.sql` — Maps a pushed blob digest → referencing manifest artifact so blob serving is gated against manifest quarantine status (not an enforced FK on `artifact_id`)
+- `038_sessions.sql` — Server-side admin UI `sessions` table (opaque session ID, not raw ID token; ADR-011)
+- `039_sessions_id_token.sql` — Adds `id_token` to `sessions` for RP-initiated logout `id_token_hint` (ADR-016); table-recreation pattern for idempotency
 
 **PostgreSQL** (`internal/config/migrations/postgres/`) — same migrations with PostgreSQL syntax.
 
@@ -297,12 +309,18 @@ PENDING_SCAN ──▶ CLEAN ──▶ QUARANTINED ───┘
 | `SERVED` | Artifact successfully served to a client |
 | `BLOCKED` | Artifact blocked due to MALICIOUS verdict |
 | `QUARANTINED` | Artifact placed in quarantine |
+| `SCAN_UNAVAILABLE` | A required scanner failed and `policy.on_scan_error` forced fail-closed (ADR-012) |
 | `RELEASED` | Artifact released from quarantine by admin |
 | `SCANNED` | Scan completed for an artifact |
 | `OVERRIDE_CREATED` | Policy override created via API |
 | `OVERRIDE_REVOKED` | Policy override revoked via API |
 | `TAG_MUTATED` | Upstream tag/version digest changed (tag mutability detection) |
 | `RESCAN_QUEUED` | Manual rescan triggered via API |
+| `ALLOWED_WITH_WARNING` | Artifact served but a non-blocking warning was attached (e.g. license warn) |
+| `LICENSE_BLOCKED` | Artifact blocked by SPDX license policy |
+| `LICENSE_WARNED` | Artifact served with a license-policy warning |
+| `LICENSE_CHECK_SKIPPED` | License evaluation skipped (disabled, or SBOM unavailable per `on_sbom_error`) |
+| `PROJECT_NOT_FOUND` | Strict-mode request referenced an unknown project label |
 | `SBOM_GENERATED` | Per-project CycloneDX 1.5 SBOM exported via `GET /api/v1/projects/{id}/sbom` (`metadata_json`: `project_label`, `size_bytes`, `format`) |
 
 **Go struct:** `model.AuditEntry` (`internal/model/audit.go`)
@@ -450,6 +468,23 @@ API keys for proxy endpoint authentication. Keys are either per-user PATs (gener
 **Indexes:** `idx_api_keys_owner_email ON (owner_email)`
 
 **Scope vocabulary** (`model.AllScopes`): `proxy:fetch`, `scan:upload`, `admin:read`, `admin:write`, `keys:manage`. Enforced by the `auth.RequireScope` middleware. The global super-token (`proxy_auth.global_token_env`) carries an implicit `*` wildcard; OIDC operator sessions are injected the full explicit `auth.operatorScopes` set (every scope above).
+
+### `sessions`
+
+Server-side admin UI sessions (migration 038, extended by 039). The session cookie carries an **opaque random ID**, not the raw OIDC ID token, so logout and expiry are enforced server-side and a captured cookie can be revoked. See [ADR-011](adr/ADR-011-auth-surface-hardening.md) and [ADR-016](adr/ADR-016-rp-initiated-logout.md).
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | TEXT PK | Opaque random session ID (the cookie value) |
+| `subject` | TEXT NOT NULL DEFAULT '' | OIDC `sub` claim |
+| `email` | TEXT NOT NULL DEFAULT '' | User email from OIDC |
+| `name` | TEXT NOT NULL DEFAULT '' | Display name from OIDC |
+| `id_token` | TEXT NOT NULL DEFAULT '' | Raw OIDC ID token, used as `id_token_hint` for RP-initiated logout (migration 039; `''` degrades to local-only logout) |
+| `created_at` | DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP | Session creation time |
+| `last_seen_at` | DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP | Last request time |
+| `expires_at` | DATETIME NOT NULL | Hard expiry (enforced server-side; default `auth.session_ttl`) |
+
+**Indexes:** `idx_sessions_expires_at ON (expires_at)` — for the expiry sweep.
 
 ### `triage_cache`
 
@@ -626,6 +661,20 @@ Sidecar table that holds parsed Docker/OCI manifest metadata 1:1 with `artifacts
 
 **Mixed-ecosystem caveat for API consumers.** The main artifacts list shows rows from PyPI, npm, Docker, etc. side-by-side. Docker rows carry `image_size_bytes` (compressed image size); non-docker rows carry only `size_bytes` (file-on-disk size). These are different physical quantities — a docker "30 MB" and a PyPI "1.2 MB" displayed side-by-side mean different things.
 
+### `docker_blob_refs`
+
+Maps a pushed blob digest to the manifest (artifact) that references it (migration 037), so blob serving can be gated against the manifest's quarantine status with one indexed lookup. Populated at manifest-allow time. `manifest_artifact_id` is **not** an enforced FK on `artifacts.id` — same append-only reasoning as the `audit_log` extension columns (a cascade would silently rewrite history).
+
+| Column | Type | Description |
+|---|---|---|
+| `id` | INTEGER PK AUTOINCREMENT | Row ID |
+| `repo_id` | INTEGER NOT NULL REFERENCES docker_repositories(id) | Owning Docker repository |
+| `blob_digest` | TEXT NOT NULL | The blob's `sha256:...` digest |
+| `manifest_artifact_id` | TEXT NOT NULL | Artifact ID of the manifest that references the blob (logical link, not an FK) |
+| `created_at` | DATETIME NOT NULL | When the reference was recorded |
+
+**Indexes:** `idx_docker_blob_refs_lookup ON (repo_id, blob_digest)`; UNIQUE `idx_docker_blob_refs_uniq ON (repo_id, blob_digest, manifest_artifact_id)`.
+
 ### `project_license_policy`
 
 Per-project override of the global license policy. One row per project (UNIQUE on `project_id`).
@@ -679,6 +728,7 @@ via TOCTOU-safe `INSERT ... SELECT WHERE COUNT < cap`.
 | `ai_enabled` | BOOLEAN NOT NULL DEFAULT TRUE | Whether AI surfaces apply to this component |
 | `enabled` | BOOLEAN NOT NULL DEFAULT TRUE | Disabled components skip scheduled rescans |
 | `last_scan_id` | INTEGER REFERENCES scan_runs(id) ON DELETE SET NULL | Cached pointer to the most recent successful run |
+| `created_via` | TEXT NOT NULL DEFAULT 'lazy' | How the component was created (`lazy` on first push, or admin-created) |
 | `created_at` | TIMESTAMPTZ NOT NULL | Creation timestamp |
 
 **Indexes:** UNIQUE `(project_id, name)`; `(last_scan_id)`.

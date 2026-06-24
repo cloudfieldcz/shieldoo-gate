@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-04-29
-**Context window:** [plan](../plans/pypi-canonical-name-normalization.md)
+**Context window:** plan `pypi-canonical-name-normalization.md` (archived)
 
 ## Context
 

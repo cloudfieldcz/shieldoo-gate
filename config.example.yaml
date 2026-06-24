@@ -227,7 +227,8 @@ scanners:
     provider: "azure_openai"             # "azure_openai" (default) or "openai"
     model: "gpt-5.4-mini"
     api_key_env: "AI_SCANNER_API_KEY"    # env var name holding the API key
-    timeout: "15s"                       # timeout per LLM API call
+    timeout: "45s"                       # gRPC call deadline to scanner-bridge (code default 45s); NOT the
+                                         # LLM API-call timeout (the bridge's own LLM timeout is a fixed 40s)
     max_input_tokens: 32000
     bridge_socket: "/tmp/shieldoo-bridge.sock"
     # Azure OpenAI settings (when provider is "azure_openai"):

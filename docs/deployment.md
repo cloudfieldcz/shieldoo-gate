@@ -98,6 +98,12 @@ through the proxy). They are derived from the reference production deployment.
 Only sizing/tuning values are shown — supply your own domains, storage backend,
 credentials, and OIDC/AI settings (see `config.example.yaml` and `.env`).
 
+> **Not the shipped dev defaults.** The committed `docker/docker-compose.yml` is a
+> two-service dev default (gate + scanner-bridge, SQLite, no PostgreSQL service, no
+> `mem_limit`, `BRIDGE_MAX_WORKERS=64`). The values below are a *production override* —
+> apply them in your own compose/Helm overlay; they are not present in the repo's
+> compose file as-is. The maintained production reference lives in `.deploy/`.
+
 **Reference host:** a small single-node VM — **2 vCPU / 8 GB RAM** — running the
 full stack (gate + scanner-bridge + PostgreSQL) via Docker Compose.
 
