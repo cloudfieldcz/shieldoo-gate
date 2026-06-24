@@ -180,16 +180,20 @@ External scanners are **optional** — enabled/disabled via configuration. They 
 
 GuardDog is a behavioral scanner by Datadog that detects malicious patterns in Python and JavaScript packages using heuristic rules. Since GuardDog is Python-native, it runs in a separate Python process (`scanner-bridge/main.py`) communicating via gRPC.
 
-The gRPC protocol (`scanner-bridge/proto/scanner.proto`):
+The gRPC protocol (`scanner-bridge/proto/scanner.proto`) defines one service with six RPCs — GuardDog uses `ScanArtifact`; the others back the AI scanner, version-diff scanner, and vuln-scan AI surfaces:
 
 ```protobuf
 service ScannerBridge {
-    rpc ScanArtifact(ScanRequest) returns (ScanResponse);
+    rpc ScanArtifact(ScanRequest) returns (ScanResponse);          // GuardDog
+    rpc ScanArtifactAI(AIScanRequest) returns (AIScanResponse);     // AI scanner
+    rpc ScanArtifactDiff(DiffScanRequest) returns (DiffScanResponse); // version-diff
+    rpc TriageFindings(TriageRequest) returns (TriageResponse);     // AI triage
+    rpc DraftIgnoreReason(DraftRequest) returns (DraftResponse);    // vuln-scan ignore drafter
     rpc HealthCheck(HealthRequest) returns (HealthResponse);
 }
 ```
 
-The Go client sends the artifact's local path, ecosystem, package name, and version. The Python bridge runs GuardDog's analysis and returns verdict, confidence, and findings.
+For GuardDog, the Go client sends the artifact's local path, ecosystem, package name, and version via `ScanArtifact`. The Python bridge runs GuardDog's analysis and returns verdict, confidence, and findings.
 
 **Failure handling:** If the bridge is unreachable the scanner returns a `VerdictClean` result with the gRPC error recorded in `ScanResult.Error`. If GuardDog itself fails *internally* (an exception during analysis), the Python bridge returns verdict `UNKNOWN` (not `CLEAN`) and the Go side maps that to a `retryable` scanner error — a GuardDog crash never produces a silent clean result that the aggregator would drop as low-confidence and serve unscanned. Either way the scan engine surfaces a classified error in `ScanReport.Errored`. Whether that failure fails closed or fails open is governed by GuardDog's configured [criticality](#scan-engine): there is **no hardcoded default** — any scanner not listed in `scanners.criticality` is `best_effort`. The shipped `config.example.yaml` marks `guarddog: "required"`, so with that config a GuardDog outage fails closed per `policy.on_scan_error` rather than serving the artifact unscanned. A config that enables GuardDog without listing it as `required` leaves it best-effort, and outages fail open — see the startup warning emitted when `on_scan_error` is active but no scanner is marked `required`.
 
@@ -280,7 +284,10 @@ scanners:
     provider: "azure_openai"          # "azure_openai" or "openai"
     model: "gpt-5.4-mini"
     api_key_env: "AI_SCANNER_API_KEY" # env var name for API key
-    timeout: "15s"                    # per-LLM-call timeout
+    timeout: "45s"                    # gRPC call deadline to the scanner-bridge (code default 45s).
+                                      # NOT the LLM API-call timeout — the bridge's own LLM timeout is a
+                                      # fixed 40s (scanner-bridge/ai_scanner.py) and is not configurable here.
+                                      # Keep this >= ~45s so the gRPC deadline doesn't fire before the bridge does.
     max_input_tokens: 32000
     bridge_socket: "/tmp/shieldoo-bridge.sock"
     # Azure OpenAI settings:

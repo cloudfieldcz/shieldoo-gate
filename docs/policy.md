@@ -75,20 +75,29 @@ policy:
 
 Parsed at engine initialization into `AllowlistEntry` structs. If the artifact matches an allowlist entry, it is **allowed** immediately. Note: the `==` prefix is optional — `"pypi:litellm:1.82.6"` works the same as `"pypi:litellm:==1.82.6"`.
 
-### Step 3: Verdict Rules
+### Step 3: License Policy
 
-The aggregated verdict is compared against two configurable thresholds:
+The SBOM-derived SPDX licenses are evaluated against the effective license policy (global, or the per-project override). A blocked license is an **authoritative block** at this stage. See [Policy Overrides](#policy-overrides) for per-project license releases and [Configuration → `policy.licenses`](configuration.md). Skipped entirely when `policy.licenses.enabled` is false.
 
-| Config Key | Default | Action |
-|---|---|---|
-| `policy.block_if_verdict` | `MALICIOUS` | Return **BLOCK** |
-| `policy.quarantine_if_verdict` | `SUSPICIOUS` | Return **QUARANTINE** |
+### Step 4: Required Scanner Availability
 
-If omitted from the config file, these defaults apply. If the verdict matches `block_if_verdict`, the artifact is blocked. If it matches `quarantine_if_verdict`, it is quarantined. Otherwise, it is allowed.
+If a **required** scanner (see [scanner criticality](scanners.md#scan-engine)) failed to produce a verdict, the artifact is gated according to `policy.on_scan_error` (`quarantine` | `block` | `fail_open`) before any verdict-based rule runs. See [Scanner Failure Policy](#scanner-failure-policy). Overrides and allowlist entries (Steps 1–2) bypass this check.
 
-### Step 4: Default
+### Step 5: Verdict Rules
 
-If none of the above rules match, the artifact is **allowed**.
+The aggregated verdict drives the decision:
+
+| Aggregated verdict | Action |
+|---|---|
+| `MALICIOUS` | Return **BLOCK** (always — hardcoded) |
+| `SUSPICIOUS` | Handled by **policy mode** (`strict` → quarantine; `balanced` → AI triage / quarantine MEDIUM; `permissive` → serve MEDIUM with warning) — see [Policy Tiers (v1.2)](#policy-tiers-v12) |
+| `CLEAN` | Falls through to Step 6 |
+
+> **Config note:** `policy.block_if_verdict` (default `MALICIOUS`) and `policy.quarantine_if_verdict` (default `SUSPICIOUS`) are **legacy knobs that the current engine does not consult** — MALICIOUS always blocks and SUSPICIOUS is routed through the policy-mode logic. They are retained for backward-compatible config parsing only; changing them has no effect.
+
+### Step 6: Default
+
+If none of the above rules match (e.g. a `CLEAN` verdict), the artifact is **allowed**.
 
 ## Scan Result Aggregation
 
@@ -132,7 +141,8 @@ In every mode a required-scanner failure emits a `SCAN_UNAVAILABLE` audit row (m
 | **BLOCK** | HTTP 403 | `QUARANTINED` | `BLOCKED` | Artifact is malicious; rejected and quarantined |
 | **QUARANTINE** | HTTP 403 | `QUARANTINED` | `QUARANTINED` | Artifact is suspicious; stored but not served |
 | **ALLOW_WITH_WARNING** | Serve artifact + `X-Shieldoo-Warning` header | `CLEAN` | `ALLOWED_WITH_WARNING` | v1.2: Artifact has MEDIUM severity findings but allowed by balanced/permissive mode |
-| **WARN** | Serve artifact | `CLEAN` | `TAG_MUTATED` | Used by tag mutability detection; artifact served but alert fired |
+
+The verdict-engine `Action` enum (`internal/policy/rules.go`) is exactly: `allow`, `block`, `quarantine`, `allow_with_warning`, `retry_later`. There is no `WARN` action — the `TAG_MUTATED` event is emitted by the independent [tag-mutability subsystem](#tag-mutability-detection), not by the verdict engine.
 
 Both BLOCK and QUARANTINE result in the artifact being marked as `QUARANTINED` in the database. The difference is in the audit event type and the reason logged. ALLOW_WITH_WARNING serves the artifact but records it in the audit log for security team review.
 
@@ -348,11 +358,13 @@ alerts:
 
 ### Client-Facing Behavior
 
-Artifacts allowed with warning are served normally (HTTP 200) with an additional header:
+Artifacts allowed with warning are served normally (HTTP 200) with an additional header. The value is **dynamic** — a `; `-joined list of the actual warning reasons from `PolicyResult.Warnings` (license reasons, triage explanations, etc.), set by `ApplyPolicyWarnings` (`internal/adapter/base.go`):
 
 ```
-X-Shieldoo-Warning: MEDIUM vulnerability detected; see admin dashboard for details
+X-Shieldoo-Warning: <warning reason>[; <warning reason>...]
 ```
+
+For example: `X-Shieldoo-Warning: license GPL-3.0-only flagged for review`.
 
 Standard package managers (pip, npm, docker) ignore this header, but custom tooling can parse it.
 

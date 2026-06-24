@@ -40,6 +40,16 @@ upstreams:
   maven: "https://repo1.maven.org/maven2"  # Maven Central repository
   rubygems: "https://rubygems.org"         # RubyGems.org
   gomod: "https://proxy.golang.org"       # Go module proxy
+  # Effective-POM parent-chain resolver for Maven license detection. Fetches
+  # standalone .pom files and walks the parent chain to discover inherited
+  # (rather than inline-declared) licenses.
+  maven_resolver:
+    enabled: true                # Resolve parent POM chain (default true)
+    cache_size: 4096             # Resolved-POM LRU cache entries
+    cache_ttl: "24h"             # Cached POM TTL
+    max_depth: 5                 # Max parent-chain depth to walk
+    fetch_timeout: "3s"          # Per-POM fetch timeout
+    resolver_timeout: "5s"       # Total budget for one resolve operation
   docker:
     default_registry: "https://registry-1.docker.io"  # Default upstream for Docker Hub images
     allowed_registries:              # Non-default registries that clients can pull from
@@ -103,7 +113,17 @@ database:
 # ─── Scanners ──────────────────────────────────────────────────────
 scanners:
   parallel: true               # Run scanners in parallel (recommended)
-  timeout: "60s"               # Per-scan timeout for all scanners
+  timeout: "60s"               # Per-scan timeout for all scanners (engine outer cap)
+
+  retry:                       # Bounded retry of retryable scanner errors (fail-closed handling, ADR-012)
+    max_attempts: 3            # Retry attempts per scanner before giving up (>= 0; 0 disables retry)
+    backoff: "200ms"           # Base backoff between attempts (must be a positive duration)
+
+  # Per-scanner criticality. "required" → a failure fails closed per policy.on_scan_error;
+  # "best_effort" → a failure is logged + counted, never escalates to MALICIOUS. Unlisted
+  # scanners default to best_effort. WARNING: marking a scanner "required" that is not
+  # registered/enabled causes a fatal startup error. (ADR-012, ADR-013)
+  criticality: {}              # e.g. { guarddog: required, trivy: best_effort }
 
   guarddog:
     enabled: true              # Enable GuardDog behavioral scanner
@@ -123,7 +143,8 @@ scanners:
     provider: "azure_openai"         # "azure_openai" (default) or "openai"
     model: "gpt-5.4-mini"           # LLM model for analysis
     api_key_env: "AI_SCANNER_API_KEY" # Env var name holding the API key
-    timeout: "15s"                   # Per-LLM-call timeout
+    timeout: "45s"                   # gRPC call deadline to scanner-bridge (code default 45s). NOT the LLM
+                                     # API-call timeout — the bridge's internal LLM timeout is a fixed 40s.
     max_input_tokens: 32000          # Max tokens sent to LLM
     bridge_socket: "/tmp/shieldoo-bridge.sock"  # Shared with GuardDog bridge
     azure_endpoint: ""               # Azure OpenAI endpoint URL
@@ -230,9 +251,12 @@ scanners:
 # ─── Policy ────────────────────────────────────────────────────────
 policy:
   mode: ""                             # v1.2: "strict" (default) | "balanced" | "permissive"
-  block_if_verdict: "MALICIOUS"        # Block artifacts with this verdict
-  quarantine_if_verdict: "SUSPICIOUS"  # Quarantine — ignored when mode is set
+  block_if_verdict: "MALICIOUS"        # Legacy knob — currently not consulted; MALICIOUS always blocks
+  quarantine_if_verdict: "SUSPICIOUS"  # Legacy knob — ignored when mode is set; SUSPICIOUS handled by mode logic
   minimum_confidence: 0.7              # Scanner confidence threshold (aggregator)
+  behavioral_minimum_confidence: 0.0   # Separate (lower) confidence floor for behavioral/sandbox scanners
+  on_scan_error: "quarantine"          # Required-scanner failure handling: "quarantine" (default) | "block" | "fail_open"
+  retry_after: "30s"                   # Retry-After hint sent to clients on transient SCAN_UNAVAILABLE (positive duration)
   ai_triage:                           # v1.2: AI-assisted triage for balanced mode
     enabled: false                     # Enable AI triage for MEDIUM severity
     timeout: "5s"                      # Per-call timeout (no retries on inline path)
@@ -251,6 +275,14 @@ policy:
       - "nightly"
       - "dev"
     check_on_cache_hit: false         # Check on every cache hit (adds ~50-200ms latency)
+  licenses:                            # v1.2: SPDX-based license policy (evaluated from the SBOM)
+    enabled: false                     # When false, license evaluation is skipped entirely
+    blocked: []                        # SPDX ids to always block, e.g. ["GPL-3.0-only", "AGPL-3.0-only"]
+    warned: []                         # SPDX ids to allow but warn on
+    allowed: []                        # If non-empty, switches to whitelist mode (only these allowed)
+    unknown_action: "allow"            # Action for unknown/unparseable licenses: "allow" | "warn" | "block"
+    on_sbom_error: "allow"             # Action when the SBOM cannot be produced: "allow" | "warn" | "block"
+    or_semantics: "any_allowed"        # For "A OR B" expressions: "any_allowed" | "all_allowed"
 
 # ─── Threat Feed ───────────────────────────────────────────────────
 threat_feed:
@@ -307,8 +339,10 @@ alerts:
     secret_env: "ALERT_WEBHOOK_SECRET"           # Env var for HMAC-SHA256 signing key
     allow_insecure: false                        # Set true to allow plain HTTP (dev only)
     on: []                                       # Event filter; empty = ALL events
-    # Valid event types: SERVED, BLOCKED, QUARANTINED, RELEASED, SCANNED,
-    #   OVERRIDE_CREATED, OVERRIDE_REVOKED, TAG_MUTATED, RESCAN_QUEUED
+    # Valid event types: SERVED, BLOCKED, QUARANTINED, SCAN_UNAVAILABLE, RELEASED,
+    #   SCANNED, OVERRIDE_CREATED, OVERRIDE_REVOKED, TAG_MUTATED, RESCAN_QUEUED,
+    #   ALLOWED_WITH_WARNING, LICENSE_BLOCKED, LICENSE_WARNED, LICENSE_CHECK_SKIPPED,
+    #   PROJECT_NOT_FOUND, SBOM_GENERATED
 
   slack:
     enabled: false
@@ -353,6 +387,85 @@ public_urls:
 proxy_auth:
   enabled: false                                 # Enable API key auth for proxy endpoints
   global_token_env: "SGW_PROXY_TOKEN"            # Env var holding a global shared token (optional)
+
+# ─── Projects (v1.2) ──────────────────────────────────────────────
+# Project registry. The Basic-auth username maps to a project label, giving
+# per-project audit trail and policy. See "Client Authentication" in
+# docs/index.md and docs/policy.md.
+projects:
+  mode: "lazy"                 # "lazy" (auto-create unknown labels) | "strict" (reject unknown labels)
+  default_label: "default"     # Fallback project for an empty Basic-auth username
+  label_regex: ""              # Optional custom validation regex for labels
+  max_count: 1000              # Hard cap on total projects (0 = unlimited)
+  lazy_create_rate: 10         # New projects per hour per identity (lazy mode)
+  cache_size: 512              # Project-lookup LRU cache entries
+  cache_ttl: "5m"              # Project-lookup LRU entry TTL
+  usage_flush_period: "30s"    # Debounced per-project usage upsert interval
+  bootstrap_labels: []         # Labels guaranteed to exist on startup (idempotent); required for strict-mode pre-provisioning
+
+# ─── SBOM (v1.2) ──────────────────────────────────────────────────
+# Per-project CycloneDX SBOM generation/storage. See docs/sbom.md.
+sbom:
+  enabled: false               # Enable SBOM generation
+  format: "cyclonedx-json"     # Only supported format
+  async_write: true            # Write the SBOM blob asynchronously off the request path
+  ttl: "30d"                   # SBOM retention duration ("Nd" days or Go duration)
+
+# ─── Vulnerability Scan (push-from-CI SBOMs, ADR-007) ─────────────
+# Server-side ingestion pipeline driven by the `shdg` CLI. See the
+# "Vulnerability Scan" section below for the full knob reference.
+vuln_scan:
+  enabled: false
+  max_sbom_bytes: 524288000              # 500 MiB upload cap (413 on overflow)
+  max_components: 500000                 # Max CycloneDX components per SBOM (422 on overflow)
+  max_components_per_project: 200        # Per-project cap on components rows
+  max_concurrent_scans: 4               # Parallel ScanService.Run goroutines
+  stale_threshold: "720h"               # 30d — UI "stale" affordance
+  rescan:
+    interval: "6h"                      # Scheduled rescan cadence
+    max_concurrent: 4
+    timeout: "5m"
+  retention:
+    keep_n: 100                         # Most-recent successful runs kept per component
+    interval: "1h"                      # Retention reaper cadence
+    grace_period: "5m"
+  scanners:
+    osv:
+      api_url: "https://api.osv.dev"
+      chunk_size: 1000                  # Components per /v1/querybatch call
+    trivy:
+      binary_path: "trivy"
+      use_server_mode: false            # v1.1
+  alerts:
+    aggregation_window: "5m"
+    aggregation_min_events: 3
+    ignore_expired_notify_creator: false
+  rate_limit:
+    uploads_per_hour: 60                # Per-PAT cap on POST .../scans
+    ignores_per_hour: 30                # Per (token, component)
+    ignores_global_per_hour: 200
+    rescans_per_hour: 6                 # Per (token, component)
+
+# ─── AI Features (master flag, default OFF) ───────────────────────
+# Optional AI surfaces for the vulnerability-scan feature. Independent of the
+# scanner-side `scanners.ai`/`scanners.version_diff` blocks above.
+ai_features:
+  enabled: false
+  ignore_reason_drafter:
+    enabled: false
+    daily_token_budget: 5000000
+    max_draft_tokens: 200
+    rate_limit_per_minute: 1
+  anomaly_detection:
+    enabled: false
+    baseline_days: 30
+    min_baseline_samples: 7
+    sigma_threshold: 3.0
+  azure_openai:
+    endpoint: ""
+    api_key_env: ""
+    deployment: ""
+    api_version: ""
 ```
 
 ## Multi-Upstream Indexes (v1.1)
@@ -387,7 +500,7 @@ Key rules:
 
 ## Environment Variable Overrides
 
-Every config key can be overridden via environment variables using the `SGW_` prefix. Nested keys use `_` as separator:
+Every config key can be overridden via environment variables using the `SGW_` prefix (Viper `AutomaticEnv`). Nested keys use `_` as separator — so newer sections (`projects.*`, `sbom.*`, `vuln_scan.*`, `ai_features.*`, `upstreams.maven_resolver.*`, `scanners.retry.*`, `scanners.criticality.*`, `policy.on_scan_error`, `policy.licenses.*`) bind the same way even though they are not all listed below. The table is a representative subset of the most commonly overridden keys:
 
 | Config Key | Environment Variable | Example |
 |---|---|---|
@@ -463,7 +576,8 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 | `Config` | root | Top-level container for all sections |
 | `ServerConfig` | `server` | `Host`, `TrustedProxies` |
 | `PortsConfig` | `ports` | `PyPI`, `NPM`, `NuGet`, `Docker`, `Maven`, `RubyGems`, `GoMod`, `Admin` |
-| `UpstreamsConfig` | `upstreams` | `PyPI`, `NPM`, `NuGet`, `Docker` (struct), `Maven`, `RubyGems`, `GoMod` |
+| `UpstreamsConfig` | `upstreams` | `PyPI`, `NPM`, `NuGet`, `Docker` (struct), `Maven`, `MavenResolver`, `RubyGems`, `GoMod` |
+| `MavenResolverConfig` | `upstreams.maven_resolver` | `Enabled`, `CacheSize`, `CacheTTL`, `MaxDepth`, `FetchTimeout`, `ResolverTimeout` |
 | `DockerUpstreamConfig` | `upstreams.docker` | `DefaultRegistry`, `AllowedRegistries`, `Sync`, `Push` |
 | `DockerRegistryEntry` | `upstreams.docker.allowed_registries[]` | `Host`, `URL`, `Auth` |
 | `DockerRegistryAuth` | `...allowed_registries[].auth` | `Type`, `TokenEnv` |
@@ -478,23 +592,30 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 | `DatabaseConfig` | `database` | `Backend`, `SQLite`, `Postgres` |
 | `SQLiteConfig` | `database.sqlite` | `Path` |
 | `PostgresConfig` | `database.postgres` | `DSN`, `MaxOpenConns`, `MaxIdleConns`, `ConnMaxLifetime` |
-| `ScannersConfig` | `scanners` | `Parallel`, `Timeout`, `GuardDog`, `Trivy`, `OSV`, `Sandbox`, `AI`, `Typosquat` |
+| `ScannersConfig` | `scanners` | `Parallel`, `Timeout`, `Retry`, `Criticality`, `GuardDog`, `Trivy`, `OSV`, `Sandbox`, `AI`, `Typosquat`, `VersionDiff`, `Reputation` |
+| `ScannerRetryConfig` | `scanners.retry` | `MaxAttempts`, `Backoff` |
 | `GuardDogConfig` | `scanners.guarddog` | `Enabled`, `BridgeSocket` |
 | `TrivyConfig` | `scanners.trivy` | `Enabled`, `Binary`, `CacheDir` |
 | `OSVConfig` | `scanners.osv` | `Enabled`, `APIURL` |
 | `SandboxConfig` | `scanners.sandbox` | `Enabled`, `RuntimeBinary`, `Timeout`, `NetworkPolicy`, `MaxConcurrent` |
 | `AIConfig` | `scanners.ai` | `Enabled`, `Provider`, `Model`, `APIKeyEnv`, `Timeout`, `MaxInputTokens`, `BridgeSocket`, `AzureEndpoint`, `AzureDeployment` |
-| `TyposquatConfig` | `scanners.typosquat` | `Enabled`, `TopPackagesCount`, `MaxEditDistance`, `InternalNamespaces`, `CombosquatSuffixes`, `Allowlist` |
-| `PolicyConfig` | `policy` | `Mode`, `BlockIfVerdict`, `QuarantineIfVerdict`, `MinimumConfidence`, `AITriage`, `Allowlist`, `TagMutability` |
+| `TyposquatConfig` | `scanners.typosquat` | `Enabled`, `TopPackagesCount`, `MaxEditDistance`, `InternalNamespaces`, `CombosquatSuffixes`, `Allowlist`, `PersistDedupWindowSeconds` |
+| `VersionDiffConfig` | `scanners.version_diff` | `Enabled`, `Mode`, `MaxArtifactSizeMB`, `MaxExtractedSizeMB`, `MaxExtractedFiles`, `ScannerTimeout`, `BridgeSocket`, `Allowlist`, `MinConfidence`, `PerPackageRateLimit`, `DailyCostLimitUSD`, `CircuitBreakerThreshold` |
+| `ReputationConfig` | `scanners.reputation` | `Enabled`, `CacheTTL`, `CacheTTLJitter`, `Timeout`, `RateLimit`, `RetentionDays`, `Thresholds`, `Signals` |
+| `PolicyConfig` | `policy` | `Mode`, `BlockIfVerdict`, `QuarantineIfVerdict`, `MinimumConfidence`, `BehavioralMinimumConfidence`, `OnScanError`, `RetryAfter`, `AITriage`, `Allowlist`, `TagMutability`, `Licenses` |
+| `LicensePolicyConfig` | `policy.licenses` | `Enabled`, `Blocked`, `Warned`, `Allowed`, `UnknownAction`, `OnSBOMError`, `OrSemantics` |
 | `AITriageConfig` | `policy.ai_triage` | `Enabled`, `Timeout`, `MinConfidence`, `CacheTTL`, `RateLimit`, `CircuitBreakerThreshold`, `CircuitBreakerCooldown` |
 | `TagMutabilityConfig` | `policy.tag_mutability` | `Enabled`, `Action`, `ExcludeTags`, `CheckOnCacheHit` |
 | `ThreatFeedConfig` | `threat_feed` | `Enabled`, `URL`, `RefreshInterval` |
 | `RescanConfig` | `rescan` | `Enabled`, `Interval`, `BatchSize`, `MaxConcurrent` |
 | `LogConfig` | `log` | `Level`, `Format`, `File` |
-| `AuthConfig` | `auth` | `Enabled`, `IssuerURL`, `ClientID`, `ClientSecretEnv`, `RedirectURL`, `Scopes` |
+| `AuthConfig` | `auth` | `Enabled`, `IssuerURL`, `ClientID`, `ClientSecretEnv`, `RedirectURL`, `PostLogoutRedirectURL`, `Scopes`, `SessionTTL`, `CookieInsecure`, `AllowedOrigins` |
 | `PublicURLsConfig` | `public_urls` | `PyPI`, `NPM`, `NuGet`, `Docker`, `Maven`, `RubyGems`, `GoMod` |
 | `ProxyAuthConfig` | `proxy_auth` | `Enabled`, `GlobalTokenEnv` |
-| `AuthConfig` | `auth` | `Enabled`, `IssuerURL`, `ClientID`, `ClientSecretEnv`, `RedirectURL`, `Scopes`, `SessionTTL`, `CookieInsecure`, `AllowedOrigins` |
+| `ProjectsConfig` | `projects` | `Mode`, `DefaultLabel`, `LabelRegex`, `MaxCount`, `LazyCreateRate`, `CacheSize`, `CacheTTL`, `UsageFlushPeriod`, `BootstrapLabels` |
+| `SBOMConfig` | `sbom` | `Enabled`, `Format`, `AsyncWrite`, `TTL` |
+| `VulnScanConfig` | `vuln_scan` | `Enabled`, `MaxSBOMBytes`, `MaxComponents`, `MaxComponentsPerProject`, `MaxConcurrentScans`, `StaleThreshold`, `Rescan`, `Retention`, `Scanners`, `Alerts`, `RateLimit` |
+| `AIFeaturesConfig` | `ai_features` | `Enabled`, `IgnoreReasonDrafter`, `AnomalyDetection`, `AzureOpenAI` |
 | `AlertsConfig` | `alerts` | `Webhook`, `Slack`, `Email` |
 | `WebhookAlertConfig` | `alerts.webhook` | `Enabled`, `URL`, `SecretEnv`, `AllowInsecure`, `On` |
 | `SlackAlertConfig` | `alerts.slack` | `Enabled`, `WebhookEnv`, `On` |

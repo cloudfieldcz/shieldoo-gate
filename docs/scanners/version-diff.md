@@ -155,13 +155,17 @@ When the scanner runs, the bridge sends to the LLM:
   ignored-path summary, install-hook paths.
 - **Package metadata:** name, version, previous_version, ecosystem.
 
-After regex redaction of:
+After regex redaction of a representative set of secret patterns, including:
 - AWS access keys (`AKIA…`)
-- GitHub tokens (`ghp_…` / `ghs_…`)
+- GitHub tokens (`ghp_…` / `ghs_…`, plus fine-grained `github_pat_…`)
+- GitLab PATs, Slack tokens
+- OpenAI keys (incl. `sk-proj-…`), Stripe live/test, Twilio, Google API keys
 - Generic JWTs (`eyJ…eyJ…`)
-- PEM private keys
+- PEM / PuTTY private keys
 - Azure storage connection strings
 - Generic `password=…` / `api_key=…` quoted strings
+
+The authoritative, full pattern list lives in `scanner-bridge/diff_scanner.py` (and is mirrored in [scanners.md](../scanners.md)).
 
 Files that are filtered (`tests/`, `docs/`, `examples/`, binary extensions)
 are NOT sent — only their paths are summarized.

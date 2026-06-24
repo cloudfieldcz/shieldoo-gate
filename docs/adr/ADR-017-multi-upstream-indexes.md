@@ -4,9 +4,8 @@ Date: 2026-06-21
 
 ## Status
 
-Accepted (issue [#32](https://github.com/shieldoo/shieldoo-gate/issues/32); implemented in Phases 1–7 — see the
-[plan index](../plans/2026-06-19-multi-upstream-indexes-plan-index.md) and
-[design](../plans/2026-06-19-multi-upstream-indexes.md))
+Accepted (issue [#32](https://github.com/shieldoo/shieldoo-gate/issues/32); implemented in Phases 1–7 — design
+and per-phase plans `2026-06-19-multi-upstream-indexes.md` / `…-plan-index.md`, archived)
 
 ## Context
 
@@ -125,9 +124,9 @@ shared `UpstreamAuth` is explicitly deferred (maintainer decision #4).
 
 ## References
 
-- Design + analysis: [`2026-06-19-multi-upstream-indexes.md`](../plans/2026-06-19-multi-upstream-indexes.md)
+- Design + analysis: `2026-06-19-multi-upstream-indexes.md` (archived plan)
 - Plan index (per-phase plans + execution-time security findings):
-  [`2026-06-19-multi-upstream-indexes-plan-index.md`](../plans/2026-06-19-multi-upstream-indexes-plan-index.md)
+  `2026-06-19-multi-upstream-indexes-plan-index.md` (archived plan)
 - Adapter behaviour + per-ecosystem multi-index sections: [`adapters.md`](../adapters.md)
 - E2E scenario matrix: [`development/e2e-testing.md`](../development/e2e-testing.md)
 - Related: [ADR-001](ADR-001-project-identification-via-basic-auth.md) (Basic-auth project identity),

@@ -149,11 +149,11 @@ scanners:
   # AI scanner: enabled via AI_SCANNER_ENABLED env var (default false).
   # When enabled in e2e, tests malicious .pth detection through the proxy.
   ai:
-    enabled: false                       # overridden by SGW_SCANNERS_AI_ENABLED env var
+    enabled: false                       # overridden by SGW_SCANNERS_AI_ENABLED env var (E2E pass 4)
     provider: "azure_openai"
     model: "gpt-5.4-mini"
     api_key_env: "AI_SCANNER_API_KEY"
-    timeout: "15s"
+    timeout: "45s"                       # gRPC deadline (default 45s); bridge LLM timeout is a fixed 40s — must stay >= it
     max_input_tokens: 32000
     bridge_socket: "/tmp/shieldoo-bridge.sock"
     azure_endpoint: ""

@@ -21,7 +21,8 @@ getent hosts keycloak 2>/dev/null || ping -c1 keycloak
 
 To remove it later, delete the `127.0.0.1 keycloak` line from `/etc/hosts`.
 
-**Why this is needed:** the OIDC issuer URL (`http://keycloak:8081`) is shared by two
+**Why this is needed:** the OIDC issuer URL (`http://keycloak:8081/realms/shieldoo`) shares the
+host `keycloak:8081` between two
 parties — the gate container resolves `keycloak` via Docker's internal DNS, while your host
 browser needs this `/etc/hosts` entry. Using `localhost` instead would break the gate's
 server-side token exchange; using `keycloak` without the hosts line would break the browser

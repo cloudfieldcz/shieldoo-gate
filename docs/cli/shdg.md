@@ -5,7 +5,7 @@ deployment for vulnerability scanning. It generates the SBOM itself (via a
 pinned Trivy that it auto-downloads on first run) or accepts a pre-built file
 via `--sbom`.
 
-It is the recommended way to drive the [vulnerability-scan ingestion API](../features/vulnerability-scan.md)
+It is the recommended way to drive the [vulnerability-scan ingestion API](../vulnerability-scan.md)
 from a CI pipeline.
 
 ## Install
@@ -247,6 +247,6 @@ non-zero-on-criticals exit code.
 
 ## See also
 
-- [Vulnerability scan feature doc](../features/vulnerability-scan.md) — server-side ingestion pipeline + REST API.
+- [Vulnerability scan feature doc](../vulnerability-scan.md) — server-side ingestion pipeline + REST API.
 - [`docs/configuration.md`](../configuration.md#shdg-cli-runtime) — env var reference.
 - [`docs/api/openapi.yaml`](../api/openapi.yaml) — `POST /api/v1/projects/{label}/components/{name}/scans` and `GET /api/v1/vulnerabilities/scan-runs/{id}` definitions.
