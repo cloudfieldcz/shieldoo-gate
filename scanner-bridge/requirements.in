@@ -1,5 +1,5 @@
 # Direct dependencies for scanner-bridge
-guarddog==2.10.0          # CVE-2026-44971 / CVE-2026-44972 fixed in 2.10.0
+guarddog==3.0.2          # CVE-2026-44971 / CVE-2026-44972 fixed in 2.10.0
 grpcio==1.81.1
 grpcio-tools==1.68.1
 openai==2.43.0
