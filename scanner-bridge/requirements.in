@@ -2,7 +2,7 @@
 guarddog==2.10.0          # CVE-2026-44971 / CVE-2026-44972 fixed in 2.10.0
 grpcio==1.81.1
 grpcio-tools==1.68.1
-openai==2.43.0
+openai==2.44.0
 pytest==9.1.1
 pytest-asyncio==1.4.0
 
