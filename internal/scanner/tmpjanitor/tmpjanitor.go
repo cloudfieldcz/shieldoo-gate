@@ -103,11 +103,14 @@ type Rule struct {
 //     the call; an in-process 5-min cleanup goroutine handles the happy path but
 //     is abandoned on a hard kill/restart, orphaning the temp (970 MB observed
 //     in prod). Always regular files; FILES ONLY.
-//   - semgrep-*           : scratch left by semgrep, which GuardDog invokes in
-//     the scanner-bridge and which escapes the bridge's TMPDIR redirect into the
-//     shared /tmp (issue #24). semgrep is semgrep's own naming, but only our
-//     scan runs semgrep in that container, so owning the prefix is safe; it
-//     makes both files and dirs.
+//   - semgrep-*           : scratch left by semgrep, which GuardDog <=2.x invoked
+//     in the scanner-bridge and which escaped the bridge's TMPDIR redirect into
+//     the shared /tmp (issue #24). GuardDog 3.0 replaced semgrep with a native
+//     engine and no longer spawns it, so this prefix is no longer produced; the
+//     rule is retained defensively (a no-op sweep when absent, and it still
+//     reclaims scratch from a legacy 2.x bridge image during a rolling upgrade).
+//     Only our scan ran semgrep in that container, so owning the prefix is safe;
+//     it makes both files and dirs.
 func DefaultRules() []Rule {
 	return []Rule{
 		{Prefix: "shieldoo-trivy-", AllowFiles: true, AllowDirs: true},

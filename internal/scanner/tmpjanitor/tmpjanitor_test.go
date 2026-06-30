@@ -278,9 +278,10 @@ func TestSweep_CloudCacheTempFilesRemoved(t *testing.T) {
 
 func TestSweep_SemgrepScratchRemoved_FilesAndDirs(t *testing.T) {
 	dir := t.TempDir()
-	// semgrep (invoked by GuardDog in the scanner-bridge) writes both files and
-	// dirs to the shared /tmp; only our scan runs semgrep, so owning the prefix
-	// is safe (issue #24).
+	// semgrep (invoked by GuardDog <=2.x in the scanner-bridge) wrote both files
+	// and dirs to the shared /tmp; only our scan ran semgrep, so owning the prefix
+	// is safe (issue #24). GuardDog 3.0 dropped semgrep, but the janitor keeps
+	// the rule defensively (legacy / rolling-upgrade), so this stays under test.
 	semFile := mkStaleFile(t, dir, "semgrep-output-123", staleAt)
 	semDir := mkStaleDir(t, dir, "semgrep-core-456", staleAt)
 	semFresh := mkStaleFile(t, dir, "semgrep-inflight", freshAt)

@@ -159,7 +159,7 @@ builtin-reputation:  "best_effort"
 **Scanner-bridge** (Compose service):
 
 ```yaml
-mem_limit: 4g                       # semgrep (GuardDog) is memory-heavy under burst;
+mem_limit: 4g                       # GuardDog source-code analysis is memory-heavy under burst;
                                     # a tighter cgroup risks OOMKill taking the socket down
 environment:
   BRIDGE_MAX_WORKERS: "32"          # concurrent-scan cap; match scanners.max_concurrent_scans
@@ -209,9 +209,9 @@ The bridge listens on the Unix socket configured in `BRIDGE_SOCKET` env var (def
 
 #### `BRIDGE_MAX_WORKERS` — concurrent-scan cap
 
-The bridge's gRPC server runs a fixed thread pool; its size is the maximum number of scans that run concurrently. Each worker may spawn a GuardDog `semgrep-core` child, which is CPU- and memory-heavy. The default is `64`, sized for a generously-provisioned host.
+The bridge's gRPC server runs a fixed thread pool; its size is the maximum number of scans that run concurrently. Each worker runs GuardDog's source-code + metadata analysis, which is CPU- and memory-heavy. The default is `64`, sized for a generously-provisioned host.
 
-On a small host a burst of requests — e.g. a full `npm ci` of a UI dependency tree fans out ~50 parallel tarball fetches, each triggering a scan — oversubscribes the CPU with that many concurrent `semgrep` runs. Individual scans then slow past the gate's `scanners.timeout`, and a **required** scanner that misses its deadline fails closed with HTTP 503 (`scanner unavailable`). Set `BRIDGE_MAX_WORKERS` to roughly match the host's CPU budget so each scan gets enough CPU to finish inside the deadline:
+On a small host a burst of requests — e.g. a full `npm ci` of a UI dependency tree fans out ~50 parallel tarball fetches, each triggering a scan — oversubscribes the CPU with that many concurrent GuardDog scans. Individual scans then slow past the gate's `scanners.timeout`, and a **required** scanner that misses its deadline fails closed with HTTP 503 (`scanner unavailable`). Set `BRIDGE_MAX_WORKERS` to roughly match the host's CPU budget so each scan gets enough CPU to finish inside the deadline:
 
 ```yaml
 # docker-compose / compose.yaml

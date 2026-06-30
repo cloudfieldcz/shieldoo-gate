@@ -1,7 +1,7 @@
 """Tests for main._max_workers_from_env.
 
 The gRPC worker-pool size is operator-tunable via BRIDGE_MAX_WORKERS so a small
-host can cap concurrent GuardDog/semgrep scans (a full `npm ci` burst against
+host can cap concurrent GuardDog scans (a full `npm ci` burst against
 all 64 default workers oversubscribes CPU and trips the gate's required-scanner
 timeout). A typo'd or non-positive value must fall back to the default rather
 than crash the bridge on startup.
