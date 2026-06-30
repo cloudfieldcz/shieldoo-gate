@@ -19,7 +19,7 @@ RUN CGO_ENABLED=0 go build \
         -ldflags "-X main.Version=e2e -X main.Commit=e2e" \
         -o /out/shdg ./cmd/shdg
 
-FROM ubuntu:24.04@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae77ff1dc54
+FROM ubuntu:26.04@sha256:53958ec7b67c2c9355df922dd08dbf0360611f8c3cdb656875e81873db9ffdba
 
 # Avoid interactive prompts during package install
 ENV DEBIAN_FRONTEND=noninteractive
@@ -28,13 +28,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Base utilities
 # ---------------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates=20240203 \
-        curl=8.5.0-2ubuntu10.* \
-        file=1:5.45-3build1 \
-        jq=1.7.1-* \
+        ca-certificates=20260601~26.04.1 \
+        curl=8.18.0-1ubuntu2.* \
+        file=1:5.46-5build2 \
+        jq=1.8.1-* \
         postgresql-client \
-        unzip=6.0-28ubuntu4.* \
-        git=1:2.43.0-1ubuntu7.* \
+        unzip=6.0-29ubuntu* \
+        git=1:2.53.0-1ubuntu* \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
@@ -58,16 +58,16 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - && \
     rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
-# .NET SDK (pinned)
+# .NET SDK (pinned) — Ubuntu 26.04 ships .NET natively in universe, so we no
+# longer add the packages.microsoft.com feed (which doesn't carry 8.0 for 26.04
+# anyway). The NuGet e2e only `dotnet restore`s a net8.0 fixture, which is
+# framework-agnostic and resolves fine under the 10.0 SDK.
 # ---------------------------------------------------------------------------
-ARG DOTNET_VERSION=8.0
+ARG DOTNET_VERSION=10.0
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends wget=1.21.4-1ubuntu4.* && \
-    wget -q "https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb" -O /tmp/ms-prod.deb && \
-    dpkg -i /tmp/ms-prod.deb && rm /tmp/ms-prod.deb && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends "dotnet-sdk-${DOTNET_VERSION}" && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends \
+        "dotnet-sdk-${DOTNET_VERSION}=10.0.109-0ubuntu1~26.04.*" \
+    && rm -rf /var/lib/apt/lists/*
 
 # Disable .NET telemetry in test environment
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
@@ -79,7 +79,7 @@ ENV DOTNET_NOLOGO=1
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         openjdk-21-jdk-headless=21.0.* \
-        maven=3.8.7-* \
+        maven=3.9.12-* \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
@@ -87,8 +87,8 @@ RUN apt-get update && \
 # ---------------------------------------------------------------------------
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        ruby=1:3.2~ubuntu1 \
-        ruby-dev=1:3.2~ubuntu1 \
+        ruby=1:3.3build1 \
+        ruby-dev=1:3.3build1 \
     && gem install bundler -v 2.5.6 --no-document \
     && rm -rf /var/lib/apt/lists/*
 
