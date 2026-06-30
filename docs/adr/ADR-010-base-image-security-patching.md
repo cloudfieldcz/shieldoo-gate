@@ -44,15 +44,14 @@ Two structural problems made remediation harder than it should be:
 
 1a. **Force-remove `perl-base` from the scanner-bridge runtime.** `perl-base` is a
    Debian *essential* package shipped by `python:3.13-slim` but used nowhere by the
-   bridge — a glibc Python gRPC service whose scanner (guarddog) is Python, whose
-   engine (semgrep) is a Rust binary, and whose git access (pygit2) bundles libgit2.
-   Nothing invokes the Perl interpreter. It was the source of the **only two
+   bridge — a glibc Python gRPC service whose scanner (guarddog) is Python and whose
+   git access (pygit2) bundles libgit2. Nothing invokes the Perl interpreter. It was the source of the **only two
    critical findings** (CVE-2026-42496, CVE-2026-8376) plus the perl-base
    highs/mediums, none with an upstream fix. The runtime stage force-purges it
    (`dpkg --purge --force-remove-essential --force-depends perl-base`) and asserts
    `! command -v perl`; apt/dpkg are never run at runtime, so the resulting dpkg
    "essential removed" state is inert. Alpine/musl was rejected as the perl-free
-   route: the heavy native deps (semgrep, pygit2, cryptography, grpcio) publish
+   route: the heavy native deps (pygit2, cryptography, grpcio) publish
    **glibc-only wheels**, so musl would force slow, fragile from-source builds.
 
 2. **Unify the Go toolchain on a single patched version.** `go.mod`'s `go`

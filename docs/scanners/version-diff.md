@@ -319,7 +319,7 @@ curl -s http://localhost:8080/metrics | grep -E 'circuit_breaker_state|scanner_e
 and failed `npm ci` with 503s. **After the fix**, version-diff has no engine
 breaker (that series is gone), its transient cache/bridge errors fail open, and
 `npm ci` completes — even at `SGW_DB_POOL=5`. (Note: `BRIDGE_CPUS=2` separately
-starves guarddog/semgrep and can open the *guarddog* breaker — that is a primary
+starves guarddog and can open the *guarddog* breaker — that is a primary
 scanner legitimately failing closed under genuine CPU starvation, a different
 condition from this cascade; raise `BRIDGE_CPUS` to isolate the version-diff path.)
 

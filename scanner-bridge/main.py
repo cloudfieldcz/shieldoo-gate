@@ -21,19 +21,105 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-GUARDDOG_VERSION = "2.9.0"
+GUARDDOG_VERSION = "3.0.2"
 
 # AI scanner is optional — only loaded when enabled via environment.
 AI_SCANNER_ENABLED = os.environ.get("AI_SCANNER_ENABLED", "false").lower() == "true"
 
 # gRPC server thread-pool size = the number of scans that may run concurrently.
-# Each worker can spawn a GuardDog semgrep-core child, which is CPU- and
+# Each worker runs GuardDog's source-code + metadata analysis, which is CPU- and
 # memory-heavy; on a small host a burst (e.g. a full `npm ci`) fanning out to
 # all 64 default workers oversubscribes the CPU, so individual scans slow past
 # the gate's scanner timeout and a required scanner fails closed (503). Cap it
 # via BRIDGE_MAX_WORKERS to match the host so each scan gets enough CPU to
 # finish inside the deadline.
 DEFAULT_MAX_WORKERS = 64
+
+# GuardDog 3.0 emits two detector families in scan_local()["results"]:
+#   - "capability-*": descriptive capabilities (network / process-spawn /
+#     filesystem use). These fire on plenty of LEGITIMATE packages and are NOT,
+#     on their own, evidence of malice — GuardDog folds them into risk_score
+#     separately rather than treating them as findings.
+#   - everything else ("threat-*" source-code threats + metadata threats such as
+#     "typosquatting" / "deceptive_author" / "metadata_mismatch"): real findings.
+# GuardDog 2.x (semgrep-based) had no capability family, so the bridge treated
+# any non-empty rule match as MALICIOUS. Under 3.0 that over-blocks every package
+# touching the network or a subprocess, so we now ignore capability-only results
+# and key the verdict off real detectors plus GuardDog's own aggregate
+# risk_score["label"] ("no_risks_detected" vs "low/medium/high_risk").
+GUARDDOG_CAPABILITY_PREFIX = "capability-"
+
+
+def classify_guarddog_result(results):
+    """Map a GuardDog 3.0 scan_local() result to (verdict, confidence, findings).
+
+    ``findings`` is a list of plain dicts (severity/category/description/
+    location/iocs) so this stays pure and unit-testable without the proto layer.
+
+    Returns ("CLEAN", 1.0, []) for benign or capability-only results, and
+    ("MALICIOUS", 0.95, [...]) when a real (non-capability) detector fired OR
+    GuardDog scored the package as risky. The dual condition still catches
+    metadata threats that may not move the numeric score while ignoring
+    capability-only noise.
+    """
+    if not isinstance(results, dict):
+        results = {"results": results or {}}
+
+    rule_results = results.get("results", {}) or {}
+    risk_score = results.get("risk_score") or {}
+    risk_label = (risk_score.get("label") or "").strip()
+
+    threat_rules = {
+        name: matches
+        for name, matches in rule_results.items()
+        if matches and not name.startswith(GUARDDOG_CAPABILITY_PREFIX)
+    }
+    scored_risky = bool(risk_label) and risk_label != "no_risks_detected"
+
+    if not threat_rules and not scored_risky:
+        return "CLEAN", 1.0, []
+
+    findings = []
+    covered = set()
+    # Prefer GuardDog's structured risk objects (rich severity / location / MITRE).
+    for risk in results.get("risks") or []:
+        if not isinstance(risk, dict):
+            continue
+        rule = risk.get("threat_rule") or risk.get("name") or "guarddog"
+        covered.add(rule)
+        iocs = []
+        if risk.get("threat_match"):
+            iocs.append(str(risk["threat_match"]))
+        iocs.extend(str(t) for t in (risk.get("mitre_tactics") or []))
+        findings.append({
+            "severity": (risk.get("severity") or "high").upper(),
+            "category": rule,
+            "description": risk.get("threat_description") or rule,
+            "location": risk.get("threat_location") or "",
+            "iocs": iocs,
+        })
+    # Cover non-capability detectors not represented in risks[] (e.g. metadata
+    # threats like typosquatting, which need not populate the structured array).
+    for name in threat_rules:
+        if name in covered:
+            continue
+        findings.append({
+            "severity": "HIGH",
+            "category": name,
+            "description": f"GuardDog detector {name} matched",
+            "location": "",
+            "iocs": [],
+        })
+    # risk_score flagged risk but produced no detail — still surface a finding.
+    if not findings:
+        findings.append({
+            "severity": "HIGH",
+            "category": "guarddog",
+            "description": f"GuardDog risk_score label={risk_label or 'risk'}",
+            "location": "",
+            "iocs": [],
+        })
+    return "MALICIOUS", 0.95, findings
 
 
 def _max_workers_from_env():
@@ -120,37 +206,34 @@ class ScannerBridgeServicer(scanner_pb2_grpc.ScannerBridgeServicer):
                     duration_ms=int((time.time() - start) * 1000),
                 )
 
-            findings = []
-            verdict = "CLEAN"
-            confidence = 1.0
-
-            # GuardDog scan_local returns {"results": {rule: matches}, "path": str}
-            rule_results = results.get("results", {}) if isinstance(results, dict) else results
+            # GuardDog 3.0 scan_local returns {"results": {rule: matches},
+            # "risk_score": {...}, "risks": [...], "issues": int, "errors": ...}.
+            risk_score = results.get("risk_score") if isinstance(results, dict) else None
             logger.info(
-                "GuardDog raw results for %s:%s — %s",
-                request.package_name, request.version, str(rule_results)[:1000],
+                "GuardDog raw results for %s:%s — risk_score=%s results=%s",
+                request.package_name, request.version,
+                str(risk_score)[:300],
+                str(results.get("results") if isinstance(results, dict) else results)[:700],
             )
 
-            if rule_results:
-                for rule_name, matches in rule_results.items():
-                    # Skip rules with no actual matches (empty dict/list).
-                    if not matches:
-                        continue
-                    severity = "HIGH"
-                    logger.info(
-                        "GuardDog rule %s triggered for %s:%s — %s",
-                        rule_name, request.package_name, request.version,
-                        str(matches)[:500],
-                    )
-                    findings.append(scanner_pb2.Finding(
-                        severity=severity,
-                        category=rule_name,
-                        description=f"GuardDog rule {rule_name} matched",
-                        location=request.artifact_path,
-                    ))
-                if findings:
-                    verdict = "MALICIOUS"
-                    confidence = 0.95
+            verdict, confidence, finding_dicts = classify_guarddog_result(results)
+            findings = [
+                scanner_pb2.Finding(
+                    severity=f["severity"],
+                    category=f["category"],
+                    description=f["description"],
+                    location=f["location"] or request.artifact_path,
+                    iocs=f["iocs"],
+                )
+                for f in finding_dicts
+            ]
+            if verdict == "MALICIOUS":
+                logger.info(
+                    "GuardDog flagged %s:%s as MALICIOUS — risk_label=%s, %d finding(s): %s",
+                    request.package_name, request.version,
+                    (risk_score or {}).get("label"), len(findings),
+                    ", ".join(f["category"] for f in finding_dicts),
+                )
 
             duration_ms = int((time.time() - start) * 1000)
             return scanner_pb2.ScanResponse(

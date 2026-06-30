@@ -54,8 +54,8 @@ FROM python:3.13.14-slim@sha256:c33f0bc4364a6881bed1ec0cc2665e6c53c87a43e774aaea
 # Debian-security has published at build time (e.g. openssl 3.5.6-1~deb13u2 for
 # CVE-2026-45447). `perl-base` is a Debian "essential" package shipped by the
 # base image but used NOWHERE in the bridge (a glibc Python gRPC service —
-# guarddog is Python, semgrep is a Rust binary, pygit2 bundles libgit2; nothing
-# invokes the Perl interpreter). It is the source of the only two CRITICAL
+# guarddog is Python, pygit2 bundles libgit2; nothing invokes the Perl
+# interpreter). It is the source of the only two CRITICAL
 # findings (CVE-2026-42496, CVE-2026-8376) plus the perl-base highs/mediums,
 # none of which have an upstream fix. Force-purging it deletes the interpreter
 # and its files so the scanner no longer sees the package; apt/dpkg are never
@@ -98,15 +98,16 @@ ENV BRIDGE_SOCKET=/tmp/shieldoo-bridge.sock
 
 # Run as a non-root user that MATCHES the gate's sgw (uid 100/gid 101). Two
 # reasons (issue #24):
-#   1. Defence in depth — the bridge runs guarddog + semgrep over *untrusted*
-#      package content; it must not do so as root.
+#   1. Defence in depth — the bridge runs guarddog over *untrusted* package
+#      content; it must not do so as root.
 #   2. Shared-/tmp scratch ownership — /tmp is the shared `bridge-socket` volume,
-#      mounted into both containers and sticky (1777). semgrep writes scratch
-#      there that escapes the TMPDIR redirect; only the file's *owner* may unlink
-#      it under the sticky bit. With the bridge as the same uid as the gate, that
-#      scratch is sgw-owned and the gate's tmpjanitor (sgw) can reclaim it.
+#      mounted into both containers and sticky (1777). guarddog unpacks package
+#      scratch there that can escape the TMPDIR redirect; only the file's *owner*
+#      may unlink it under the sticky bit. With the bridge as the same uid as the
+#      gate, that scratch is sgw-owned and the gate's tmpjanitor (sgw) can reclaim
+#      it.
 # uid 100 / gid 101 are unused in the python:slim base. HOME must exist and be
-# writable: semgrep creates $HOME/.semgrep on every run (fails closed otherwise).
+# writable: guarddog writes per-user cache/config under $HOME at runtime.
 RUN groupadd -g 101 sgw \
  && useradd -u 100 -g 101 -m -d /home/sgw -s /usr/sbin/nologin sgw \
  && chown -R sgw:sgw /usr/local/lib/python3.13/site-packages/guarddog/analyzer/metadata/resources
