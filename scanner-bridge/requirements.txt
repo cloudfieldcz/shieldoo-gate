@@ -305,10 +305,11 @@ cryptography==49.0.0 \
     #   -r requirements.in
     #   nono-py
     #   pyjwt
-disposable-email-domains==0.0.169 \
-    --hash=sha256:19b3596f24b368339ea96e22ae0002798a847ce04a2221ee638e721bc7ffbf0e \
-    --hash=sha256:a6f4dc54a6939ab685025e05a628eba68ef003245dfd82bbd2b788e8e25caa18 \
-    --hash=sha256:e051ef00c6449ba7fd5d52c9a494ff12b0578c14218e57a4a5d0b9268ca1a7d3
+disposable-email-domains==0.0.214 \
+    --hash=sha256:7f2aab40bf95ba56f6c660d76b5489323fc124e624131e7817d7cbbbc190bd36 \
+    --hash=sha256:7f2aab40bf95ba56f6c660d76b5489323fc124e624131e7817d7cbbbc190bd36 \
+    --hash=sha256:ff2508583769b71c27bd9d529fdbd4e7cd45d4df8aa15da0dea9357848d81f8d \
+    --hash=sha256:ff2508583769b71c27bd9d529fdbd4e7cd45d4df8aa15da0dea9357848d81f8d
     # via guarddog
 distro==1.9.0 \
     --hash=sha256:2fa77c6fd8940f116ee1d6b94a2f90b13b5ea8d019b98bc8bafdcabcdd9bdbed \
@@ -422,9 +423,9 @@ grpcio-tools==1.81.1 \
     --hash=sha256:f8cb64f87c45ccca8234fa47e6b21f09e43801ff11b556deecb461b3b3e9f292 \
     --hash=sha256:fc3d2a41a7a4467fa03b391394fffada9291fe8feebc8679b526f6bc36942b25
     # via -r requirements.in
-guarddog==3.0.2 \
-    --hash=sha256:3c063ca11081fa01797f39b175fdcd87d5b957c780683d5087ae0e6e173c72d8 \
-    --hash=sha256:4040bdb0cbe4b6b6d40b3b0a679946b4359ade43b48e4e2d55b30473f24e06e8
+guarddog==3.1.0 \
+    --hash=sha256:0b2ba4b16f05b558516b5b45fb2ed6f8eae6d85ad2d1b08dde03cb17053d559d \
+    --hash=sha256:80572d0dfccb9028a78c0a61e66d54b95ea71b335b105b54c97955786fc00846
     # via -r requirements.in
 h11==0.16.0 \
     --hash=sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1 \
@@ -793,7 +794,7 @@ pygments==2.20.0 \
     # via
     #   -r requirements.in
     #   pytest
-pyjwt==2.13.0 \
+pyjwt[crypto]==2.13.0 \
     --hash=sha256:41571c89ca91598c79e8ef18a2d07367d4810fbbd6f637794879baf1b7703423 \
     --hash=sha256:66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728
     # via -r requirements.in
@@ -905,10 +906,6 @@ semantic-version==2.10.0 \
     --hash=sha256:bdabb6d336998cbb378d4b9db3a4b56a1e3235701dc05ea2690d9a997ed5041c \
     --hash=sha256:de78a3b8e0feda74cabc54aab2da702113e33ac9d9eb9d2389bcf1f58b7d9177
     # via guarddog
-setuptools==82.0.1 \
-    --hash=sha256:7d872682c5d01cfde07da7bccc7b65469d3dca203318515ada1de5eda35efbf9 \
-    --hash=sha256:a59e362652f08dcd477c78bb6e7bd9d80a7995bc73ce773050228a348ce2e5bb
-    # via grpcio-tools
 six==1.17.0 \
     --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274 \
     --hash=sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81
@@ -929,9 +926,9 @@ tqdm==4.68.3 \
     --hash=sha256:00dfa48452b6b6cfae3dd9885636c23d3422d1ec97c66d96818cbd5e0821d482 \
     --hash=sha256:39832cc2def2789a6f29df83f172db7416cea70052c0907a57801c5f2fdccb03
     # via openai
-typing-extensions==4.15.0 \
-    --hash=sha256:0cea48d173cc12fa28ecabc3b837ea3cf6f38c6d1136f85cbaaf598984861466 \
-    --hash=sha256:f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548
+typing-extensions==4.16.0 \
+    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8 \
+    --hash=sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5
     # via
     #   grpcio
     #   guarddog
