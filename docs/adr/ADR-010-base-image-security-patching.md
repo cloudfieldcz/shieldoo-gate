@@ -57,10 +57,11 @@ Two structural problems made remediation harder than it should be:
 2. **Unify the Go toolchain on a single patched version.** `go.mod`'s `go`
    directive, the `golang:<ver>-alpine` builder tag in `docker/Dockerfile`, and CI
    `GO_VERSION` must always name the **same** version. Bumping the Go patch level is
-   done in lockstep across all three. The current target is **1.26.4** (fixes
-   CVE-2026-42504, CVE-2026-42507, CVE-2026-27145), validated with a full
-   `make build && make lint && make test` pass after the 1.25 → 1.26
-   minor-version jump.
+   done in lockstep across all three. The current target is **1.26.5** (fixes
+   GO-2026-5856 / CVE-2026-39822 — crypto/tls Encrypted Client Hello privacy
+   leak; previously 1.26.4 for CVE-2026-42504, CVE-2026-42507,
+   CVE-2026-27145), validated with a full `make build && make lint &&
+   make test` pass after the 1.25 → 1.26 minor-version jump.
 
 3. **Third-party embedded binaries are tracked, not silently shipped.** Go-stdlib
    findings originating from bundled third-party binaries (e.g. `aquasec/trivy`'s
