@@ -16,7 +16,7 @@ env:
   # Keep in lockstep with go.mod's `go` directive and docker/Dockerfile's
   # golang builder tag — 1.26.4 carries the stdlib fix for CVE-2026-42504
   # (mime DoS), CVE-2026-42507 (net/textproto) and CVE-2026-27145 (x509).
-  GO_VERSION: "1.26.4"
+  GO_VERSION: "1.26.5"
 
 jobs:
   docker:

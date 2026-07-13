@@ -19,7 +19,7 @@ concurrency:
 
 env:
   # Keep in lockstep with go.mod's `go` directive and docker/Dockerfile.
-  GO_VERSION: "1.26.4"
+  GO_VERSION: "1.26.5"
   # Keep in lockstep with docker/Dockerfile's node base image.
   NODE_VERSION: "20.19.0"
 
