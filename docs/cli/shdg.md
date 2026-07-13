@@ -73,7 +73,7 @@ GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
 ```
 
 `shdg scan` shells out to a bundled Trivy binary on first run. The download is
-pinned to **Trivy v0.71.2** with a per-platform SHA-256 list; an unrecognised
+pinned to **Trivy v0.72.0** with a per-platform SHA-256 list; an unrecognised
 checksum fails the build closed (CLAUDE.md security invariant 4 — pinned
 scanner deps).
 
@@ -167,7 +167,7 @@ builds report `dev (unknown)`.
 |-----|---------|-------|
 | `SHIELDOO_TOKEN` | — | PAT carrying the `scan:upload` scope (or the global super-token). Required for `scan`. |
 | `SHIELDOO_URL` | — | Base URL of the gate (e.g. `https://gate.example.com`). Required for `scan`. |
-| `SHDG_CACHE_DIR` | `~/.cache/shdg` | Override the Trivy binary cache directory. The pinned binary lives at `<cache-dir>/trivy-0.71.2/trivy`. |
+| `SHDG_CACHE_DIR` | `~/.cache/shdg` | Override the Trivy binary cache directory. The pinned binary lives at `<cache-dir>/trivy-0.72.0/trivy`. |
 
 Tokens are passed verbatim as `Authorization: Bearer ...` to both the upload
 and polling endpoints.

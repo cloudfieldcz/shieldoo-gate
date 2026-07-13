@@ -57,11 +57,13 @@ func TestVerifySHA256_MatchAndMismatch(t *testing.T) {
 // REPLACE_ME placeholder fails the build, preventing the placeholder from
 // silently shipping (security-review requirement).
 func TestExpectedChecksums_AllPinned(t *testing.T) {
+	// Keyed off trivyVersion so a version bump that forgets to refresh the
+	// checksum map fails here instead of at first download.
 	required := []string{
-		"trivy_0.71.2_Linux-64bit.tar.gz",
-		"trivy_0.71.2_Linux-ARM64.tar.gz",
-		"trivy_0.71.2_macOS-64bit.tar.gz",
-		"trivy_0.71.2_macOS-ARM64.tar.gz",
+		"trivy_" + trivyVersion + "_Linux-64bit.tar.gz",
+		"trivy_" + trivyVersion + "_Linux-ARM64.tar.gz",
+		"trivy_" + trivyVersion + "_macOS-64bit.tar.gz",
+		"trivy_" + trivyVersion + "_macOS-ARM64.tar.gz",
 	}
 	for _, asset := range required {
 		v, ok := expectedChecksums[asset]
