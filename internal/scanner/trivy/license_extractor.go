@@ -407,7 +407,86 @@ func parseNuSpec(path string) []string {
 			}
 		}
 	}
+
+	// Fallback: a legacy nuspec that yields no SPDX-resolvable license — only
+	// an unresolvable <licenseUrl> (e.g. Hangfire.Core 1.8.0 → GitHub raw URL)
+	// or nothing at all — still often bundles LICENSE.md / COPYING in the
+	// package root. Classify the bundled file so the license resolves offline
+	// instead of leaking a bare URL into the policy engine.
+	if !hasResolvedLicense(out) {
+		if ids := classifyBundledLicenseFiles(path); len(ids) > 0 {
+			return ids
+		}
+	}
 	return out
+}
+
+// conventionalLicenseFiles lists the license file names commonly shipped in a
+// package root, in priority order. The first one that classifies wins — this
+// mirrors the author's canonical choice. Packages routinely ship both an
+// LGPL summary in LICENSE.md and the verbatim GPL text in COPYING; scanning
+// every file would wrongly surface GPL as a distinct license.
+var conventionalLicenseFiles = []string{
+	"LICENSE.md", "LICENSE", "LICENSE.txt",
+	"LICENCE.md", "LICENCE", "LICENCE.txt",
+	"COPYING.LESSER", "COPYING",
+}
+
+// hasResolvedLicense reports whether any entry is an SPDX-ish id/expression
+// rather than a bare URL. URLs are unresolvable offline and don't count as a
+// resolved license.
+func hasResolvedLicense(licenses []string) bool {
+	for _, l := range licenses {
+		if !isLicenseURL(l) {
+			return true
+		}
+	}
+	return false
+}
+
+// isLicenseURL reports whether s is an http(s) URL rather than an SPDX id.
+func isLicenseURL(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
+
+// classifyBundledLicenseFiles scans the package root (the nuspec's directory)
+// for a conventional license file and classifies the first one — in
+// conventionalLicenseFiles priority order — that yields an SPDX id. Only the
+// immediate directory is inspected so bundled sub-content's licenses are not
+// mistaken for the package's own.
+func classifyBundledLicenseFiles(nuspecPath string) []string {
+	dir := filepath.Dir(nuspecPath)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	// Index entries by lowercased name for case-insensitive priority lookup.
+	byName := make(map[string]string, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			byName[strings.ToLower(e.Name())] = e.Name()
+		}
+	}
+	for _, want := range conventionalLicenseFiles {
+		actual, ok := byName[strings.ToLower(want)]
+		if !ok {
+			continue
+		}
+		full := filepath.Join(dir, actual)
+		info, err := os.Stat(full)
+		if err != nil || info.IsDir() || info.Size() > maxLicenseFileSize {
+			continue
+		}
+		data, err := os.ReadFile(full) //nolint:gosec // confined to package dir
+		if err != nil {
+			continue
+		}
+		if ids := classifyLicenseText(data); len(ids) > 0 {
+			return ids
+		}
+	}
+	return nil
 }
 
 // classifyNuSpecLicenseFile resolves a `<license type="file">` reference

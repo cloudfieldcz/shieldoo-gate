@@ -143,6 +143,46 @@ func TestParseNuSpec_LegacyLicenseURL_KeptVerbatim(t *testing.T) {
 	assert.Equal(t, []string{"https://raw.github.com/HangfireIO/Hangfire/master/LICENSE.md"}, parseNuSpec(path))
 }
 
+// gplV3Text mirrors the COPYING file Hangfire ships alongside LICENSE.md — the
+// verbatim GNU GPL v3, which classifies as GPL-3.0-only on its own. The
+// bundled-file fallback must NOT surface it when a higher-priority LICENSE.md
+// resolves to the package's actual (LGPL) license.
+const gplV3Text = `GNU GENERAL PUBLIC LICENSE
+Version 3, 29 June 2007
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.`
+
+func TestParseNuSpec_LegacyLicenseURLWithBundledFile_ClassifiesFile(t *testing.T) {
+	// Mirrors Hangfire.Core 1.8.0: nuspec carries only a legacy GitHub
+	// licenseUrl (unresolvable offline) but the package bundles LICENSE.md.
+	path := writeNuSpec(t, `<?xml version="1.0"?>
+<package>
+  <metadata>
+    <id>Hangfire.Core</id>
+    <licenseUrl>https://raw.github.com/HangfireIO/Hangfire/master/LICENSE.md</licenseUrl>
+  </metadata>
+</package>`, map[string]string{"LICENSE.md": hangfireLicenseMD})
+
+	got := parseNuSpec(path)
+	assert.Equal(t, []string{"LGPL-3.0-only"}, got)
+	assert.NotContains(t, got, "https://raw.github.com/HangfireIO/Hangfire/master/LICENSE.md")
+}
+
+func TestParseNuSpec_LegacyLicenseURLPrefersLICENSEmdOverCOPYING(t *testing.T) {
+	// The package ships both LICENSE.md (LGPL summary) and COPYING (verbatim
+	// GPL). The fallback must pick LICENSE.md and stop — never emit GPL-3.0.
+	path := writeNuSpec(t, `<?xml version="1.0"?>
+<package>
+  <metadata>
+    <licenseUrl>https://raw.github.com/HangfireIO/Hangfire/master/LICENSE.md</licenseUrl>
+  </metadata>
+</package>`, map[string]string{"LICENSE.md": hangfireLicenseMD, "COPYING": gplV3Text})
+
+	got := parseNuSpec(path)
+	assert.Equal(t, []string{"LGPL-3.0-only"}, got)
+	assert.NotContains(t, got, "GPL-3.0-only")
+}
+
 func TestClassifyLicenseText_MIT_ReturnsMIT(t *testing.T) {
 	assert.Equal(t, []string{"MIT"}, classifyLicenseText([]byte(mitLicenseText)))
 }
