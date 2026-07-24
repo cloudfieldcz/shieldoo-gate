@@ -203,13 +203,13 @@ func parseNPMPackageJSON(path string) []string {
 	if len(raw.License) > 0 {
 		var s string
 		if err := json.Unmarshal(raw.License, &s); err == nil && s != "" {
-			out = append(out, s)
+			out = append(out, normalizeNPMLicense(path, s)...)
 		} else {
 			var obj struct {
 				Type string `json:"type"`
 			}
 			if err := json.Unmarshal(raw.License, &obj); err == nil && obj.Type != "" {
-				out = append(out, obj.Type)
+				out = append(out, normalizeNPMLicense(path, obj.Type)...)
 			}
 		}
 	}
@@ -222,12 +222,38 @@ func parseNPMPackageJSON(path string) []string {
 		if err := json.Unmarshal(raw.Licenses, &arr); err == nil {
 			for _, a := range arr {
 				if a.Type != "" {
-					out = append(out, a.Type)
+					out = append(out, normalizeNPMLicense(path, a.Type)...)
 				}
 			}
 		}
 	}
 	return out
+}
+
+// npmSeeLicenseInPrefix is the npm convention for a custom/proprietary license
+// whose text lives in a bundled file rather than an SPDX id.
+const npmSeeLicenseInPrefix = "see license in "
+
+// normalizeNPMLicense maps npm-specific license conventions to resolvable
+// values. `UNLICENSED` (npm's "no license granted" token) and an unresolvable
+// `SEE LICENSE IN <file>` both become NOASSERTION so the policy engine can act
+// on them (via unknown_action or an explicit blocked: ["NOASSERTION"]) instead
+// of matching a filename/token as a pseudo-license. A `SEE LICENSE IN <file>`
+// whose bundled text classifies to SPDX ids yields those ids. Any other string
+// passes through unchanged for the alias map / evaluator to handle.
+func normalizeNPMLicense(pkgJSONPath, s string) []string {
+	trimmed := strings.TrimSpace(s)
+	if strings.EqualFold(trimmed, "UNLICENSED") {
+		return []string{"NOASSERTION"}
+	}
+	if strings.HasPrefix(strings.ToLower(trimmed), npmSeeLicenseInPrefix) {
+		ref := strings.TrimSpace(trimmed[len(npmSeeLicenseInPrefix):])
+		if ids := classifyLicenseFileRef(pkgJSONPath, ref); len(ids) > 0 {
+			return ids
+		}
+		return []string{"NOASSERTION"}
+	}
+	return []string{s}
 }
 
 // --- NuGet ---------------------------------------------------------------
@@ -256,6 +282,43 @@ func nugetLicenseURLToExpression(raw string) (string, bool) {
 		return "", false
 	}
 	return expr, true
+}
+
+// wellKnownLicenseURL maps a small set of stable, unambiguous license URLs to
+// their SPDX ID. These are legacy <licenseUrl> values that carry no SPDX in
+// their path (unlike licenses.nuget.org) but always point at one known
+// license — e.g. the go.microsoft.com fwlink to MIT that .NET packages use,
+// or a dotnet/corefx GitHub LICENSE.TXT (corefx is MIT). Matching is by
+// host + normalized path so it resolves offline instead of leaking a bare URL
+// into the policy engine. Returns (SPDX, true) on a match, else ("", false).
+func wellKnownLicenseURL(raw string) (string, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", false
+	}
+	host := strings.ToLower(strings.TrimPrefix(u.Hostname(), "www."))
+	path := strings.ToLower(strings.Trim(u.Path, "/"))
+	query := strings.ToLower(u.RawQuery)
+	switch host {
+	case "go.microsoft.com":
+		if path == "fwlink" && strings.Contains(query, "linkid=329770") {
+			return "MIT", true
+		}
+	case "github.com":
+		// dotnet/corefx/blob/<any-ref>/license.txt → MIT
+		if strings.HasPrefix(path, "dotnet/corefx/blob/") && strings.HasSuffix(path, "/license.txt") {
+			return "MIT", true
+		}
+	case "opensource.org":
+		if path == "licenses/mit" {
+			return "MIT", true
+		}
+	case "apache.org":
+		if path == "licenses/license-2.0" || path == "licenses/license-2.0.txt" || path == "licenses/license-2.0.html" {
+			return "Apache-2.0", true
+		}
+	}
+	return "", false
 }
 
 // classifyLicenseText heuristically maps a license file's text to SPDX IDs.
@@ -387,7 +450,7 @@ func parseNuSpec(path string) []string {
 				continue
 			}
 			if strings.EqualFold(lic.Type, "file") {
-				add(classifyNuSpecLicenseFile(path, value)...)
+				add(classifyLicenseFileRef(path, value)...)
 			} else {
 				// type="expression" or absent — treat as SPDX expression.
 				add(value)
@@ -402,6 +465,8 @@ func parseNuSpec(path string) []string {
 			}
 			if expr, ok := nugetLicenseURLToExpression(rawURL); ok {
 				add(expr)
+			} else if id, ok := wellKnownLicenseURL(rawURL); ok {
+				add(id)
 			} else {
 				add(rawURL)
 			}
@@ -489,15 +554,16 @@ func classifyBundledLicenseFiles(nuspecPath string) []string {
 	return nil
 }
 
-// classifyNuSpecLicenseFile resolves a `<license type="file">` reference
-// relative to the nuspec's directory (= package root in an unpacked nupkg)
+// classifyLicenseFileRef resolves a license-file reference (e.g. a NuGet
+// `<license type="file">` value or an npm `SEE LICENSE IN <file>` target)
+// relative to the manifest's directory (= package root in an unpacked package)
 // and classifies its text. Paths escaping the package directory are refused.
-func classifyNuSpecLicenseFile(nuspecPath, ref string) []string {
+func classifyLicenseFileRef(manifestPath, ref string) []string {
 	rel := filepath.Clean(filepath.FromSlash(strings.ReplaceAll(ref, `\`, "/")))
 	if rel == "." || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
 		return nil
 	}
-	full := filepath.Join(filepath.Dir(nuspecPath), rel)
+	full := filepath.Join(filepath.Dir(manifestPath), rel)
 	info, err := os.Stat(full)
 	if err != nil || info.IsDir() || info.Size() > maxLicenseFileSize {
 		return nil

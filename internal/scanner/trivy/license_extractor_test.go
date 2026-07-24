@@ -232,3 +232,127 @@ func TestNuGetLicenseURLToExpression_NonNuGetHost_NotMapped(t *testing.T) {
 	_, ok := nugetLicenseURLToExpression("https://raw.github.com/HangfireIO/Hangfire/master/LICENSE.md")
 	assert.False(t, ok)
 }
+
+func TestParseNuSpec_FwlinkURL_ReturnsMIT(t *testing.T) {
+	// .NET packages frequently point <licenseUrl> at a go.microsoft.com
+	// fwlink that redirects to the MIT license (LinkId=329770).
+	path := writeNuSpec(t, `<?xml version="1.0"?>
+<package>
+  <metadata>
+    <id>System.Memory</id>
+    <licenseUrl>http://go.microsoft.com/fwlink/?LinkId=329770</licenseUrl>
+  </metadata>
+</package>`, nil)
+
+	assert.Equal(t, []string{"MIT"}, parseNuSpec(path))
+}
+
+func TestParseNuSpec_CorefxLicenseURL_ReturnsMIT(t *testing.T) {
+	// System.Memory 4.5.0 ships a bare dotnet/corefx GitHub LICENSE.TXT URL
+	// (corefx is MIT). Any branch/commit in the blob path must resolve.
+	path := writeNuSpec(t, `<?xml version="1.0"?>
+<package>
+  <metadata>
+    <id>System.Memory</id>
+    <licenseUrl>https://github.com/dotnet/corefx/blob/master/LICENSE.TXT</licenseUrl>
+  </metadata>
+</package>`, nil)
+
+	assert.Equal(t, []string{"MIT"}, parseNuSpec(path))
+}
+
+func TestParseNuSpec_UnknownURL_FallsThrough(t *testing.T) {
+	// A licenseUrl not in the well-known map and not on licenses.nuget.org,
+	// with no bundled license file, stays verbatim (unchanged behavior).
+	path := writeNuSpec(t, `<?xml version="1.0"?>
+<package>
+  <metadata>
+    <licenseUrl>https://example.com/some/license</licenseUrl>
+  </metadata>
+</package>`, nil)
+
+	assert.Equal(t, []string{"https://example.com/some/license"}, parseNuSpec(path))
+}
+
+func TestWellKnownLicenseURL_Variants(t *testing.T) {
+	cases := map[string]string{
+		"http://go.microsoft.com/fwlink/?LinkId=329770":         "MIT",
+		"https://go.microsoft.com/fwlink/?LinkID=329770":        "MIT",
+		"https://github.com/dotnet/corefx/blob/master/LICENSE.TXT": "MIT",
+		"https://github.com/dotnet/corefx/blob/v1.0.0/LICENSE.txt": "MIT",
+		"https://opensource.org/licenses/MIT":                   "MIT",
+		"http://www.apache.org/licenses/LICENSE-2.0":            "Apache-2.0",
+		"https://www.apache.org/licenses/LICENSE-2.0.txt":       "Apache-2.0",
+		"https://www.apache.org/licenses/LICENSE-2.0.html":      "Apache-2.0",
+	}
+	for in, want := range cases {
+		got, ok := wellKnownLicenseURL(in)
+		assert.True(t, ok, "expected %q to resolve", in)
+		assert.Equal(t, want, got, "input %q", in)
+	}
+}
+
+func TestWellKnownLicenseURL_Unknown_NotMapped(t *testing.T) {
+	_, ok := wellKnownLicenseURL("https://example.com/some/license")
+	assert.False(t, ok)
+}
+
+// --- npm ------------------------------------------------------------------
+
+// writePackageJSON writes a package.json (plus optional sibling files) into a
+// temp dir and returns the package.json path.
+func writePackageJSON(t *testing.T, pkg string, siblings map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "package.json")
+	require.NoError(t, os.WriteFile(path, []byte(pkg), 0o600))
+	for name, content := range siblings {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600))
+	}
+	return path
+}
+
+func TestParseNPMPackageJSON_SeeLicenseIn_ClassifiesFile(t *testing.T) {
+	path := writePackageJSON(t, `{"name":"pkg","license":"SEE LICENSE IN LICENSE.md"}`,
+		map[string]string{"LICENSE.md": mitLicenseText})
+
+	got := parseNPMPackageJSON(path)
+	assert.Equal(t, []string{"MIT"}, got)
+	assert.NotContains(t, got, "SEE LICENSE IN LICENSE.md")
+}
+
+func TestParseNPMPackageJSON_SeeLicenseIn_Unclassifiable_ReturnsNoAssertion(t *testing.T) {
+	path := writePackageJSON(t, `{"name":"pkg","license":"SEE LICENSE IN README.md"}`,
+		map[string]string{"README.md": "This project is proprietary. All rights reserved."})
+
+	assert.Equal(t, []string{"NOASSERTION"}, parseNPMPackageJSON(path))
+}
+
+func TestParseNPMPackageJSON_SeeLicenseIn_PathTraversal_Refused(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "pkg")
+	require.NoError(t, os.Mkdir(sub, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "outside.md"), []byte(mitLicenseText), 0o600))
+	path := filepath.Join(sub, "package.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{"name":"pkg","license":"SEE LICENSE IN ../outside.md"}`), 0o600))
+
+	// The traversal target must not be read; unresolvable → NOASSERTION.
+	got := parseNPMPackageJSON(path)
+	assert.Equal(t, []string{"NOASSERTION"}, got)
+	assert.NotContains(t, got, "MIT")
+}
+
+func TestParseNPMPackageJSON_Unlicensed_ReturnsNoAssertion(t *testing.T) {
+	path := writePackageJSON(t, `{"name":"pkg","license":"UNLICENSED"}`, nil)
+	assert.Equal(t, []string{"NOASSERTION"}, parseNPMPackageJSON(path))
+}
+
+func TestParseNPMPackageJSON_UnlicensedAlongsideBSD_ReturnsBothWithNoAssertion(t *testing.T) {
+	path := writePackageJSON(t, `{"name":"pkg","licenses":[{"type":"BSD-3-Clause"},{"type":"UNLICENSED"}]}`, nil)
+	assert.Equal(t, []string{"BSD-3-Clause", "NOASSERTION"}, parseNPMPackageJSON(path))
+}
+
+func TestParseNPMPackageJSON_NormalLicense_Unchanged(t *testing.T) {
+	path := writePackageJSON(t, `{"name":"pkg","license":"MIT"}`, nil)
+	assert.Equal(t, []string{"MIT"}, parseNPMPackageJSON(path))
+}
