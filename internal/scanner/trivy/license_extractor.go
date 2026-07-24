@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -231,11 +232,115 @@ func parseNPMPackageJSON(path string) []string {
 
 // --- NuGet ---------------------------------------------------------------
 
-// parseNuSpec reads a .nuspec XML file and extracts the license. NuGet
-// supports both the old `<licenseUrl>` (free-form URL pointing at a license
-// text) and the modern `<license type="expression">SPDX</license>`. We
-// prefer the SPDX expression when present; otherwise we leave the URL as-is
-// so the alias map can normalize known ones.
+// nuGetDeprecatedLicenseURL is the placeholder nuget.org stamps into
+// <licenseUrl> whenever a package declares the modern <license> element.
+// It never carries license information.
+const nuGetDeprecatedLicenseURL = "https://aka.ms/deprecateLicenseUrl"
+
+// maxLicenseFileSize caps how much of a <license type="file"> target we are
+// willing to read. Real license texts are a few KB; anything bigger is not a
+// license file.
+const maxLicenseFileSize = 1 << 20 // 1 MiB
+
+// nugetLicenseURLToExpression maps a licenses.nuget.org URL to the SPDX
+// expression encoded in its path (e.g. .../Apache-2.0%20OR%20MIT). nuget.org
+// generates these URLs mechanically from <license type="expression">, so the
+// mapping is authoritative.
+func nugetLicenseURLToExpression(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || !strings.EqualFold(u.Hostname(), "licenses.nuget.org") {
+		return "", false
+	}
+	expr := strings.Trim(u.Path, "/") // url.Parse already percent-decoded
+	if expr == "" || strings.Contains(expr, "/") {
+		return "", false
+	}
+	return expr, true
+}
+
+// classifyLicenseText heuristically maps a license file's text to SPDX IDs.
+// Multi-license files (e.g. Hangfire's "LGPL v3 or commercial") yield every
+// recognized branch; unrecognizable text yields nil so the artifact stays
+// "unknown" for the policy engine instead of leaking a filename or URL as a
+// pseudo-license. Best-effort by design — only unambiguous phrases match.
+func classifyLicenseText(data []byte) []string {
+	// Collapse all whitespace so phrases split across line breaks still match.
+	text := strings.ToLower(strings.Join(strings.Fields(string(data)), " "))
+
+	var out []string
+
+	// GNU family. "GNU Lesser/Affero General Public License" contains the
+	// plain-GPL phrase (and "lgpl"/"agpl" contain "gpl"), so detect the
+	// specific variants first and strip them before looking for plain GPL.
+	hasAny := func(subs ...string) bool {
+		for _, s := range subs {
+			if strings.Contains(text, s) {
+				return true
+			}
+		}
+		return false
+	}
+	hasLesser := hasAny("gnu lesser general public license", "gnu library general public license")
+	switch {
+	case (hasLesser && hasAny("version 2.1", "v2.1")) || hasAny("lgplv2.1", "lgpl-2.1", "lgpl v2.1"):
+		out = append(out, "LGPL-2.1-only")
+	case (hasLesser && hasAny("version 3", "v3")) || hasAny("lgplv3", "lgpl-3.0", "lgpl v3", "lgpl 3.0"):
+		out = append(out, "LGPL-3.0-only")
+	}
+	if (strings.Contains(text, "gnu affero general public license") && hasAny("version 3", "v3")) || hasAny("agplv3", "agpl-3.0", "agpl v3") {
+		out = append(out, "AGPL-3.0-only")
+	}
+	plain := strings.NewReplacer(
+		"gnu lesser general public license", "",
+		"gnu library general public license", "",
+		"gnu affero general public license", "",
+		"lgpl", "",
+		"agpl", "",
+	).Replace(text)
+	switch {
+	case strings.Contains(plain, "gnu general public license") && hasAny("version 3", "v3") || strings.Contains(plain, "gplv3") || strings.Contains(plain, "gpl-3.0"):
+		out = append(out, "GPL-3.0-only")
+	case strings.Contains(plain, "gnu general public license") && strings.Contains(plain, "version 2") || strings.Contains(plain, "gplv2") || strings.Contains(plain, "gpl-2.0"):
+		out = append(out, "GPL-2.0-only")
+	}
+
+	if strings.Contains(text, "permission is hereby granted, free of charge") {
+		out = append(out, "MIT")
+	}
+	if strings.Contains(text, "permission to use, copy, modify, and/or distribute this software") {
+		out = append(out, "ISC")
+	}
+	if strings.Contains(text, "apache license") && strings.Contains(text, "version 2.0") {
+		out = append(out, "Apache-2.0")
+	}
+	if strings.Contains(text, "mozilla public license") && strings.Contains(text, "2.0") {
+		out = append(out, "MPL-2.0")
+	}
+	if strings.Contains(text, "redistribution and use in source and binary forms") {
+		if strings.Contains(text, "neither the name") {
+			out = append(out, "BSD-3-Clause")
+		} else {
+			out = append(out, "BSD-2-Clause")
+		}
+	}
+	if strings.Contains(text, "free and unencumbered software released into the public domain") {
+		out = append(out, "Unlicense")
+	}
+	return out
+}
+
+// parseNuSpec reads a .nuspec XML file and extracts the license. NuGet has
+// three metadata shapes, handled in order of reliability:
+//
+//   - `<license type="expression">SPDX</license>` — used verbatim.
+//   - `<license type="file">LICENSE.md</license>` — the referenced file is
+//     read from the unpacked package and classified to SPDX IDs; the bare
+//     filename is never emitted (it would poison the license list with a
+//     meaningless "LICENSE.md" entry).
+//   - `<licenseUrl>` — licenses.nuget.org URLs are decoded to the SPDX
+//     expression in their path; the nuget.org deprecation placeholder is
+//     dropped; any other URL is forwarded verbatim so the alias map or an
+//     admin can deal with it.
 func parseNuSpec(path string) []string {
 	data, err := os.ReadFile(path) //nolint:gosec // path from walk
 	if err != nil {
@@ -245,17 +350,20 @@ func parseNuSpec(path string) []string {
 		Type  string `xml:"type,attr"`
 		Value string `xml:",chardata"`
 	}
-	var nuspec struct {
-		XMLName  xml.Name  `xml:"package"`
-		Metadata struct {
-			License    nuLicense `xml:"metadata>license"`
-			LicenseURL string    `xml:"metadata>licenseUrl"`
-		} `xml:"metadata"`
-	}
-	// xml package is fussy about namespace handling — try the simple
-	// path-based decode and fall through if structure differs.
+	// xml package is fussy about namespace handling — walk tokens instead of
+	// unmarshalling a fixed structure.
 	dec := xml.NewDecoder(strings.NewReader(string(data)))
 	var out []string
+	seen := make(map[string]struct{})
+	add := func(values ...string) {
+		for _, v := range values {
+			if _, dup := seen[v]; dup {
+				continue
+			}
+			seen[v] = struct{}{}
+			out = append(out, v)
+		}
+	}
 	for {
 		tok, err := dec.Token()
 		if err != nil {
@@ -271,23 +379,55 @@ func parseNuSpec(path string) []string {
 		switch strings.ToLower(se.Name.Local) {
 		case "license":
 			var lic nuLicense
-			if err := dec.DecodeElement(&lic, &se); err == nil && lic.Value != "" {
-				out = append(out, strings.TrimSpace(lic.Value))
+			if err := dec.DecodeElement(&lic, &se); err != nil {
+				continue
+			}
+			value := strings.TrimSpace(lic.Value)
+			if value == "" {
+				continue
+			}
+			if strings.EqualFold(lic.Type, "file") {
+				add(classifyNuSpecLicenseFile(path, value)...)
+			} else {
+				// type="expression" or absent — treat as SPDX expression.
+				add(value)
 			}
 		case "licenseurl":
-			var url string
-			if err := dec.DecodeElement(&url, &se); err == nil && url != "" {
-				// Heuristic: the URL itself isn't an SPDX ID, but the
-				// last path segment often matches the LICENSE filename
-				// convention. Forward it verbatim — the policy editor
-				// will treat it as "unknown" unless an admin adds it
-				// to the allowed list.
-				out = append(out, url)
+			var rawURL string
+			if err := dec.DecodeElement(&rawURL, &se); err != nil || rawURL == "" {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(rawURL), nuGetDeprecatedLicenseURL) {
+				continue // placeholder, never a license
+			}
+			if expr, ok := nugetLicenseURLToExpression(rawURL); ok {
+				add(expr)
+			} else {
+				add(rawURL)
 			}
 		}
 	}
-	_ = nuspec // unused, retained for future structured parsing
 	return out
+}
+
+// classifyNuSpecLicenseFile resolves a `<license type="file">` reference
+// relative to the nuspec's directory (= package root in an unpacked nupkg)
+// and classifies its text. Paths escaping the package directory are refused.
+func classifyNuSpecLicenseFile(nuspecPath, ref string) []string {
+	rel := filepath.Clean(filepath.FromSlash(strings.ReplaceAll(ref, `\`, "/")))
+	if rel == "." || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return nil
+	}
+	full := filepath.Join(filepath.Dir(nuspecPath), rel)
+	info, err := os.Stat(full)
+	if err != nil || info.IsDir() || info.Size() > maxLicenseFileSize {
+		return nil
+	}
+	data, err := os.ReadFile(full) //nolint:gosec // confined to package dir above
+	if err != nil {
+		return nil
+	}
+	return classifyLicenseText(data)
 }
 
 // --- Maven ---------------------------------------------------------------

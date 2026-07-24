@@ -212,6 +212,25 @@ Trivy scans for known CVEs, misconfigurations, and secrets. It runs as a subproc
 
 Trivy is the primary scanner for Docker images, where it scans image layers for vulnerabilities. For other ecosystems, it provides CVE detection complementary to the built-in heuristic scanners.
 
+#### License Metadata Extraction
+
+Trivy only detects packages from lockfiles, so the Go wrapper additionally walks the unpacked artifact and reads each ecosystem's canonical metadata file directly (`internal/scanner/trivy/license_extractor.go`). The extracted strings feed `ScanResult.Licenses` and the license policy. Per-ecosystem sources:
+
+| Ecosystem | Source | Notes |
+|---|---|---|
+| PyPI | `*.dist-info/METADATA`, `PKG-INFO` | `License-Expression` (PEP 639) preferred; falls back to `License:` and Trove classifiers |
+| npm | `package.json` | `license` string/object and deprecated `licenses` array |
+| NuGet | `*.nuspec` | See below — three metadata shapes |
+| Maven | `META-INF/maven/**/pom.xml` | `<licenses><license><name>/<url>` |
+
+**NuGet `.nuspec` handling** (in order of reliability):
+
+1. `<license type="expression">SPDX</license>` — used verbatim.
+2. `<license type="file">LICENSE.md</license>` — the referenced file is read from the unpacked package (path-traversal-guarded, 1 MiB cap) and **classified to SPDX IDs by text heuristics** (`classifyLicenseText`). Multi-license files (e.g. Hangfire's "LGPL v3 or commercial") yield every recognized branch. The bare filename is never emitted as a pseudo-license.
+3. `<licenseUrl>` — `https://licenses.nuget.org/<expr>` URLs are decoded to the SPDX expression in their path (nuget.org generates them mechanically, so this is authoritative); the `https://aka.ms/deprecateLicenseUrl` placeholder is dropped; any other URL is forwarded verbatim and lands in the policy engine's *unknown* bucket (handled by `unknown_action`).
+
+The text classifier recognizes the common license families (MIT, Apache-2.0, ISC, BSD-2/3-Clause, MPL-2.0, GPL/LGPL/AGPL incl. abbreviated forms like `LGPLv3`, Unlicense). Unrecognizable text yields nothing, keeping the artifact *unknown* for policy purposes instead of leaking filenames or URLs into the license list.
+
 ### OSV Scanner (HTTP API)
 
 | | |
