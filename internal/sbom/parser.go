@@ -189,6 +189,7 @@ type aliasEntry struct {
 // Maven pom licenses, etc.). Keep sorted alphabetically by alias for easy
 // diffing and code review.
 var licenseAliasEntries = []aliasEntry{
+	{"3-clause bsd license", "BSD-3-Clause"},
 	{"apache 2", "Apache-2.0"},
 	{"apache 2.0", "Apache-2.0"},
 	{"apache license", "Apache-2.0"},
@@ -205,6 +206,11 @@ var licenseAliasEntries = []aliasEntry{
 	{"bsd-3-clause license", "BSD-3-Clause"},
 	{"eclipse public license 1.0", "EPL-1.0"},
 	{"eclipse public license 2.0", "EPL-2.0"},
+	{"eupl 1.2", "EUPL-1.2"},
+	{"eupl v1.2 licensed", "EUPL-1.2"},
+	{"eupl-1.2", "EUPL-1.2"},
+	{"expat", "MIT"},
+	{"expat license", "MIT"},
 	{"gnu affero general public license v3", "AGPL-3.0-only"},
 	{"gnu general public license v2", "GPL-2.0-only"},
 	{"gnu general public license v3", "GPL-3.0-only"},
@@ -231,8 +237,10 @@ var licenseAliasEntries = []aliasEntry{
 	{"mit license", "MIT"},
 	{"mit license (mit)", "MIT"},
 	{"mit-0", "MIT-0"},
+	{"modified bsd license", "BSD-3-Clause"},
 	{"mozilla public license 2.0", "MPL-2.0"},
 	{"mpl-2.0", "MPL-2.0"},
+	{"new bsd license", "BSD-3-Clause"},
 	{"public domain", "Unlicense"},
 	{"public-domain", "Unlicense"}, // hyphenated variant seen in npm package metadata
 	// MySQL Connector/J ships GPLv2 with the FOSS exception. Trivy / our

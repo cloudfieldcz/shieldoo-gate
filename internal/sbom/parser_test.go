@@ -80,6 +80,30 @@ func TestParse_DedupesLicenses(t *testing.T) {
 	assert.Equal(t, "MIT", ext.Licenses[0])
 }
 
+func TestNameAliasToID_EUPLFreeText_ReturnsEUPL12(t *testing.T) {
+	for _, in := range []string{"EUPL v1.2 Licensed", "EUPL 1.2", "EUPL-1.2"} {
+		id, ok := NameAliasToID(in)
+		assert.True(t, ok, "expected %q to resolve", in)
+		assert.Equal(t, "EUPL-1.2", id, "input %q", in)
+	}
+}
+
+func TestNameAliasToID_ExpatLicense_ReturnsMIT(t *testing.T) {
+	for _, in := range []string{"Expat", "Expat License"} {
+		id, ok := NameAliasToID(in)
+		assert.True(t, ok, "expected %q to resolve", in)
+		assert.Equal(t, "MIT", id, "input %q", in)
+	}
+}
+
+func TestNameAliasToID_ModifiedBSD_ReturnsBSD3Clause(t *testing.T) {
+	for _, in := range []string{"3-Clause BSD License", "Modified BSD License", "New BSD License"} {
+		id, ok := NameAliasToID(in)
+		assert.True(t, ok, "expected %q to resolve", in)
+		assert.Equal(t, "BSD-3-Clause", id, "input %q", in)
+	}
+}
+
 func TestSanitize_StripsCachePrefix(t *testing.T) {
 	raw := []byte(`{"path":"/var/cache/shieldoo-gate/pypi/requests-2.31.0.whl","other":"value"}`)
 	out := Sanitize(raw, "/var/cache/shieldoo-gate")
