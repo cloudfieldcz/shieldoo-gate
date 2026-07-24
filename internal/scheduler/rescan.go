@@ -272,6 +272,17 @@ func (s *RescanScheduler) rescanArtifact(ctx context.Context, art artifactRow) {
 		return
 	}
 
+	// 4b. Refresh SBOM + license metadata. The serve path persists
+	// sbom_metadata only on a fresh proxy fetch; without this a rescan would
+	// re-run the scanner but leave sbom_metadata.licenses_json stale, so
+	// corrected license extraction (e.g. NuGet nuspec → SPDX) would never
+	// reach the admin UI or the cache-hit license gate (EvaluateLicensesOnly).
+	// Synchronous so the refresh is committed before we return. No-op when no
+	// scanner produced SBOM content or no writer is configured.
+	if err := adapter.WriteSBOMForResults(ctx, art.ID, results); err != nil {
+		log.Warn().Err(err).Str("artifact", art.ID).Msg("rescan scheduler: SBOM metadata refresh failed")
+	}
+
 	// 5. Update status + scan results + audit log in a transaction.
 	now := time.Now().UTC()
 

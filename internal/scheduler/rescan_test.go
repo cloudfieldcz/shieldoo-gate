@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/cloudfieldcz/shieldoo-gate/internal/adapter"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/cache"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
@@ -423,4 +424,87 @@ func TestRescanScheduler_StartStop(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Stop() did not return within 5 seconds")
 	}
+}
+
+// --- SBOM refresh on rescan ---
+
+// sbomStubScanner emits an SBOM blob plus a resolved license, mimicking Trivy
+// after the nuspec license extractor runs on a NuGet package.
+type sbomStubScanner struct {
+	verdict  scanner.Verdict
+	sbom     []byte
+	licenses []string
+}
+
+func (s *sbomStubScanner) Name() string    { return "sbom-stub" }
+func (s *sbomStubScanner) Version() string  { return "1.0" }
+func (s *sbomStubScanner) SupportedEcosystems() []scanner.Ecosystem {
+	return []scanner.Ecosystem{scanner.EcosystemNuGet, scanner.EcosystemPyPI, scanner.EcosystemNPM, scanner.EcosystemDocker}
+}
+func (s *sbomStubScanner) Scan(_ context.Context, _ scanner.Artifact) (scanner.ScanResult, error) {
+	return scanner.ScanResult{
+		Verdict:     s.verdict,
+		Confidence:  0.9,
+		ScannerID:   "sbom-stub",
+		ScannedAt:   time.Now(),
+		SBOMContent: s.sbom,
+		SBOMFormat:  "cyclonedx-json",
+		Licenses:    s.licenses,
+	}, nil
+}
+func (s *sbomStubScanner) HealthCheck(_ context.Context) error { return nil }
+
+// captureSBOMWriter records the last SBOM Write call for assertions.
+type captureSBOMWriter struct {
+	called     bool
+	artifactID string
+	licenses   []string
+}
+
+func (c *captureSBOMWriter) Write(_ context.Context, artifactID, _ string, _ []byte, licenses []string) error {
+	c.called = true
+	c.artifactID = artifactID
+	c.licenses = licenses
+	return nil
+}
+
+// TestRescanScheduler_RefreshesSBOMMetadataOnRescan guards the fix for the
+// NuGet Hangfire license bug: rescanning an already-cached artifact must
+// re-persist SBOM/license metadata (sbom_metadata.licenses_json), otherwise
+// the corrected license extractor never reaches the admin UI or the cache-hit
+// license gate.
+func TestRescanScheduler_RefreshesSBOMMetadataOnRescan(t *testing.T) {
+	db := setupTestDB(t)
+	tmpPath := createTempFile(t)
+
+	insertTestArtifact(t, db, "nuget:hangfire.core:1.8.23", "nuget", "hangfire.core", "1.8.23", model.StatusPendingScan, nil)
+
+	cacheStore := &stubCacheStore{paths: map[string]string{"nuget:hangfire.core:1.8.23": tmpPath}}
+	sbomScanner := &sbomStubScanner{
+		verdict:  scanner.VerdictClean,
+		sbom:     []byte(`{"bomFormat":"CycloneDX"}`),
+		licenses: []string{"LGPL-3.0-only"},
+	}
+	scanEngine := scanner.NewEngine([]scanner.Scanner{sbomScanner}, 30*time.Second, 0)
+	policyEng := policy.NewEngine(policy.EngineConfig{
+		BlockIfVerdict:      scanner.VerdictMalicious,
+		QuarantineIfVerdict: scanner.VerdictSuspicious,
+	}, nil)
+
+	w := &captureSBOMWriter{}
+	adapter.SetSBOMWriter(w)
+	t.Cleanup(func() { adapter.SetSBOMWriter(nil) })
+
+	sched := NewRescanScheduler(db, cacheStore, scanEngine, policyEng, config.RescanConfig{
+		Enabled:       true,
+		Interval:      "1h",
+		BatchSize:     10,
+		MaxConcurrent: 1,
+	})
+
+	sched.runCycle(context.Background())
+
+	require.True(t, w.called, "rescan must refresh SBOM/license metadata")
+	assert.Equal(t, "nuget:hangfire.core:1.8.23", w.artifactID)
+	assert.Equal(t, []string{"LGPL-3.0-only"}, w.licenses)
 }

@@ -168,24 +168,26 @@ func CheckCacheHitLicensePolicy(
 	return false
 }
 
-// TriggerAsyncSBOMWrite scans scanResults for an SBOM (first scanner that
-// provides SBOMContent), and if found, writes it asynchronously via the
-// configured SBOMAsyncWriter. No-op when no writer is configured or when
-// no scanner produced SBOM content.
-func TriggerAsyncSBOMWrite(ctx context.Context, artifactID string, scanResults []scanner.ScanResult) {
+// WriteSBOMForResults persists SBOM + license metadata synchronously for the
+// first scan result that carries SBOM content, using the configured
+// SBOMAsyncWriter. It is the shared core behind both the adapter serve path
+// (via TriggerAsyncSBOMWrite) and the rescan scheduler, which needs a
+// synchronous, testable refresh so re-scanning an already-cached artifact
+// updates sbom_metadata.licenses_json (what the admin UI and the cache-hit
+// license gate read).
+//
+// No-op (nil error) when no writer is configured or when no scanner produced
+// SBOM content. The caller controls the context deadline.
+func WriteSBOMForResults(ctx context.Context, artifactID string, scanResults []scanner.ScanResult) error {
 	wp := globalSBOMWriter.Load()
 	if wp == nil || *wp == nil {
-		return
+		return nil
 	}
+	w := *wp
 	for _, sr := range scanResults {
 		if len(sr.SBOMContent) == 0 {
 			continue
 		}
-		w := *wp
-		// Detach from request context — the request may be done by the time
-		// we finish persisting. Preserve a small timeout so we don't leak
-		// goroutines on a broken storage backend.
-		raw := sr.SBOMContent
 		format := sr.SBOMFormat
 		if format == "" {
 			format = "cyclonedx-json"
@@ -193,16 +195,25 @@ func TriggerAsyncSBOMWrite(ctx context.Context, artifactID string, scanResults [
 		// Pass scanner-extracted licenses so they get merged into SBOM
 		// metadata even when the CycloneDX blob has 0 components (common
 		// for single-artifact scans where Trivy doesn't detect packages).
-		licenses := sr.Licenses
-		go func() {
-			writeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			if err := w.Write(writeCtx, artifactID, format, raw, licenses); err != nil {
-				log.Warn().Err(err).Str("artifact_id", artifactID).Msg("adapter: async SBOM write failed")
-			}
-		}()
-		return // first SBOM wins — Trivy is the only scanner producing SBOMs
+		return w.Write(ctx, artifactID, format, sr.SBOMContent, sr.Licenses)
 	}
+	return nil // first SBOM wins — Trivy is the only scanner producing SBOMs
+}
+
+// TriggerAsyncSBOMWrite persists the SBOM for the first scanner that provides
+// SBOMContent, without blocking the request path. No-op when no writer is
+// configured or when no scanner produced SBOM content.
+func TriggerAsyncSBOMWrite(ctx context.Context, artifactID string, scanResults []scanner.ScanResult) {
+	go func() {
+		// Detach from request context — the request may be done by the time
+		// we finish persisting. Preserve a small timeout so we don't leak
+		// goroutines on a broken storage backend.
+		writeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := WriteSBOMForResults(writeCtx, artifactID, scanResults); err != nil {
+			log.Warn().Err(err).Str("artifact_id", artifactID).Msg("adapter: async SBOM write failed")
+		}
+	}()
 }
 
 // NewProxyHTTPClient returns an *http.Client with connection pooling tuned for

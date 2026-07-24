@@ -231,6 +231,8 @@ Trivy only detects packages from lockfiles, so the Go wrapper additionally walks
 
 The text classifier recognizes the common license families (MIT, Apache-2.0, ISC, BSD-2/3-Clause, MPL-2.0, GPL/LGPL/AGPL incl. abbreviated forms like `LGPLv3`, Unlicense). Unrecognizable text yields nothing, keeping the artifact *unknown* for policy purposes instead of leaking filenames or URLs into the license list.
 
+**Persistence & rescan.** Extracted licenses are written to `sbom_metadata.licenses_json` — the source the admin UI and the cache-hit license gate (`policy.Engine.EvaluateLicensesOnly`) read. This happens on the fresh proxy-fetch path and, since the license-extractor fix, also on **rescan**: `RescanScheduler.rescanArtifact` re-runs the scanner and then calls `adapter.WriteSBOMForResults` to re-persist the metadata. Without that refresh, rescanning an already-cached artifact would re-run extraction but leave the stored licenses stale, so corrected extraction never reaches the UI or policy — the failure mode seen with cached NuGet Hangfire packages whose licenses were first stored as the bare `LICENSE.md` / `aka.ms/deprecateLicenseUrl` placeholder.
+
 ### OSV Scanner (HTTP API)
 
 | | |

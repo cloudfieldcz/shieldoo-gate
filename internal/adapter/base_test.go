@@ -1,6 +1,7 @@
 package adapter_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -477,4 +478,66 @@ func TestNewProxyHTTPClient_EnablesHTTP2(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, "HTTP/2.0", proto, "NewProxyHTTPClient must negotiate HTTP/2 — Cloudflare-fronted upstreams (auth.docker.io) reject Go's HTTP/1.1 client with 403")
+}
+
+// ---------------------------------------------------------------------------
+// WriteSBOMForResults
+// ---------------------------------------------------------------------------
+
+// captureSBOMWriter records the arguments of the last Write call so tests can
+// assert the SBOM refresh path forwarded the correct licenses.
+type captureSBOMWriter struct {
+	called     bool
+	artifactID string
+	format     string
+	raw        []byte
+	licenses   []string
+	err        error
+}
+
+func (c *captureSBOMWriter) Write(_ context.Context, artifactID, format string, raw []byte, licenses []string) error {
+	c.called = true
+	c.artifactID = artifactID
+	c.format = format
+	c.raw = raw
+	c.licenses = licenses
+	return c.err
+}
+
+func TestWriteSBOMForResults_ForwardsSBOMAndLicenses(t *testing.T) {
+	w := &captureSBOMWriter{}
+	adapter.SetSBOMWriter(w)
+	t.Cleanup(func() { adapter.SetSBOMWriter(nil) })
+
+	results := []scanner.ScanResult{{
+		ScannerID:   "trivy",
+		SBOMContent: []byte(`{"bomFormat":"CycloneDX"}`),
+		SBOMFormat:  "cyclonedx-json",
+		Licenses:    []string{"LGPL-3.0-only"},
+	}}
+
+	err := adapter.WriteSBOMForResults(context.Background(), "nuget:hangfire.core:1.8.23", results)
+	require.NoError(t, err)
+	assert.True(t, w.called, "writer must be invoked when a result carries SBOM content")
+	assert.Equal(t, "nuget:hangfire.core:1.8.23", w.artifactID)
+	assert.Equal(t, "cyclonedx-json", w.format)
+	assert.Equal(t, []string{"LGPL-3.0-only"}, w.licenses)
+}
+
+func TestWriteSBOMForResults_NoSBOMContent_NoOp(t *testing.T) {
+	w := &captureSBOMWriter{}
+	adapter.SetSBOMWriter(w)
+	t.Cleanup(func() { adapter.SetSBOMWriter(nil) })
+
+	results := []scanner.ScanResult{{ScannerID: "trivy", Licenses: []string{"MIT"}}}
+	err := adapter.WriteSBOMForResults(context.Background(), "pypi:x:1", results)
+	require.NoError(t, err)
+	assert.False(t, w.called, "no SBOM content means nothing to persist")
+}
+
+func TestWriteSBOMForResults_NilWriter_NoOp(t *testing.T) {
+	adapter.SetSBOMWriter(nil)
+	results := []scanner.ScanResult{{SBOMContent: []byte("x"), SBOMFormat: "cyclonedx-json"}}
+	err := adapter.WriteSBOMForResults(context.Background(), "pypi:x:1", results)
+	require.NoError(t, err, "no configured writer must be a silent no-op")
 }
