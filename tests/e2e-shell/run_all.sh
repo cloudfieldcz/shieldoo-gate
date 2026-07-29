@@ -36,6 +36,7 @@ source "${SCRIPT_DIR}/test_admin_auth.sh"
 source "${SCRIPT_DIR}/test_policy_tiers.sh"
 source "${SCRIPT_DIR}/test_typosquat.sh"
 source "${SCRIPT_DIR}/test_version_diff.sh"
+source "${SCRIPT_DIR}/test_oversized_artifact.sh"
 source "${SCRIPT_DIR}/test_reputation.sh"
 source "${SCRIPT_DIR}/test_integrity.sh"
 source "${SCRIPT_DIR}/test_projects.sh"
@@ -151,6 +152,7 @@ test_admin_auth
 test_policy_tiers
 test_typosquat
 test_version_diff
+test_oversized_artifact
 test_reputation
 test_integrity
 test_projects

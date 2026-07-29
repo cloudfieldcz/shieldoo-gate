@@ -337,3 +337,125 @@ func TestPolicyEngine_BestEffortScannerErrorStillAllowsClean(t *testing.T) {
 
 	assert.Equal(t, policy.ActionAllow, result.Action)
 }
+
+// terminalErroredReport models the PROD incident: version-diff is REQUIRED and
+// returns a terminal error because the artifact is permanently too large to diff
+// (opencv-contrib-python 4.10.0.84, ~68 MB wheel / ~150 MB sdist vs a 50 MB cap).
+func terminalErroredReport() scanner.ScanReport {
+	return scanner.ScanReport{
+		Expected: []string{"version-diff"},
+		Errored: map[string]*scanner.ScanError{
+			"version-diff": scanner.NewScanError(scanner.ErrKindTerminal, errors.New("version-diff: artifact exceeds max size")),
+		},
+	}
+}
+
+// A terminal error is permanent for this artifact — retrying can never clear it.
+// Mapping it to retry_later (HTTP 503 + Retry-After) told clients to come back
+// for a verdict that was structurally predetermined, so pip retried forever and
+// re-downloaded + re-scanned the artifact on every attempt. It must fail closed
+// as a definitive block instead.
+func TestPolicyEngine_RequiredScannerTerminalError_QuarantineModeReturnsBlock(t *testing.T) {
+	cfg := defaultEngineConfig()
+	cfg.OnScanError = policy.ScanErrorModeQuarantine
+	cfg.ScannerCriticality = map[string]scanner.Criticality{"version-diff": scanner.CriticalityRequired}
+	engine := policy.NewEngine(cfg, nil)
+
+	result := engine.EvaluateReport(context.Background(), pypiArtifact("opencv-contrib-python", "4.10.0.84"), terminalErroredReport())
+
+	assert.Equal(t, policy.ActionBlock, result.Action)
+	assert.Contains(t, result.Reason, "required scanner unavailable")
+	require.Len(t, result.ScanUnavailable, 1)
+	assert.Equal(t, "version-diff", result.ScanUnavailable[0].Scanner)
+	assert.Equal(t, "terminal", result.ScanUnavailable[0].Kind)
+	// The recorded mode must reflect the action actually applied, not the
+	// configured quarantine default — the audit trail has to show "block".
+	assert.Equal(t, "block", result.ScanUnavailable[0].Mode)
+}
+
+// The default OnScanError value ("") also means quarantine, so an unset
+// policy.on_scan_error (exactly the PROD config) must block too.
+func TestPolicyEngine_RequiredScannerTerminalError_UnsetModeReturnsBlock(t *testing.T) {
+	cfg := defaultEngineConfig()
+	cfg.OnScanError = ""
+	cfg.ScannerCriticality = map[string]scanner.Criticality{"version-diff": scanner.CriticalityRequired}
+	engine := policy.NewEngine(cfg, nil)
+
+	result := engine.EvaluateReport(context.Background(), pypiArtifact("opencv-contrib-python", "4.10.0.84"), terminalErroredReport())
+
+	assert.Equal(t, policy.ActionBlock, result.Action)
+}
+
+// fail_open stays an explicit operator escape hatch: terminal must not override it.
+func TestPolicyEngine_RequiredScannerTerminalError_FailOpenModeStillAllows(t *testing.T) {
+	cfg := defaultEngineConfig()
+	cfg.OnScanError = policy.ScanErrorModeFailOpen
+	cfg.ScannerCriticality = map[string]scanner.Criticality{"version-diff": scanner.CriticalityRequired}
+	engine := policy.NewEngine(cfg, nil)
+
+	result := engine.EvaluateReport(context.Background(), pypiArtifact("opencv-contrib-python", "4.10.0.84"), terminalErroredReport())
+
+	assert.Equal(t, policy.ActionAllow, result.Action)
+	require.Len(t, result.ScanUnavailable, 1)
+	assert.Equal(t, "fail_open", result.ScanUnavailable[0].Mode)
+}
+
+// Throttled and retryable errors DO clear on their own, so they must keep
+// mapping to retry_later. This pins the fix to terminal only.
+func TestPolicyEngine_RequiredScannerThrottledError_QuarantineModeStillReturnsRetryLater(t *testing.T) {
+	cfg := defaultEngineConfig()
+	cfg.OnScanError = policy.ScanErrorModeQuarantine
+	cfg.ScannerCriticality = map[string]scanner.Criticality{"version-diff": scanner.CriticalityRequired}
+	engine := policy.NewEngine(cfg, nil)
+
+	report := scanner.ScanReport{
+		Expected: []string{"version-diff"},
+		Errored: map[string]*scanner.ScanError{
+			"version-diff": scanner.NewScanError(scanner.ErrKindThrottled, errors.New("version-diff: rate-limited")),
+		},
+	}
+	result := engine.EvaluateReport(context.Background(), pypiArtifact("pkg", "1.0.0"), report)
+
+	assert.Equal(t, policy.ActionRetryLater, result.Action)
+	require.Len(t, result.ScanUnavailable, 1)
+	assert.Equal(t, "throttled", result.ScanUnavailable[0].Kind)
+	assert.Equal(t, "retry_later", result.ScanUnavailable[0].Mode)
+}
+
+// A terminal failure alongside a merely retryable one is still permanent: the
+// artifact can never pass, so block wins over retry_later.
+func TestPolicyEngine_TerminalAndRetryableErrors_QuarantineModeReturnsBlock(t *testing.T) {
+	cfg := defaultEngineConfig()
+	cfg.OnScanError = policy.ScanErrorModeQuarantine
+	cfg.ScannerCriticality = map[string]scanner.Criticality{
+		"version-diff": scanner.CriticalityRequired,
+		"guarddog":     scanner.CriticalityRequired,
+	}
+	engine := policy.NewEngine(cfg, nil)
+
+	report := scanner.ScanReport{
+		Expected: []string{"version-diff", "guarddog"},
+		Errored: map[string]*scanner.ScanError{
+			"version-diff": scanner.NewScanError(scanner.ErrKindTerminal, errors.New("version-diff: artifact exceeds max size")),
+			"guarddog":     scanner.NewScanError(scanner.ErrKindOverload, errors.New("scanner overloaded")),
+		},
+	}
+	result := engine.EvaluateReport(context.Background(), pypiArtifact("opencv-contrib-python", "4.10.0.84"), report)
+
+	assert.Equal(t, policy.ActionBlock, result.Action)
+	require.Len(t, result.ScanUnavailable, 2)
+}
+
+// A terminal error from a BEST-EFFORT scanner must still degrade to fail-open —
+// the block escalation applies only to required scanners.
+func TestPolicyEngine_BestEffortTerminalError_StillAllowsClean(t *testing.T) {
+	cfg := defaultEngineConfig()
+	cfg.OnScanError = policy.ScanErrorModeQuarantine
+	cfg.ScannerCriticality = map[string]scanner.Criticality{"version-diff": scanner.CriticalityBestEffort}
+	engine := policy.NewEngine(cfg, nil)
+
+	result := engine.EvaluateReport(context.Background(), pypiArtifact("opencv-contrib-python", "4.10.0.84"), terminalErroredReport())
+
+	assert.Equal(t, policy.ActionAllow, result.Action)
+	assert.Empty(t, result.ScanUnavailable)
+}

@@ -55,6 +55,16 @@ as `CLEAN`, `SUSPICIOUS`, or `MALICIOUS`. The Go side maps the verdict to a
   "pad an update past the limit to skip the diff" evasion. In the default
   best-effort mode the engine still degrades them to fail-open.
 
+  For a `required` version-diff the **size guard returns HTTP 403, not 503**:
+  a `terminal` error is permanent for that artifact, so `quarantine` mode
+  escalates it to a block rather than promising a retry that can never succeed.
+  See [terminal errors are never retryable](../policy.md#terminal-errors-are-never-retryable).
+  Operators who want oversized packages to be diffed (and served) must raise
+  `max_artifact_size_mb` above the largest artifact they expect — a 50 MB cap
+  rejects common ML/CV wheels such as `opencv-contrib-python` (~65 MB) and
+  `paddlepaddle` (~95 MB) as soon as a second distribution of the same package
+  is cached. The alternative is an explicit allow override per package.
+
 - **Fails open** (returns CLEAN, error **logged but not surfaced** on the
   result) when it "couldn't compare against the previous version" — a transient
   or artifact-specific condition that is not a malicious signal:

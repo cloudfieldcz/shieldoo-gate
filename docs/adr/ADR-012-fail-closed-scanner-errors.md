@@ -4,7 +4,7 @@ Date: 2026-06-17
 
 ## Status
 
-Accepted
+Accepted. Amended by [ADR-019](ADR-019-terminal-scanner-errors-block-not-retry.md): under `on_scan_error=quarantine` a `terminal` error returns `block` (403) rather than `retry_later` (503), because retrying a permanent per-artifact failure can never succeed.
 
 ## Context
 
@@ -24,7 +24,7 @@ A scanner that fails *internally* must report a classified error, never a silent
 
 `policy.on_scan_error` maps required scanner failures to adapter behavior:
 
-- Pull paths return HTTP 503 with `Retry-After`.
+- Pull paths return HTTP 503 with `Retry-After` — **except `terminal` errors, which return HTTP 403** (see [ADR-019](ADR-019-terminal-scanner-errors-block-not-retry.md)).
 - Docker push rejects the upload.
 - Docker sync skips the artifact.
 

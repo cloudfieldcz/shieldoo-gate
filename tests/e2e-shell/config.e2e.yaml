@@ -181,6 +181,10 @@ scanners:
   version_diff:
     enabled: true
     mode: "shadow"
+    # KEEP AT 50 — deliberately lower than the recommended production value
+    # (config.example.yaml uses 200). test_oversized_artifact.sh drives two ~65 MB
+    # opencv wheels through this cap to reproduce the terminal-error path from
+    # ADR-019; raising it here would silently disable that regression test.
     max_artifact_size_mb: 50
     max_extracted_size_mb: 50
     max_extracted_files: 5000

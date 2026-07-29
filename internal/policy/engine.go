@@ -421,6 +421,23 @@ func (e *Engine) EvaluateReport(ctx context.Context, artifact scanner.Artifact, 
 				Int("scanner_errors", len(unavailable)).
 				Msg("policy: required scanner unavailable, fail_open mode allows verdict aggregation")
 		default:
+			// A terminal error is permanent for THIS artifact — retrying can
+			// never clear it (e.g. version-diff's size guard: the artifact will
+			// not shrink). Answering retry_later (HTTP 503 + Retry-After) told
+			// clients to come back for a verdict that was structurally
+			// predetermined, so pip/npm retried forever and re-downloaded plus
+			// re-scanned the artifact on every attempt. Escalate to a definitive
+			// block: still fail-closed (the size-evasion guard stays shut), but
+			// honest about being permanent. Operators unblock with a policy
+			// override or by raising the scanner's limit.
+			if hasTerminalError(unavailable) {
+				return PolicyResult{
+					Action:          ActionBlock,
+					Reason:          "required scanner unavailable",
+					Warnings:        licWarnings,
+					ScanUnavailable: unavailable,
+				}
+			}
 			return PolicyResult{
 				Action:          ActionRetryLater,
 				Reason:          "required scanner unavailable",
@@ -478,13 +495,37 @@ func (e *Engine) requiredScannerUnavailable(report scanner.ScanReport) []ScanUna
 		if err != nil {
 			kind = err.Kind.String()
 		}
+		entryMode := appliedMode
+		// Record the mode actually applied, not the configured default: under
+		// quarantine a terminal error blocks rather than retries, and the audit
+		// trail must say so. fail_open and block modes are unaffected.
+		if kind == terminalErrKind && mode == ScanErrorModeQuarantine {
+			entryMode = string(ActionBlock)
+		}
 		out = append(out, ScanUnavailable{
 			Scanner: scannerName,
 			Kind:    kind,
-			Mode:    appliedMode,
+			Mode:    entryMode,
 		})
 	}
 	return out
+}
+
+// terminalErrKind is the ScanUnavailable.Kind string for a permanent,
+// per-artifact scanner failure that retrying cannot fix.
+var terminalErrKind = scanner.ErrKindTerminal.String()
+
+// hasTerminalError reports whether any required scanner failed permanently for
+// this artifact. Terminal wins over retryable/throttled siblings: if one required
+// scanner can never produce a verdict, the artifact can never pass, so there is
+// nothing to come back for.
+func hasTerminalError(unavailable []ScanUnavailable) bool {
+	for _, u := range unavailable {
+		if u.Kind == terminalErrKind {
+			return true
+		}
+	}
+	return false
 }
 
 // EvaluateLicensesOnly checks stored SBOM licenses against the current policy
