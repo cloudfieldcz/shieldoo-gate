@@ -41,6 +41,15 @@ Visual baselines are only stable if rendering is reproducible:
   is what keeps a baseline generated on a macOS laptop byte-identical to the one
   CI compares against on Linux — **never** run `--update-snapshots` outside this
   container.
+
+  Bumping `@playwright/test` across a **minor** (e.g. 1.61.x → 1.62.0) ships a
+  new bundled Chromium revision, so `PW_IMAGE` in `run.sh` must move in the same
+  commit — the tag *and* the amd64 manifest digest. Leaving the image behind
+  fails every test at launch with
+  `browserType.launch: Executable doesn't exist at /ms-playwright/…`. Dependabot
+  only bumps `ui/package.json`, so its Playwright PRs always need this follow-up.
+  A new Chromium usually also shifts font metrics slightly, so expect to refresh
+  baselines with `make test-ui-update` after the bump.
 - **Pinned rendering inputs.** [`playwright.config.ts`](../../ui/playwright.config.ts)
   fixes the viewport (1280×800), device scale, `colorScheme: light`,
   `timezoneId: UTC`, and `locale: en-US`, and disables animations/caret.
