@@ -2,7 +2,7 @@
 guarddog==3.1.0           # major: drops semgrep, adds nono-py sandbox + S3 scanning
 grpcio==1.83.0
 grpcio-tools==1.83.0      # MUST stay in lockstep with grpcio
-openai==2.48.0
+openai==2.50.0
 pytest==9.1.1
 pytest-asyncio==1.4.0
 
