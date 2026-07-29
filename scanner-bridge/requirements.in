@@ -1,8 +1,8 @@
 # Direct dependencies for scanner-bridge
 guarddog==3.1.0           # major: drops semgrep, adds nono-py sandbox + S3 scanning
-grpcio==1.82.1
-grpcio-tools==1.82.1
-openai==2.45.0
+grpcio==1.83.0
+grpcio-tools==1.83.0      # MUST stay in lockstep with grpcio
+openai==2.48.0
 pytest==9.1.1
 pytest-asyncio==1.4.0
 
@@ -13,6 +13,9 @@ urllib3==2.7.0                # CVE-2026-44431 / CVE-2026-44432
 pygments==2.20.0              # CVE-2026-4539
 idna==3.18                    # CVE-2026-45409 / GHSA-65pc-fj4g-8rjx
 pyjwt[crypto]==2.13.0         # PYSEC-2026-175 / -177 / -178 / -179
+setuptools==83.0.0            # GHSA / dependabot #36 — MANIFEST.in exclusion bypass
+                              # in sdist via NFC/NFD collision. Transitive via
+                              # grpcio-tools; pinned here so uv keeps it in the lock.
 # Removed with the guarddog 2.x -> 3.0 bump: starlette / python-multipart were
 # transitive deps of guarddog's old MCP server mode (mcp/sse-starlette/uvicorn),
 # which guarddog 3.0 dropped. No longer in the dependency tree, so their pins
