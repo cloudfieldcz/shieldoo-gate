@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -92,6 +93,9 @@ func (c *stubCacheStore) Stats(_ context.Context) (cache.CacheStats, error) {
 type stubScanner struct {
 	verdict    scanner.Verdict
 	shouldFail bool
+	// terminalErr makes the scanner return a permanent, per-artifact failure
+	// (the shape version-diff's oversized-artifact size guard produces).
+	terminalErr bool
 }
 
 func (s *stubScanner) Name() string    { return "stub" }
@@ -100,6 +104,10 @@ func (s *stubScanner) SupportedEcosystems() []scanner.Ecosystem {
 	return []scanner.Ecosystem{scanner.EcosystemPyPI, scanner.EcosystemNPM, scanner.EcosystemNuGet, scanner.EcosystemDocker}
 }
 func (s *stubScanner) Scan(_ context.Context, _ scanner.Artifact) (scanner.ScanResult, error) {
+	if s.terminalErr {
+		err := scanner.NewScanError(scanner.ErrKindTerminal, errors.New("artifact exceeds max size"))
+		return scanner.ScanResult{Verdict: scanner.VerdictClean, ScannerID: "stub", ScannedAt: time.Now(), Error: err}, err
+	}
 	if s.shouldFail {
 		return scanner.ScanResult{}, assert.AnError
 	}
@@ -215,6 +223,79 @@ func TestRescanScheduler_FailOpen_ScanError(t *testing.T) {
 	status := getArtifactStatus(t, db, "pypi:pkg:1.0")
 	assert.Equal(t, model.StatusClean, status.Status)
 	assert.Empty(t, status.QuarantineReason)
+}
+
+// A PENDING_SCAN artifact whose required scanner fails permanently (version-diff's
+// oversized-artifact size guard) must reach a terminal state instead of being
+// rescheduled forever. Before the terminal→block fix the policy engine answered
+// retry_later, so the scheduler re-queued the artifact on every cycle for a verdict
+// that could never change. It now quarantines with a clear reason, which surfaces in
+// the UI and can be cleared with a policy override.
+func TestRescanScheduler_RequiredScannerTerminalError_QuarantinesInsteadOfLooping(t *testing.T) {
+	db := setupTestDB(t)
+	tmpPath := createTempFile(t)
+
+	const id = "pypi:opencv-contrib-python:4.10.0.84"
+	insertTestArtifact(t, db, id, "pypi", "opencv-contrib-python", "4.10.0.84", model.StatusPendingScan, nil)
+
+	cacheStore := &stubCacheStore{paths: map[string]string{id: tmpPath}}
+
+	oversized := &stubScanner{terminalErr: true}
+	scanEngine := scanner.NewEngine([]scanner.Scanner{oversized}, 30*time.Second, 0)
+	policyEng := policy.NewEngine(policy.EngineConfig{
+		BlockIfVerdict:      scanner.VerdictMalicious,
+		QuarantineIfVerdict: scanner.VerdictSuspicious,
+		OnScanError:         policy.ScanErrorModeQuarantine,
+		ScannerCriticality:  map[string]scanner.Criticality{"stub": scanner.CriticalityRequired},
+	}, nil)
+
+	sched := NewRescanScheduler(db, cacheStore, scanEngine, policyEng, config.RescanConfig{
+		Enabled:       true,
+		Interval:      "1h",
+		BatchSize:     10,
+		MaxConcurrent: 1,
+	})
+
+	sched.runCycle(context.Background())
+
+	status := getArtifactStatus(t, db, id)
+	assert.Equal(t, model.StatusQuarantined, status.Status,
+		"a permanently unscannable artifact must not stay PENDING_SCAN and be re-queued forever")
+	assert.Contains(t, status.QuarantineReason, "required scanner unavailable")
+	assert.Nil(t, status.RescanDueAt, "terminal failure must stop the rescan loop")
+}
+
+// A throttled (not terminal) required-scanner failure genuinely clears on its own,
+// so the scheduler must keep the artifact pending and reschedule it.
+func TestRescanScheduler_RequiredScannerRetryableError_StaysPendingAndReschedules(t *testing.T) {
+	db := setupTestDB(t)
+	tmpPath := createTempFile(t)
+
+	const id = "pypi:pkg:1.0"
+	insertTestArtifact(t, db, id, "pypi", "pkg", "1.0", model.StatusPendingScan, nil)
+
+	cacheStore := &stubCacheStore{paths: map[string]string{id: tmpPath}}
+
+	scanEngine := scanner.NewEngine([]scanner.Scanner{&stubScanner{shouldFail: true}}, 30*time.Second, 0)
+	policyEng := policy.NewEngine(policy.EngineConfig{
+		BlockIfVerdict:      scanner.VerdictMalicious,
+		QuarantineIfVerdict: scanner.VerdictSuspicious,
+		OnScanError:         policy.ScanErrorModeQuarantine,
+		ScannerCriticality:  map[string]scanner.Criticality{"stub": scanner.CriticalityRequired},
+	}, nil)
+
+	sched := NewRescanScheduler(db, cacheStore, scanEngine, policyEng, config.RescanConfig{
+		Enabled:       true,
+		Interval:      "1h",
+		BatchSize:     10,
+		MaxConcurrent: 1,
+	})
+
+	sched.runCycle(context.Background())
+
+	status := getArtifactStatus(t, db, id)
+	assert.Equal(t, model.StatusPendingScan, status.Status)
+	assert.NotNil(t, status.RescanDueAt, "a retryable failure must be rescheduled")
 }
 
 func TestRescanScheduler_CacheMiss_SkipsArtifact(t *testing.T) {

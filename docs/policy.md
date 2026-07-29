@@ -127,11 +127,32 @@ The threat feed checker is exempt from this threshold — it bypasses confidence
 
 `policy.on_scan_error` controls what happens when a **required** scanner (see [scanner criticality](scanners.md#scan-engine)) fails to produce a verdict:
 
-- `quarantine` (default): pull requests receive HTTP 503 with `Retry-After`, Docker pushes are rejected with 5xx, and Docker sync skips the artifact. Nothing is persisted, cached, or marked clean.
+- `quarantine` (default): pull requests receive HTTP 503 with `Retry-After`, Docker pushes are rejected with 5xx, and Docker sync skips the artifact. Nothing is persisted, cached, or marked clean. **Exception:** a `terminal` error escalates to a block — see [terminal errors are never retryable](#terminal-errors-are-never-retryable) below.
 - `block`: policy returns a block decision. Pull/push requests are rejected and Docker sync does not mark the artifact clean.
 - `fail_open`: preserves legacy availability behavior (verdict aggregation proceeds on the partial results), but still emits `SCAN_UNAVAILABLE` audit events and the `scan_error_mode_applied_total` Prometheus metric so the bypass is never silent.
 
 In every mode a required-scanner failure emits a `SCAN_UNAVAILABLE` audit row (mirroring the `super_token_used` invariant). Explicit allow overrides and static allowlist entries bypass scanner availability checks; deny overrides still block. Best-effort scanner failures never trigger this path.
+
+#### Terminal errors are never retryable
+
+A `terminal` scanner error is a permanent property of one artifact — retrying can never clear it (e.g. version-diff's [compressed-size guard](scanners/version-diff.md): the artifact will not shrink). Under `quarantine` mode such a failure therefore returns **`block` (HTTP 403)** rather than `retry_later` (HTTP 503).
+
+This matters because `retry_later` is a promise that coming back later might succeed. For a terminal error that promise is false: clients such as `pip` retry indefinitely, and each attempt makes the gate re-download the artifact and re-run the entire scanner suite for a verdict that is structurally predetermined.
+
+Precise semantics:
+
+| Error kind | `quarantine` mode | Rationale |
+|---|---|---|
+| `retryable`, `overload` | `retry_later` (503) | Transient backend failure; retrying can succeed |
+| `throttled` | `retry_later` (503) | Local backpressure; the quota resets on its own |
+| `terminal` | `block` (403) | Permanent for this artifact; nothing to come back for |
+
+- Terminal wins over sibling errors: if one required scanner fails terminally, the artifact can never pass, so `block` takes precedence over a concurrent `retryable` failure.
+- `fail_open` is unaffected — it remains an explicit operator escape hatch and still allows the artifact.
+- Best-effort scanners are unaffected — a terminal error there still degrades to fail-open.
+- The `SCAN_UNAVAILABLE` audit row records the mode **actually applied**, so a terminal failure under `quarantine` is logged as `{"kind":"terminal","mode":"block"}`.
+
+To serve an artifact that is permanently unscannable, an operator must act deliberately: add an allow override, or raise the responsible scanner's limit (e.g. `scanners.version_diff.max_artifact_size_mb`). Failing closed keeps the size-evasion guard shut — padding a package past the size limit cannot be used to skip the diff.
 
 ## Policy Actions
 

@@ -279,7 +279,14 @@ scanners:
   version_diff:
     enabled: false                      # opt-in; requires scanner-bridge with AI enabled
     mode: "shadow"                      # "shadow" (no policy effect) | "active" (verdict reaches policy)
-    max_artifact_size_mb: 50            # skip diff for artifacts larger than this (compressed)
+    # Skip the diff for artifacts larger than this (compressed). NOTE: only a
+    # FIRST-SEEN oversized package is skipped cleanly. Once a sibling distribution
+    # is cached, an oversized update returns a `terminal` error so the limit cannot
+    # be used to evade the diff — and for a `required` version-diff that fails
+    # closed with HTTP 403 (ADR-019). Raise this above the largest artifact you
+    # proxy: 50 rejects common ML/CV wheels (opencv-contrib-python ~65 MB,
+    # paddlepaddle ~95 MB).
+    max_artifact_size_mb: 200
     max_extracted_size_mb: 50           # bridge: max aggregate bytes read across all members
     max_extracted_files: 5000           # bridge: max member count
     scanner_timeout: "55s"              # must be < scanners.timeout (engine outer cap, default 60s)
