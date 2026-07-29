@@ -110,3 +110,17 @@ Vite-React-TS hooks rules (`rules-of-hooks` = error, `exhaustive-deps` = warn).
 `react-hooks` v7's newer `recommended-latest` (which adds `set-state-in-effect`)
 is deliberately not adopted — that would be a separate, reviewed refactor. Run
 locally with `npm run lint` from `ui/`.
+
+## Held-back dependencies
+
+Dependencies that are deliberately **not** on their latest major, with the
+condition that releases the hold. Each has a matching `ignore:` entry in
+[`.github/dependabot.yml`](../../.github/dependabot.yml) so the bot stops
+reopening an unmergeable PR every patch release.
+
+| Dependency | Pinned at | Blocked by | Release condition |
+|---|---|---|---|
+| `typescript` | 6.0.3 | `typescript-eslint` (incl. its canary) declares `peer typescript >=4.8.4 <6.1.0`, so TS 7 fails `npm ci` with `ERESOLVE` and leaves the type-aware lint rules without a supported parser | `typescript-eslint`'s peer range admits 7.x |
+
+Removing a hold means deleting the `ignore:` entry **and** the row above in the
+same PR.

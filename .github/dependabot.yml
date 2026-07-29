@@ -35,6 +35,15 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      # TypeScript 7 (the native/Go compiler port) is unusable here until
+      # typescript-eslint supports it: even its canary still declares
+      # `peer typescript >=4.8.4 <6.1.0`, so `npm ci` fails ERESOLVE and the
+      # type-aware lint rules have no supported parser. Dependabot reopened the
+      # same unmergeable PR on every 7.x patch (#129).
+      # REMOVE this entry once typescript-eslint's peer range admits 7.x.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   # Python scanner bridge (pinned requirements.txt compiled via uv).
   - package-ecosystem: "pip"
