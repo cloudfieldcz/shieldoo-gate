@@ -10,14 +10,15 @@ import (
 
 // SBOMLimits describes the structural validation thresholds for an uploaded SBOM.
 type SBOMLimits struct {
-	MaxBytes         int64 // hard byte cap; reject above this
-	MaxComponents    int   // reject SBOMs with components[] longer than this
-	MaxDepth         int   // JSON nesting depth limit
-	MaxStringLength  int   // reject any string longer than this (name, version, etc.)
+	MaxBytes        int64 // hard byte cap; reject above this
+	MaxComponents   int   // reject SBOMs with components[] longer than this
+	MaxDepth        int   // JSON nesting depth limit
+	MaxStringLength int   // cap for identifier-shaped strings (name, version, purl, hashes)
+	MaxTextLength   int   // cap for CycloneDX free-form prose fields (see isFreeTextSBOMField)
 }
 
 // DefaultSBOMLimits returns the canonical defaults: 500 MiB, 500000
-// components, depth 16, 1024-char strings.
+// components, depth 16, 1024-char identifiers, 256 KiB free-form text.
 //
 // The 500 MiB / 500k component headroom is sized for `trivy image`-shaped
 // CycloneDX SBOMs: realistic enterprise app images land at 1.5–5 MiB
@@ -26,13 +27,51 @@ type SBOMLimits struct {
 // push past the 10 MiB previously enforced. Deployments can tune both
 // caps downward via `vuln_scan.max_sbom_bytes` and `vuln_scan.max_components`
 // Viper keys.
+//
+// MaxStringLength stays tight because identifier-shaped fields end up in DB
+// columns and OSV API requests. MaxTextLength is deliberately generous: the
+// CycloneDX spec defines several fields as free-form prose, and generators
+// legitimately put entire licence bodies in them — `trivy image` writes the
+// full licence text into `licenses[].license.name` for any package without a
+// machine-readable SPDX identifier (e.g. tiktoken ships a 1077-char MIT
+// body). Those values are never used as identifiers, so the only thing the
+// cap needs to do is bound memory; 256 KiB clears the longest real licence
+// text (GPL-3.0 is ~35 KiB, ~48 KiB base64-encoded) with room to spare.
 func DefaultSBOMLimits() SBOMLimits {
 	return SBOMLimits{
 		MaxBytes:        500 * 1024 * 1024,
 		MaxComponents:   500000,
 		MaxDepth:        16,
 		MaxStringLength: 1024,
+		MaxTextLength:   256 * 1024,
 	}
+}
+
+// isFreeTextSBOMField reports whether a (parent container key, key) pair
+// addresses a CycloneDX field the spec defines as free-form prose rather than
+// an identifier. Prose fields get MaxTextLength instead of MaxStringLength.
+//
+// parent is the object/array key the value's enclosing container hangs off,
+// which is what distinguishes `components[].name` (an identifier — capped
+// tightly) from `licenses[].license.name` (free text — a licence body).
+func isFreeTextSBOMField(parent, key string) bool {
+	switch key {
+	case "description", "copyright", "comment":
+		// component/metadata prose and externalReferences[].comment.
+		return true
+	case "name":
+		return parent == "license"
+	case "content":
+		// licenses[].license.text.content — base64 licence attachment.
+		return parent == "text"
+	case "value":
+		// properties[].value — generators stash arbitrary blobs here.
+		return parent == "properties"
+	case "text":
+		// annotations[].text.
+		return parent == "annotations"
+	}
+	return false
 }
 
 // ValidateContentType returns nil if ct is one of the accepted CycloneDX media types.
@@ -61,6 +100,16 @@ func ValidateSBOMStructure(body []byte, limits SBOMLimits) (componentCount int, 
 		return 0, fmt.Errorf("%w: empty body", ErrInvalidSBOM)
 	}
 
+	textLimit := limits.MaxTextLength
+	if textLimit <= 0 {
+		textLimit = DefaultSBOMLimits().MaxTextLength
+	}
+	if limits.MaxStringLength > textLimit {
+		// A caller that widened the identifier cap must not end up with a
+		// *tighter* cap on prose fields.
+		textLimit = limits.MaxStringLength
+	}
+
 	dec := json.NewDecoder(strings.NewReader(string(body)))
 	dec.UseNumber()
 
@@ -71,6 +120,40 @@ func ValidateSBOMStructure(body []byte, limits SBOMLimits) (componentCount int, 
 	expectKey := true
 	currentKey := ""
 	rootDepth := -1 // depth at the moment we entered the top-level object
+
+	// stack mirrors the currently-open containers. Each frame records the key
+	// the container hangs off — so a string value's enclosing container key is
+	// the top frame's — plus whether it is an object, which is what decides
+	// where keys can appear at all: object members alternate key/value, array
+	// elements are always values. Containers opened directly inside an array
+	// inherit the array's key (`licenses` -> `[` -> `{` all read as
+	// "licenses"), which is what makes `licenses[].license.name` addressable.
+	type frame struct {
+		key      string
+		isObject bool
+	}
+	var stack []frame
+	parentKey := func() string {
+		if len(stack) == 0 {
+			return ""
+		}
+		return stack[len(stack)-1].key
+	}
+	inObject := func() bool {
+		return len(stack) > 0 && stack[len(stack)-1].isObject
+	}
+	push := func(isObject bool) {
+		p := currentKey
+		if p == "" {
+			p = parentKey()
+		}
+		stack = append(stack, frame{key: p, isObject: isObject})
+	}
+	pop := func() {
+		if len(stack) > 0 {
+			stack = stack[:len(stack)-1]
+		}
+	}
 
 	for {
 		tok, terr := dec.Token()
@@ -97,6 +180,8 @@ func ValidateSBOMStructure(body []byte, limits SBOMLimits) (componentCount int, 
 				if depth > limits.MaxDepth {
 					return 0, fmt.Errorf("%w: depth > %d", ErrInvalidSBOM, limits.MaxDepth)
 				}
+				push(true)
+				currentKey = ""
 				expectKey = true
 			case '[':
 				depth++
@@ -107,37 +192,53 @@ func ValidateSBOMStructure(body []byte, limits SBOMLimits) (componentCount int, 
 					insideComponents = true
 					componentDepth = depth
 				}
+				push(false)
+				currentKey = ""
 				expectKey = false
 			case '}':
 				if insideComponents && depth == componentDepth {
 					// closing the components array? actually [] closes
 				}
 				depth--
-				expectKey = true
+				pop()
+				currentKey = ""
+				// A container that just closed was itself a value; the next
+				// token is a key only if the *enclosing* container is an object.
+				expectKey = inObject()
 			case ']':
 				if insideComponents && depth == componentDepth {
 					insideComponents = false
 					componentDepth = -1
 				}
 				depth--
-				expectKey = true
+				pop()
+				currentKey = ""
+				expectKey = inObject()
 			}
 		case string:
 			if expectKey {
 				currentKey = t
 				expectKey = false
 			} else {
-				if len(t) > limits.MaxStringLength {
-					return 0, fmt.Errorf("%w: string >%d chars at key %q", ErrInvalidSBOM, limits.MaxStringLength, currentKey)
+				maxLen := limits.MaxStringLength
+				if isFreeTextSBOMField(parentKey(), currentKey) {
+					maxLen = textLimit
+				}
+				if len(t) > maxLen {
+					return 0, fmt.Errorf("%w: string >%d chars at key %q", ErrInvalidSBOM, maxLen, currentKey)
 				}
 				if currentKey == "bomFormat" && t == "CycloneDX" {
 					bomFormatSeen = true
 				}
-				expectKey = true
+				// Array elements are always values — only object members
+				// alternate. Without this, the second element of a string array
+				// would be mistaken for a key and could lend its name (e.g.
+				// "description") to the next element's length cap.
+				expectKey = inObject()
 				currentKey = ""
 			}
 		default:
-			expectKey = true
+			expectKey = inObject()
 			currentKey = ""
 			_ = t
 		}

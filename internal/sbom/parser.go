@@ -104,12 +104,7 @@ func Parse(data []byte) (ExtractResult, error) {
 			case lw.License.ID != "":
 				set[strings.TrimSpace(lw.License.ID)] = struct{}{}
 			case lw.License.Name != "":
-				// Try alias normalization.
-				if id, ok := nameAliasToID(lw.License.Name); ok {
-					set[id] = struct{}{}
-				} else {
-					set[strings.TrimSpace(lw.License.Name)] = struct{}{}
-				}
+				set[normalizeLicenseName(lw.License.Name)] = struct{}{}
 			}
 		}
 	}
@@ -139,6 +134,59 @@ func Parse(data []byte) (ExtractResult, error) {
 		Licenses:       ids,
 		Generator:      generator,
 	}, nil
+}
+
+// maxLicenseNameLen bounds what we are willing to store as a license
+// identifier. The longest real SPDX ID is well under 60 chars; anything past
+// this is prose, not an identifier.
+const maxLicenseNameLen = 128
+
+// normalizeLicenseName turns a CycloneDX `licenses[].license.name` value into
+// something usable as a license identifier.
+//
+// `license.name` is free-form text per the CycloneDX spec, and `trivy image`
+// puts the *entire license body* there whenever a package ships a LICENSE file
+// with no machine-readable SPDX identifier (tiktoken, for example, yields a
+// 1077-char MIT text). Storing that blob verbatim in
+// `sbom_metadata.licenses_json` would poison policy matching and the UI, so:
+//
+//  1. try the alias table on the whole value (the common short-name case);
+//  2. for multi-line / oversized values, retry the alias table on the first
+//     non-empty line — full license texts almost always start with their own
+//     title ("MIT License", "Apache License"), which recovers the real ID;
+//  3. otherwise keep the first line, truncated to maxLicenseNameLen, so
+//     policy `unknown_action` still sees a stable, human-readable marker.
+func normalizeLicenseName(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if id, ok := nameAliasToID(trimmed); ok {
+		return id
+	}
+	if len(trimmed) <= maxLicenseNameLen && !strings.ContainsAny(trimmed, "\r\n") {
+		return trimmed
+	}
+	first := firstNonEmptyLine(trimmed)
+	if id, ok := nameAliasToID(first); ok {
+		return id
+	}
+	return truncateRunes(first, maxLicenseNameLen)
+}
+
+func firstNonEmptyLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		if l := strings.TrimSpace(line); l != "" {
+			return l
+		}
+	}
+	return ""
+}
+
+// truncateRunes cuts s to at most n runes without splitting a UTF-8 sequence.
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return strings.TrimSpace(string(r[:n]))
 }
 
 // nameAliasToID returns the canonical SPDX ID for common non-standard
