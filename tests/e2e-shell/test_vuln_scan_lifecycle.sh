@@ -210,4 +210,32 @@ test_vuln_scan_lifecycle() {
         log_skip "Vuln-scan: only one scan run exists, cursor round-trip skipped"
     fi
 
+    # ------------------------------------------------------------------
+    # 8. Regression: `trivy image` writes the entire license body into
+    # licenses[].license.name for packages with no machine-readable SPDX id
+    # (tiktoken 0.12.0 → 1077 chars of MIT text). That field is free-form per
+    # the CycloneDX spec, so it must NOT hit the 1024-char identifier cap —
+    # before the two-tier cap every image SBOM containing such a package was
+    # rejected with 422.
+    # ------------------------------------------------------------------
+    local license_body
+    license_body="MIT License\\n\\nCopyright (c) 2022 OpenAI\\n\\n"
+    local i
+    for i in $(seq 1 20); do
+        license_body+="Permission is hereby granted, free of charge, to any person obtaining a copy. "
+    done
+    local lic_component="e2e-license-text-$$"
+    local lic_sbom
+    lic_sbom=$(printf '{"bomFormat":"CycloneDX","specVersion":"1.5","components":[{"type":"library","name":"tiktoken","version":"0.12.0","purl":"pkg:pypi/tiktoken@0.12.0","licenses":[{"license":{"name":"%s"}}]}]}' "$license_body")
+    local lic_status
+    lic_status=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+        "${E2E_ADMIN_URL}/api/v1/projects/default/components/${lic_component}/scans" \
+        "${upload_auth[@]}" \
+        -H "Content-Type: application/vnd.cyclonedx+json" \
+        --data-binary "$lic_sbom")
+    if [ "$lic_status" = "202" ] || [ "$lic_status" = "200" ]; then
+        log_pass "Vuln-scan: SBOM with full license text in license.name accepted (${lic_status})"
+    else
+        log_fail "Vuln-scan: full license text in license.name expected 202, got ${lic_status}"
+    fi
 }

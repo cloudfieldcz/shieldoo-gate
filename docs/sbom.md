@@ -249,6 +249,18 @@ Without these, scanners like Dependency-Track see `Django_filter` and
   and land in `license.name` — the library case-folds but does not migrate
   deprecated→current, so emitting them as `license.id` would put a
   non-canonical value in the SPDX-enum slot.
+- **Intake-side license-name normalisation** (`internal/sbom/parser.go`, used
+  for SGW's own license-policy matching — not for SBOM output) treats
+  `licenses[].license.name` as the free-form field the spec says it is.
+  `trivy image` puts the whole LICENSE body there whenever a package has no
+  machine-readable SPDX identifier, so a name that is multi-line or longer
+  than 128 chars is not stored verbatim: the alias table is retried against
+  the text's own title line (`"MIT License\n\nCopyright (c) …"` → `MIT`), and
+  anything still unrecognised is truncated to 128 chars (no SPDX id comes
+  close to that length). Uploaded SBOMs keep the full text — only the
+  identifier derived into `sbom_metadata.licenses_json` is normalised. The
+  upload validator's matching prose cap is documented in
+  [docs/vulnerability-scan.md](vulnerability-scan.md#security-model).
 - `hashes[].alg` is `SHA-256` (case-sensitive enum value from the schema).
 - `serialNumber` is an RFC 4122 UUID in URN form (`urn:uuid:<uuid>`),
   matching the CycloneDX schema regex
