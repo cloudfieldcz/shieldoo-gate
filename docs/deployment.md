@@ -86,9 +86,37 @@ The main Dockerfile (`docker/Dockerfile`) uses a multi-stage build:
 
 The scanner-bridge has its own Dockerfile (`scanner-bridge/Dockerfile`) that:
 1. Installs `uv` for Python package management
-2. Installs pinned dependencies from `requirements.txt`
+2. Creates a virtualenv at `/opt/venv` and installs pinned dependencies from
+   `requirements.txt` into it
 3. Compiles protobuf definitions at build time
-4. Runs `python main.py` as the entrypoint
+4. Runs `python main.py` as the entrypoint (`/opt/venv/bin` is first on `PATH`)
+
+### Why the venv, and why the base image is stuck on Python 3.13
+
+Dependencies live in `/opt/venv` rather than the interpreter's own
+`site-packages` because that path contains **no Python version number**. The
+runtime stage only has to `COPY --from=builder /opt/venv /opt/venv`, so bumping
+the base image is a one-line `FROM` change. The previous `--system` install
+forced the runtime stage to name `/usr/local/lib/python3.13/site-packages`
+verbatim, and every base-image bump failed on a path that no longer existed.
+
+**The base image cannot move to Python 3.14 yet.** The blocker is upstream, not
+the paths:
+
+- `guarddog` (all releases through 3.1.0, and `main`) constrains `pygit2 >=1.11,<1.19`.
+- `pygit2` publishes `cp314` wheels only from **1.19.0** onward; 1.18.x stops at `cp313`.
+
+On 3.14 `uv` therefore falls back to the pygit2 **sdist**, which links against the
+builder's `libgit2-dev` (`libgit2.so.1.9`). That shared library is deliberately
+absent from the runtime stage (see [ADR-010](adr/ADR-010-base-image-security-patching.md)),
+so the image fails its build-time import check with
+`ImportError: libgit2.so.1.9: cannot open shared object file`.
+
+The build-time check `python -c "import _cffi_backend; import pygit2; import grpc; import guarddog"`
+in the runtime stage exists to catch exactly this — an interpreter bump must fail
+the build, never the first production scan. Installing a runtime `libgit2` to work
+around it is **not** the intended fix: it re-adds native CVE surface that ADR-010
+removed. Revisit the bump once GuardDog relaxes its `pygit2` bound.
 
 ## Recommended production sizing
 
