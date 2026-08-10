@@ -89,7 +89,28 @@ The scanner-bridge has its own Dockerfile (`scanner-bridge/Dockerfile`) that:
 2. Creates a virtualenv at `/opt/venv` and installs pinned dependencies from
    `requirements.txt` into it
 3. Compiles protobuf definitions at build time
-4. Runs `python main.py` as the entrypoint (`/opt/venv/bin` is first on `PATH`)
+4. Upgrades the base image's own `pip` from `pip-bootstrap.txt` under
+   `--require-hashes` (see below)
+5. Runs `python main.py` as the entrypoint (`/opt/venv/bin` is first on `PATH`)
+
+### Why pip is hash-pinned in its own file
+
+`pip` ships with the base image and is not a runtime dependency of the bridge,
+but the vulnerability scanner still sees it, so it is upgraded to a patched
+release at build time. That upgrade reads `scanner-bridge/pip-bootstrap.txt`
+under `--require-hashes` rather than passing `pip==<version>` inline: an exact
+version alone still trusts the index to serve the same bytes under that version
+number, which is precisely the threat model this project exists to address.
+
+Note that the base image usually already ships the pinned version, so the step
+is a no-op and the digests are **not** exercised on a normal build. When bumping
+the pin, take the digests from `https://pypi.org/pypi/pip/<version>/json`
+(`urls[].digests.sha256`) — never from a local download — and verify them with a
+forced download rather than trusting a green build:
+
+```
+docker run --rm --user root <image> /usr/local/bin/python -m pip install --no-cache-dir --require-hashes --force-reinstall --ignore-installed -r /app/pip-bootstrap.txt
+```
 
 ### Why the venv, and why the base image is stuck on Python 3.13
 

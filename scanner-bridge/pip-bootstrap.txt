@@ -1,0 +1,17 @@
+# Hash-pinned bootstrap for the base-image pip.
+#
+# pip ships with the python:slim base image and is NOT a runtime dependency of
+# the bridge (which only runs `python main.py` out of /opt/venv), but the vuln
+# scanner still sees it, so it is upgraded to a patched release at build time.
+# 26.1.2 fixes CVE-2026-3219, CVE-2026-6357 and PYSEC-2026-196.
+#
+# It lives in its own file rather than inline in the Dockerfile so the install
+# can run under `--require-hashes`: an exact version alone still lets a
+# compromised index serve different bytes under that version number. Both the
+# wheel and the sdist digest are listed; pip verifies whichever file it picks.
+#
+# To bump: take the digests from https://pypi.org/pypi/pip/<version>/json
+# (`urls[].digests.sha256`) — never from a local download.
+pip==26.1.2 \
+    --hash=sha256:382ff9f685ee3bc25864f820aa50505825f10f5458ffff07e30a6d96e5715cab \
+    --hash=sha256:f49cd134c61cf2fd75e0ce2676db03e4054504a5a4986d00f8299ae632dc4605

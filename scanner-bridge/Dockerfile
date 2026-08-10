@@ -101,10 +101,12 @@ RUN python -c "import _cffi_backend; import pygit2; import grpc; import guarddog
 # Upgrade the base-image pip to a patched release. pip is shipped by the base
 # image (not a runtime dependency of the bridge, which only runs `python
 # main.py`), so it is flagged by the scanner but not covered by requirements.txt.
-# 26.1.2 fixes CVE-2026-3219, CVE-2026-6357 and PYSEC-2026-196. Exact-pinned per
-# the MANDATORY version-pinning rule (CLAUDE.md). Addressed by absolute path: the
-# pip being patched is the base image's, not the venv's (the venv has no pip).
-RUN /usr/local/bin/python -m pip install --no-cache-dir --upgrade 'pip==26.1.2'
+# Hash-pinned via pip-bootstrap.txt, not just version-pinned: an exact version
+# alone still trusts the index to serve the same bytes under that version.
+# Addressed by absolute path because the pip being patched is the base image's,
+# not the venv's (the venv has no pip).
+COPY pip-bootstrap.txt .
+RUN /usr/local/bin/python -m pip install --no-cache-dir --require-hashes -r pip-bootstrap.txt
 
 COPY extractors/ extractors/
 COPY extractors_diff/ extractors_diff/
