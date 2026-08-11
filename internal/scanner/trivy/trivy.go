@@ -347,6 +347,33 @@ func (s *TrivyScanner) extractInnerArchives(dir string) {
 	})
 }
 
+// archiveRootEntry reports whether an archive entry name refers to the archive
+// root itself rather than a member — GNU tar emits a leading "./" entry for
+// archives created from a directory. Such an entry extracts to nothing, so it
+// is skipped rather than treated as an escape attempt. A name containing ".."
+// is never a root entry; it falls through to archiveEntryPath and is rejected.
+func archiveRootEntry(name string) bool {
+	trimmed := strings.Trim(filepath.ToSlash(name), "/")
+	return trimmed == "" || trimmed == "."
+}
+
+// archiveEntryPath resolves an archive entry name to a path inside dest,
+// rejecting any entry that would escape it (zip-slip / tar-slip). Archive
+// entry names come from upstream package archives and are fully
+// attacker-controlled, so this is the single gate every extraction write must
+// pass through. Call archiveRootEntry first: a root entry resolves to dest
+// itself and is (correctly) rejected here.
+func archiveEntryPath(dest, name string) (string, error) {
+	// The trailing separator is what makes this safe: "/tmp/ab" must not pass
+	// as being inside "/tmp/a".
+	prefix := filepath.Clean(dest) + string(os.PathSeparator)
+	target := filepath.Join(dest, name)
+	if !strings.HasPrefix(target, prefix) {
+		return "", fmt.Errorf("trivy scanner: archive entry escapes extraction dir: %q", name)
+	}
+	return target, nil
+}
+
 // unzip extracts a ZIP archive into dest. Refuses paths escaping dest
 // (zip-slip protection).
 func unzip(src, dest string) error {
@@ -357,6 +384,9 @@ func unzip(src, dest string) error {
 	defer r.Close()
 
 	for _, f := range r.File {
+		if archiveRootEntry(f.Name) {
+			continue
+		}
 		if err := writeZipEntry(f, dest); err != nil {
 			return err
 		}
@@ -364,11 +394,14 @@ func unzip(src, dest string) error {
 	return nil
 }
 
+// writeZipEntry writes a single ZIP member under dest. Entries carrying
+// symlink mode bits are written as plain files holding the link text — we
+// never create a symlink, so the extraction sandbox stays link-free and later
+// entries cannot be redirected through one.
 func writeZipEntry(f *zip.File, dest string) error {
-	target := filepath.Join(dest, f.Name) //nolint:gosec // validated below
-	rel, err := filepath.Rel(dest, target)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return fmt.Errorf("trivy scanner: zip-slip detected: %q", f.Name)
+	target, err := archiveEntryPath(dest, f.Name)
+	if err != nil {
+		return err
 	}
 	if f.FileInfo().IsDir() {
 		return os.MkdirAll(target, 0o755)
@@ -423,10 +456,12 @@ func untar(src, dest string, gzipped bool) error {
 		if err != nil {
 			return fmt.Errorf("trivy scanner: tar next: %w", err)
 		}
-		target := filepath.Join(dest, hdr.Name) //nolint:gosec // validated below
-		rel, relErr := filepath.Rel(dest, target)
-		if relErr != nil || strings.HasPrefix(rel, "..") {
-			return fmt.Errorf("trivy scanner: tar-slip detected: %q", hdr.Name)
+		if archiveRootEntry(hdr.Name) {
+			continue
+		}
+		target, pathErr := archiveEntryPath(dest, hdr.Name)
+		if pathErr != nil {
+			return pathErr
 		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:

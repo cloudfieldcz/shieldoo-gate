@@ -212,6 +212,17 @@ Trivy scans for known CVEs, misconfigurations, and secrets. It runs as a subproc
 
 Trivy is the primary scanner for Docker images, where it scans image layers for vulnerabilities. For other ecosystems, it provides CVE detection complementary to the built-in heuristic scanners.
 
+#### Archive Extraction Safety
+
+Before the license extractor can walk an artifact, `prepareScanPath` unpacks it into a fresh `os.MkdirTemp` sandbox (`unzip` / `untar` in `internal/scanner/trivy/trivy.go`). Archive member names come from the **upstream package archive and are fully attacker-controlled**, so every extraction write passes through a single gate, `archiveEntryPath(dest, name)`:
+
+- The resolved target must be strictly under `filepath.Clean(dest) + os.PathSeparator`. The trailing separator is load-bearing — without it `/tmp/ab` would pass as being inside `/tmp/a`. Any member that escapes (`../…`, `pkg/../../…`) aborts the whole extraction with an error; for ZIP that fails the scan, for TAR.GZ it falls back to plain decompression. Failing the archive closed is deliberate: a package that tries to write outside its sandbox is not one we want to serve on partial extraction.
+- Absolute member names are not special-cased — `filepath.Join` drops the leading separator, so `/etc/passwd` lands at `<dest>/etc/passwd`.
+- `archiveRootEntry` skips the archive's own root member (`.`, `./`, `/`), which GNU tar emits for archives built from a directory. It resolves to `dest` itself and would otherwise be rejected as an escape, failing extraction of otherwise-valid tarballs. A name containing `..` is never treated as a root entry — it falls through to the escape check.
+- **The sandbox is symlink-free by construction.** `untar` skips `tar.TypeSymlink`/`TypeLink` and all other non-regular entries; `unzip` writes a member carrying symlink mode bits as a plain file holding the link text. Since no symlink is ever materialized, a later member cannot be redirected through one out of the sandbox.
+
+The guard is written as an explicit `strings.HasPrefix` prefix check rather than a `filepath.Rel` + `HasPrefix("..")` comparison. Both are sound against traversal, but the `Rel` form additionally rejected legitimate members literally named `..foo`, and CodeQL's `go/zipslip` cannot model it as a sanitizer (it raised two false-positive high alerts). Keep the current form when touching this code. Coverage lives in `internal/scanner/trivy/extract_test.go`.
+
 #### License Metadata Extraction
 
 Trivy only detects packages from lockfiles, so the Go wrapper additionally walks the unpacked artifact and reads each ecosystem's canonical metadata file directly (`internal/scanner/trivy/license_extractor.go`). The extracted strings feed `ScanResult.Licenses` and the license policy. Per-ecosystem sources:
