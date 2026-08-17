@@ -14,7 +14,7 @@ urllib3==2.7.0                # CVE-2026-44431 / CVE-2026-44432
 pygments==2.20.0              # CVE-2026-4539
 idna==3.18                    # CVE-2026-45409 / GHSA-65pc-fj4g-8rjx
 pyjwt[crypto]==2.13.0         # PYSEC-2026-175 / -177 / -178 / -179
-setuptools==83.0.0            # GHSA / dependabot #36 — MANIFEST.in exclusion bypass
+setuptools==84.0.0            # GHSA / dependabot #36 — MANIFEST.in exclusion bypass
                               # in sdist via NFC/NFD collision. Transitive via
                               # grpcio-tools; pinned here so uv keeps it in the lock.
 # Removed with the guarddog 2.x -> 3.0 bump: starlette / python-multipart were
