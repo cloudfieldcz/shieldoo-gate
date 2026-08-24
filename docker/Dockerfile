@@ -26,7 +26,7 @@ RUN npm run build
 # (crypto/x509). Keep in lockstep with go.mod's `go` directive and the CI
 # GO_VERSION in .github/workflows/release.yml so all build paths embed the
 # same patched stdlib.
-FROM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS go-builder
+FROM golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc AS go-builder
 
 ARG SGW_TOKEN=""
 # Same rationale as stage 1 — identify as project "shieldoo-gate" when
