@@ -183,14 +183,19 @@ August, an upgrade may be a no-op.
 
 After phase 1, re-read `gate-image` findings and confirm the residual `stdlib`,
 `go-git`, `oras-go`, `grpc 1.82.1` rows belong to `/usr/local/bin/trivy` and not to
-our binary. Then, in order of preference:
+our binary.
 
-1. **Wait for trivy 0.75.0** if it lands soon — it will be rebuilt against a patched Go and updated deps. Track upstream; this is the only fix that actually removes the risk.
-2. **In the interim**, create `cve_ignores` rows for `gate-image` with a short `expires_at` (30 days) and a reason naming the bundled trivy version. Do *not* suppress `stdlib` CVEs unless phase 1 confirms our binary reports 1.27.1 separately — suppression is version-blind (root cause 4).
+**Treat the whole bundled-trivy residue as one decision, not as a list of CVEs.**
+They all have the same origin (one vendored binary), the same fix (one upstream
+trivy release) and the same owner. Adjudicating them individually produces a
+stream of near-identical tickets and buys nothing. In order of preference:
+
+1. **Wait for the next trivy release** — it will be rebuilt against a patched Go and updated deps, and clears the whole set at once. Track upstream; this is the only fix that actually removes the risk. Trivy 0.74.0 (2026-08-14) is current, so there is nothing to bump to today.
+2. **In the interim**, one batched `cve_ignores` set for `gate-image` with a short `expires_at` (30 days) and a single shared reason naming the bundled trivy version — written in one pass when the residue is confirmed, not one row at a time as findings are triaged. Do *not* suppress `stdlib` CVEs unless phase 1 confirms our binary reports 1.27.1 separately — suppression is version-blind (root cause 4).
 3. **Do not** blanket-skip `/usr/local/bin/trivy` from the image scan. Trivy parses untrusted artifact content inside the gate; its `go-git` symlink traversal and `oras-go` hardlink issues are on a real attack path, and hiding them removes the signal that would tell us when upstream ships a fix.
 
-**Acceptance:** every remaining `gate-image` HIGH is either fixed or has an unexpired,
-justified `cve_ignores` row.
+**Acceptance:** every remaining `gate-image` HIGH is either fixed or covered by the
+batched, unexpired `cve_ignores` set.
 
 ### Phase 4 — Stale scan-run reaper (PR, prevents recurrence)
 
@@ -223,6 +228,20 @@ Worth an ADR if the fix changes `builtin-threat-feed`'s verdict semantics (e.g. 
 
 **Acceptance:** `curl -sSI https://feed.shieldoo.io/malicious-packages.json` returns 200
 from prod; logs show a successful refresh.
+
+## 4. Working rule for the dependency half of this
+
+Version bumps are batched, not chased one by one. A component's minor or patch
+version moving is not by itself a reason to act — the indication is what matters:
+a CVE that actually reaches our code path, a scanner finding on a component we
+ship, or a stated upstream advisory. Absent an indication, a minor bump waits for
+the next grouped dependency PR.
+
+Concretely: phase 3's trivy residue is one decision, not fifteen; the go.mod
+findings in §1.1 were already fixed as grouped bumps on `main` and ship as one
+release; and residual base-image OS packages get cleared by a periodic upgrade
+(phase 2) rather than by per-package tickets. Where a batch is genuinely blocked
+on one member, split that member out — not the batch.
 
 ## 4. Suggested order
 
