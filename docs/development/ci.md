@@ -111,6 +111,12 @@ in Rekor — no long-lived signing key). See
   is republished as `shdg-<ver>.intoto.jsonl`. Same keyless Sigstore material,
   scanner-readable names. See [ADR-018](../adr/ADR-018-build-provenance-and-signing.md).
 
+Permissions are least-privilege: top-level `contents: read`, with each job
+widening only the scopes it needs (`packages`/`id-token`/`attestations` on the
+image and release jobs). New actions are SHA-pinned per
+[ADR-015](../adr/ADR-015-sha-pin-github-actions.md). The release notes for each
+tag embed the exact `cosign verify` / `gh attestation verify` commands.
+
 #### Runtime-stage OS package upgrades
 
 Both release Dockerfiles pin their base image by digest
@@ -149,12 +155,6 @@ stage of *both* matrix legs to always re-execute, while `ui-builder`/
 `go-builder` (and scanner-bridge's builder stage) keep their expensive
 layers cached.
 
-Permissions are least-privilege: top-level `contents: read`, with each job
-widening only the scopes it needs (`packages`/`id-token`/`attestations` on the
-image and release jobs). New actions are SHA-pinned per
-[ADR-015](../adr/ADR-015-sha-pin-github-actions.md). The release notes for each
-tag embed the exact `cosign verify` / `gh attestation verify` commands.
-
 ## UI linting
 
 ESLint uses a flat config (`ui/eslint.config.js`, ESLint 10) with the
@@ -179,7 +179,7 @@ blocked, which is not always the semver level it looks like (a docker tag bump
 | Dependency | Pinned at | Blocked by | Release condition |
 |---|---|---|---|
 | `typescript` | 6.0.3 | `typescript-eslint` (incl. its canary) declares `peer typescript >=4.8.4 <6.1.0`, so TS 7 fails `npm ci` with `ERESOLVE` and leaves the type-aware lint rules without a supported parser | `typescript-eslint`'s peer range admits 7.x |
-| `python` (scanner-bridge base image) | 3.13.14-slim | `guarddog` (all releases through 3.2.0, and `main`) constrains `pygit2 >=1.11,<1.19`, and `pygit2` ships `cp314` wheels only from 1.19.0 on. On 3.14 `uv` falls back to the pygit2 sdist, which links the builder's `libgit2-dev`; that `.so` is absent from the runtime stage (ADR-010), so the image fails its build-time import check with `libgit2.so.1.9: cannot open shared object file` (#184) | a `guarddog` release that allows `pygit2 >=1.19` |
+| `python` (scanner-bridge base image) | 3.13.15-slim | `guarddog` (all releases through 3.2.0, and `main`) constrains `pygit2 >=1.11,<1.19`, and `pygit2` ships `cp314` wheels only from 1.19.0 on. On 3.14 `uv` falls back to the pygit2 sdist, which links the builder's `libgit2-dev`; that `.so` is absent from the runtime stage (ADR-010), so the image fails its build-time import check with `libgit2.so.1.9: cannot open shared object file` (#184) | a `guarddog` release that allows `pygit2 >=1.19` |
 
 Removing a hold means deleting the `ignore:` entry **and** the row above in the
 same PR.

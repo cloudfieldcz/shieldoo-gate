@@ -64,7 +64,7 @@ RUN python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. proto/sca
 FROM python:3.13.15-slim@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285 AS runtime
 
 # Pull Debian-security patches for base-image OS packages on top of the pinned
-# base tag, then strip perl. The tag (python:3.13.14-slim) is pinned for
+# base tag, then strip perl. The tag (python:3.13.15-slim) is pinned for
 # reproducibility; `apt-get upgrade` adds whatever fixed package versions
 # Debian-security has published at build time (e.g. openssl 3.5.6-1~deb13u2 for
 # CVE-2026-45447). `perl-base` is a Debian "essential" package shipped by the
