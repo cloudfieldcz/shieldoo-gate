@@ -287,8 +287,16 @@ policy:
 # ─── Threat Feed ───────────────────────────────────────────────────
 threat_feed:
   enabled: true                       # Enable community threat feed
-  url: "https://feed.shieldoo.io/malicious-packages.json"  # Feed URL
+  url: "https://feed.shieldoo.io/malicious-packages.json"  # Feed URL — REQUIRED when enabled
   refresh_interval: "1h"             # How often to refresh the feed
+
+
+**`enabled: true` with an empty `url` is rejected at startup.** Without that check the
+gate starts and two surfaces then disagree: no refresh client is built, so
+`shieldoo_gate_threat_feed_enabled` reads 0 ("feed off, nothing to alert on"), while
+`GET /api/v1/health` reports `builtin-threat-feed` permanently unhealthy because the
+table it queries never fills. The deployment runs with the known-malicious-hash layer
+switched off while believing it is on. Set the url, or set `enabled: false`.
 
 # ─── Rescan Scheduler (v1.1) ──────────────────────────────────────
 # Processes only manually triggered rescans (PENDING_SCAN status set via

@@ -809,6 +809,10 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if err := c.validateThreatFeed(); err != nil {
+		return err
+	}
+
 	for _, p := range []struct {
 		eco string
 		set UpstreamSet
@@ -1059,6 +1063,26 @@ func (c *Config) validateProxyAuth() error {
 }
 
 // validateTyposquat checks typosquatting scanner configuration.
+// validateThreatFeed rejects `threat_feed.enabled: true` with no `url`.
+//
+// Without this the two surfaces that report on the feed contradict each other. main.go
+// only builds a threatfeed.Client when both the flag and the URL are set, so nothing
+// ever publishes shieldoo_gate_threat_feed_enabled and the metric reads 0 — "feed off,
+// nothing to alert on". ThreatFeedChecker, meanwhile, is handed the raw flag and
+// reports builtin-threat-feed permanently unhealthy on /api/v1/health, because the
+// table it queries stays empty forever. Neither is wrong on its own; together they say
+// opposite things about the same feed, and the deployment silently runs with the
+// known-malicious-hash layer switched off while believing it is on.
+//
+// Failing at startup is the honest answer: the operator asked for a feed and did not
+// say where it lives.
+func (c *Config) validateThreatFeed() error {
+	if c.ThreatFeed.Enabled && strings.TrimSpace(c.ThreatFeed.URL) == "" {
+		return fmt.Errorf("config: threat_feed.url is required when threat_feed.enabled is true (set the url, or set enabled: false)")
+	}
+	return nil
+}
+
 func (c *Config) validateTyposquat() error {
 	tc := c.Scanners.Typosquat
 	if !tc.Enabled {
