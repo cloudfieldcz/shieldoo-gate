@@ -95,6 +95,8 @@ func (s *ManifestRescanScheduler) RunOnce(ctx context.Context) {
 	}
 	defer s.running.Store(false)
 
+	s.logInFlightSkips(ctx)
+
 	type row struct {
 		ID         int64  `db:"id"`
 		LastScanID *int64 `db:"last_scan_id"`
@@ -135,6 +137,52 @@ func (s *ManifestRescanScheduler) RunOnce(ctx context.Context) {
 		}(c.ID, *c.LastScanID)
 	}
 	wg.Wait()
+}
+
+// logInFlightSkips reports every enabled component that the selection query below is
+// about to exclude because it has a pending/running scan_runs row.
+//
+// This is the defect that let scan_runs.id=355 wedge a component for three months: the
+// exclusion was completely silent, so nothing distinguished "no rescan needed" from
+// "rescans permanently disabled for this component". Only components with a
+// last_scan_id are reported — one without has never had an SBOM pushed and is skipped
+// by rescanOne anyway, so its exclusion carries no information.
+//
+// Deliberately not rate-limited. At the default 6h cadence this is four lines a day per
+// affected component, and StaleRunReaper bounds it in time: a genuinely wedged row is
+// marked failed within its threshold, after which the line stops on its own. A line for
+// a scan that is merely concurrent (a manual rescan overlapping the sweep) carries a
+// small age_seconds and is self-evidently benign. Suppressing repeats would reintroduce
+// exactly the silence this exists to remove.
+func (s *ManifestRescanScheduler) logInFlightSkips(ctx context.Context) {
+	type skipRow struct {
+		ComponentID int64     `db:"component_id"`
+		RunID       int64     `db:"run_id"`
+		Status      string    `db:"status"`
+		StartedAt   time.Time `db:"started_at"`
+	}
+	var skipped []skipRow
+	err := s.db.SelectContext(ctx, &skipped,
+		`SELECT c.id AS component_id, sr.id AS run_id, sr.status, sr.started_at
+		 FROM components c
+		 JOIN scan_runs sr ON sr.component_id = c.id
+		 WHERE c.enabled = TRUE
+		   AND c.last_scan_id IS NOT NULL
+		   AND sr.status IN ('pending', 'running')
+		 ORDER BY sr.id ASC`)
+	if err != nil {
+		log.Warn().Err(err).Msg("manifest_rescan: select in-flight components")
+		return
+	}
+	now := time.Now().UTC()
+	for _, r := range skipped {
+		log.Warn().
+			Int64("component_id", r.ComponentID).
+			Int64("run_id", r.RunID).
+			Str("run_status", r.Status).
+			Dur("age", now.Sub(r.StartedAt).Round(time.Second)).
+			Msg("manifest_rescan: component skipped, scan already in flight")
+	}
 }
 
 func (s *ManifestRescanScheduler) rescanOne(ctx context.Context, componentID, lastRunID int64) {
