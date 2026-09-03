@@ -106,8 +106,9 @@ Two structural problems made remediation harder than it should be:
    matches `(component, cve, package_name)` with **version excluded from the
    predicate** ([`store.go` ApplySuppression](../../internal/component/store.go)), so a
    `stdlib`-keyed ignore on an image would also mask a *future* stdlib regression in
-   our own binary. Trivy is pinned deliberately (CycloneDX 1.6 support, parity with
-   the `shdg`-bundled Trivy) and was itself the target of a 2026 supply-chain
+   our own binary. Trivy is pinned deliberately (must decode CycloneDX 1.6+ SBOMs — Trivy
+   itself now emits 1.7 as of 0.72+ — parity with the `shdg`-bundled Trivy)
+   and was itself the target of a 2026 supply-chain
    incident, so its version is not bumped reflexively to chase a stdlib finding.
 
 ## Consequences
