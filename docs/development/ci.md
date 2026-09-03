@@ -50,44 +50,6 @@ also verify the four `expectedChecksums` entries in `cmd/shdg/trivy.go` by
 downloading the real release tarballs and hashing them — never trust the
 upstream `checksums.txt` alone (see the comment above `expectedChecksums`).
 
-#### Runtime-stage OS package upgrades
-
-Both release Dockerfiles pin their base image by digest
-([ADR-014](../adr/ADR-014-base-image-digest-pinning.md)) but also run an
-upgrade of already-installed OS packages in the runtime stage, on top of that
-pinned base: `docker/Dockerfile`'s `apk upgrade --no-cache` (gate, alpine) and
-`scanner-bridge/Dockerfile`'s `apt-get upgrade -y` (scanner-bridge, Debian).
-This **does** widen what the runtime layer can pull in at build time — for
-`docker/Dockerfile` it now covers the entire installed base set, not just the
-two packages `apk add` itself installs — and that is a deliberate trade-off,
-not a false one: security currency, bought at the cost of byte-for-byte
-reproducibility of the OS layer, same framing as
-[ADR-010](../adr/ADR-010-base-image-security-patching.md)'s Consequences. What
-bounds the widened surface is that both package managers verify fetched
-package signatures against the distro keys baked into the pinned base image
-(`/etc/apk/keys` for apk, the base image's APT keyring for apt), fetched over
-HTTPS — the base digest pin is not what's doing the integrity work here, the
-package manager's own signature check is. On a build that actually executes
-this layer, the upgrade picks up OS-security fixes published after the base
-tag was cut (e.g. `libssl3`/`libcrypto3` in alpine's `v3.24` repo) instead of
-waiting for the next base-tag bump. See ADR-010 for the full rationale and the
-`perl-base` force-purge that goes with it on the scanner-bridge side.
-
-**Does this layer actually execute on every release?** Only if it isn't
-served from cache. `release.yml`'s `docker` job caches every layer via
-`type=gha`, keyed on the `RUN` string plus the parent (pinned) base
-digest — neither of which changes release to release, so without
-intervention a cache hit would keep re-shipping whatever OS package
-versions were current when the layer was first cached, indefinitely, with
-nothing to detect the regression (`vuln-scan-image`'s `--fail-on critical`
-wouldn't catch a re-appearing HIGH). This applies equally to
-`scanner-bridge/Dockerfile`'s `apt-get upgrade` — same job, same cache
-mechanism, same `runtime` stage name. `release.yml`'s build step sets
-`no-cache-filters: runtime` for exactly this reason: it forces the `runtime`
-stage of *both* matrix legs to always re-execute, while `ui-builder`/
-`go-builder` (and scanner-bridge's builder stage) keep their expensive
-layers cached.
-
 ### Security scan (`codeql.yml`)
 
 - **CodeQL** — matrix over `go` and `javascript-typescript`, `security-extended`
@@ -131,6 +93,44 @@ Every released artifact is signed and carries SLSA build provenance using
 **keyless Sigstore** (Fulcio certs from the GitHub Actions OIDC token, recorded
 in Rekor — no long-lived signing key). See
 [ADR-018](../adr/ADR-018-build-provenance-and-signing.md) for the rationale.
+
+#### Runtime-stage OS package upgrades
+
+Both release Dockerfiles pin their base image by digest
+([ADR-014](../adr/ADR-014-base-image-digest-pinning.md)) but also run an
+upgrade of already-installed OS packages in the runtime stage, on top of that
+pinned base: `docker/Dockerfile`'s `apk upgrade --no-cache` (gate, alpine) and
+`scanner-bridge/Dockerfile`'s `apt-get upgrade -y` (scanner-bridge, Debian).
+This **does** widen what the runtime layer can pull in at build time — for
+`docker/Dockerfile` it now covers the entire installed base set, not just the
+two packages `apk add` itself installs — and that is a deliberate trade-off,
+not a false one: security currency, bought at the cost of byte-for-byte
+reproducibility of the OS layer, same framing as
+[ADR-010](../adr/ADR-010-base-image-security-patching.md)'s Consequences. What
+bounds the widened surface is that both package managers verify fetched
+package signatures against the distro keys baked into the pinned base image
+(`/etc/apk/keys` for apk, the base image's APT keyring for apt), fetched over
+HTTPS — the base digest pin is not what's doing the integrity work here, the
+package manager's own signature check is. On a build that actually executes
+this layer, the upgrade picks up OS-security fixes published after the base
+tag was cut (e.g. `libssl3`/`libcrypto3` in alpine's `v3.24` repo) instead of
+waiting for the next base-tag bump. See ADR-010 for the full rationale and the
+`perl-base` force-purge that goes with it on the scanner-bridge side.
+
+**Does this layer actually execute on every release?** Only if it isn't
+served from cache. `release.yml`'s `docker` job caches every layer via
+`type=gha`, keyed on the `RUN` string plus the parent (pinned) base
+digest — neither of which changes release to release, so without
+intervention a cache hit would keep re-shipping whatever OS package
+versions were current when the layer was first cached, indefinitely, with
+nothing to detect the regression (`vuln-scan-image`'s `--fail-on critical`
+wouldn't catch a re-appearing HIGH). This applies equally to
+`scanner-bridge/Dockerfile`'s `apt-get upgrade` — same job, same cache
+mechanism, same `runtime` stage name. `release.yml`'s build step sets
+`no-cache-filters: runtime` for exactly this reason: it forces the `runtime`
+stage of *both* matrix legs to always re-execute, while `ui-builder`/
+`go-builder` (and scanner-bridge's builder stage) keep their expensive
+layers cached.
 
 - **Images** — built with `provenance: mode=max` + `sbom: true` (BuildKit
   attaches SLSA provenance + a CycloneDX SBOM as OCI referrers),
