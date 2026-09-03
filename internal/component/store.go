@@ -521,8 +521,9 @@ func (s *Store) FindActiveIgnoresForRun(ctx context.Context, runID int64) (map[s
 //
 // GetIgnore projects a NULL package_version to "", so NULL and empty string collapse
 // into the same branch here and no SQL NULL comparison is involved. On the findings
-// side the comparison stays a plain equality: a finding with a NULL package_version
-// never matches a version-pinned ignore, which is the fail-closed direction.
+// side the comparison stays a plain equality; scan_findings.package_version is NOT
+// NULL, so a versionless finding carries "" and a version-pinned ignore does not reach
+// it — the fail-closed direction.
 func (s *Store) ApplySuppression(ctx context.Context, ignoreID, runID int64) error {
 	ignore, err := s.GetIgnore(ctx, ignoreID)
 	if err != nil {
