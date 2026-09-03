@@ -3,8 +3,6 @@ package api
 import (
 	"net/http"
 
-	"github.com/rs/zerolog/log"
-
 	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 )
 
@@ -42,9 +40,12 @@ func (s *Server) handleListFeed(w http.ResponseWriter, r *http.Request) {
 //
 // The refresh runs detached from the request: a feed fetch plus upsert can
 // outlast the client's patience, and the caller only needs to know the work
-// started. Errors are reported the way the periodic loop reports them — one
-// escalating log line and the shieldoo_gate_threat_feed_* metrics — not in this
-// response, which is already gone by then.
+// started. The outcome is not in this response — it is already written by then —
+// so the refresher is responsible for reporting it. The wired implementation
+// (threatfeed.Client.RefreshNow) is the same entry point the periodic loop uses,
+// so a manual refresh produces the same escalating log line and moves the same
+// shieldoo_gate_threat_feed_* metrics as a scheduled one. Its error is dropped
+// here rather than logged twice.
 //
 // When no refresher is wired the endpoint reports 501. It previously answered
 // 202 "queued" unconditionally while doing nothing at all, which is the worst
@@ -59,9 +60,7 @@ func (s *Server) handleRefreshFeed(w http.ResponseWriter, _ *http.Request) {
 	refresh := s.feedRefresher
 	ctx := s.detachedCtx()
 	go func() {
-		if err := refresh(ctx); err != nil {
-			log.Warn().Err(err).Msg("manual threat feed refresh failed")
-		}
+		_ = refresh(ctx)
 	}()
 
 	writeJSON(w, http.StatusAccepted, map[string]string{

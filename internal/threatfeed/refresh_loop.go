@@ -44,7 +44,7 @@ func refreshFailureLevel(consecutiveFailures int, entries int64) zerolog.Level {
 // logging each outcome, until ctx is cancelled. It is meant to be run in its
 // own goroutine; refresh errors are never fatal.
 func (c *Client) Run(ctx context.Context, interval time.Duration) {
-	c.refreshAndLog(ctx)
+	_ = c.RefreshNow(ctx)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -53,7 +53,7 @@ func (c *Client) Run(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			c.refreshAndLog(ctx)
+			_ = c.RefreshNow(ctx)
 		}
 	}
 }
@@ -63,9 +63,15 @@ func (c *Client) Run(ctx context.Context, interval time.Duration) {
 // reads as a statistic rather than as a scanner that has stopped detecting.
 const emptyFeedConsequence = "builtin-threat-feed is returning CLEAN for every artifact without checking anything"
 
-// refreshAndLog performs one refresh and emits exactly one log line describing
-// the result, at a level that rises with how bad the situation is.
-func (c *Client) refreshAndLog(ctx context.Context) {
+// RefreshNow performs one refresh and emits exactly one log line describing the
+// result, at a level that rises with how bad the situation is. It returns the
+// refresh error, if any, for callers that need to react to it — the reporting
+// has already happened by then.
+//
+// This is the entry point for out-of-band refreshes (POST /api/v1/feed/refresh)
+// as well as for the periodic loop, so a manually triggered refresh escalates,
+// counts and reports exactly like a scheduled one.
+func (c *Client) RefreshNow(ctx context.Context) error {
 	out := c.refreshOnce(ctx)
 
 	if out.err == nil {
@@ -79,10 +85,10 @@ func (c *Client) refreshAndLog(ctx context.Context) {
 			log.Error().
 				Int64("feed_entries", out.entries).
 				Msg("threat feed refreshed successfully but the feed is empty: " + emptyFeedConsequence)
-			return
+			return nil
 		}
 		log.Info().Int64("feed_entries", out.entries).Msg("threat feed refresh completed")
-		return
+		return nil
 	}
 
 	ev := log.WithLevel(refreshFailureLevel(out.consecutiveFailures, out.entries)).
@@ -98,7 +104,8 @@ func (c *Client) refreshAndLog(ctx context.Context) {
 
 	if out.entries == 0 {
 		ev.Msg("threat feed refresh failed and the local feed is empty: " + emptyFeedConsequence)
-		return
+		return out.err
 	}
 	ev.Msg("threat feed refresh failed; still matching against the last feed contents")
+	return out.err
 }

@@ -529,9 +529,10 @@ func main() {
 	apiServer.SetTrustedProxies(cfg.Server.TrustedProxies)
 	apiServer.SetCSRFAllowedOrigins(cfg.Auth.AllowedOrigins)
 	if feedClient != nil {
-		// Same Refresh the periodic loop calls, so a manual refresh updates the
-		// feed health metrics exactly like a scheduled one.
-		apiServer.SetFeedRefresher(feedClient.Refresh)
+		// Same entry point the periodic loop calls, so a manual refresh logs,
+		// escalates and moves the feed health metrics exactly like a scheduled
+		// one.
+		apiServer.SetFeedRefresher(feedClient.RefreshNow)
 	}
 
 	// Init OIDC authentication (if enabled).

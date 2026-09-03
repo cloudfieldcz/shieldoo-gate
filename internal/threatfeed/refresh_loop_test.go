@@ -63,7 +63,7 @@ func TestClient_RefreshAndLog_EmptyFeedFailure_LogsErrorNamingTheFailOpen(t *tes
 	resetFeedMetrics(t)
 	client := NewClient(testDB(t), "https://feed.example.invalid/feed.json")
 
-	lines := captureLogs(t, func() { client.refreshAndLog(context.Background()) })
+	lines := captureLogs(t, func() { _ = client.RefreshNow(context.Background()) })
 
 	require.Len(t, lines, 1)
 	assert.Equal(t, "error", lines[0]["level"], "a first failure with an empty feed must not be a warning")
@@ -83,7 +83,7 @@ func TestClient_RefreshAndLog_PopulatedFeedFailures_WarnsThenEscalates(t *testin
 
 	wantLevels := []string{"warn", "warn", "error", "error"}
 	for i, want := range wantLevels {
-		lines := captureLogs(t, func() { client.refreshAndLog(context.Background()) })
+		lines := captureLogs(t, func() { _ = client.RefreshNow(context.Background()) })
 		require.Len(t, lines, 1)
 		assert.Equal(t, want, lines[0]["level"], "failure %d", i+1)
 		assert.Equal(t, float64(i+1), lines[0]["consecutive_failures"])
@@ -101,7 +101,7 @@ func TestClient_RefreshAndLog_Success_LogsInfoWithEntryCount(t *testing.T) {
 	srv := feedServer(t, []FeedEntry{maliciousEntry("eee555"), maliciousEntry("fff666")})
 	client := NewClient(testDB(t), srv.URL)
 
-	lines := captureLogs(t, func() { client.refreshAndLog(context.Background()) })
+	lines := captureLogs(t, func() { _ = client.RefreshNow(context.Background()) })
 
 	require.Len(t, lines, 1)
 	assert.Equal(t, "info", lines[0]["level"])
@@ -114,7 +114,7 @@ func TestClient_RefreshAndLog_SuccessWithEmptyFeed_LogsError(t *testing.T) {
 	srv := feedServer(t, nil)
 	client := NewClient(testDB(t), srv.URL)
 
-	lines := captureLogs(t, func() { client.refreshAndLog(context.Background()) })
+	lines := captureLogs(t, func() { _ = client.RefreshNow(context.Background()) })
 
 	require.Len(t, lines, 1)
 	assert.Equal(t, "error", lines[0]["level"], "a successful refresh that leaves the feed empty is the same fail-open as a failed one")
@@ -148,6 +148,31 @@ func TestClient_Run_CancelledContext_RefreshesOnceAndReturns(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return after its context was cancelled")
 	}
+}
+
+func TestClient_RefreshNow_Failure_ReturnsTheErrorItLogged(t *testing.T) {
+	resetFeedMetrics(t)
+	client := NewClient(testDB(t), "https://feed.example.invalid/feed.json")
+
+	var err error
+	lines := captureLogs(t, func() { err = client.RefreshNow(context.Background()) })
+
+	// The manual-refresh caller gets the error back, but the reporting has
+	// already happened — it must not log it a second time.
+	require.Error(t, err, "RefreshNow must hand the refresh error back to out-of-band callers")
+	require.Len(t, lines, 1, "exactly one line per refresh attempt, whoever triggered it")
+	assert.Equal(t, "error", lines[0]["level"])
+}
+
+func TestClient_RefreshNow_Success_ReturnsNil(t *testing.T) {
+	resetFeedMetrics(t)
+	srv := feedServer(t, []FeedEntry{maliciousEntry("abcabc")})
+	client := NewClient(testDB(t), srv.URL)
+
+	var err error
+	captureLogs(t, func() { err = client.RefreshNow(context.Background()) })
+
+	assert.NoError(t, err)
 }
 
 func TestClient_Run_Ticks_RefreshesRepeatedly(t *testing.T) {
