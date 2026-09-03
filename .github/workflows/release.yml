@@ -25,7 +25,7 @@ env:
   # move together — Docker resolves such a reference by digest, so editing
   # only the tag silently keeps building the old, unpatched image with a
   # green build. See ADR-010 for the authoritative seven-location list.
-  GO_VERSION: "1.27.0"
+  GO_VERSION: "1.27.1"
 
 jobs:
   docker:
