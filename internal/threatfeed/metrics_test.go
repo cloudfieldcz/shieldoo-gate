@@ -95,14 +95,14 @@ func maliciousEntry(sha string) FeedEntry {
 	}
 }
 
-func TestNewClient_Constructed_MarksFeedEnabledAndZeroSuccess(t *testing.T) {
+func TestMarkEnabled_Called_MaterialisesEnabledAndZeroCounters(t *testing.T) {
 	resetFeedMetrics(t)
 
-	NewClient(testDB(t), "https://feed.example.invalid/feed.json")
+	markEnabled()
 
 	enabled, found := metricValue(t, "shieldoo_gate_threat_feed_enabled", nil)
 	require.True(t, found)
-	assert.Equal(t, 1.0, enabled, "an existing client must report the feed as enabled")
+	assert.Equal(t, 1.0, enabled, "a running refresh loop must report the feed as enabled")
 
 	// The never-loaded signal: the timestamp gauge is present and zero rather
 	// than absent, so an alert can tell it apart from an unreachable scrape.
@@ -117,6 +117,32 @@ func TestNewClient_Constructed_MarksFeedEnabledAndZeroSuccess(t *testing.T) {
 	failures, found := metricValue(t, "shieldoo_gate_threat_feed_refresh_total", map[string]string{"result": resultFailure})
 	require.True(t, found)
 	assert.Equal(t, 0.0, failures)
+}
+
+// The gauge claims "the threat feed client is configured and running". Constructing a
+// Client is not that claim — a client that is built and never run (test scaffolding, a
+// wiring path that bails before starting the loop) would otherwise leave the process
+// asserting a feed is being refreshed when none is.
+func TestNewClient_Constructed_LeavesTheEnabledGaugeAlone(t *testing.T) {
+	resetFeedMetrics(t)
+
+	NewClient(testDB(t), "https://feed.example.invalid/feed.json")
+
+	enabled, _ := metricValue(t, "shieldoo_gate_threat_feed_enabled", nil)
+	assert.Equal(t, 0.0, enabled, "constructing a client must not assert that a feed is running")
+}
+
+func TestClient_Run_Started_MarksFeedEnabled(t *testing.T) {
+	resetFeedMetrics(t)
+	srv := feedServer(t, []FeedEntry{maliciousEntry("111aaa")})
+	client := NewClient(testDB(t), srv.URL)
+
+	runFeedLoop(t, client, time.Hour)
+
+	require.Eventually(t, func() bool {
+		enabled, _ := metricValue(t, "shieldoo_gate_threat_feed_enabled", nil)
+		return enabled == 1.0
+	}, 2*time.Second, 10*time.Millisecond, "the running refresh loop is what publishes the enabled gauge")
 }
 
 func TestClient_Refresh_Success_RecordsTimestampAndEntries(t *testing.T) {

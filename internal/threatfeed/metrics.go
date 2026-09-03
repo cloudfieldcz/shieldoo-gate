@@ -76,10 +76,13 @@ var (
 // can never be mistaken for an empty feed.
 const entriesUnknown int64 = -1
 
-// markEnabled records that a threat feed client exists and will be refreshing.
-// Without a call to this the enabled gauge stays 0, which is what an operator
-// alert must key off to avoid firing on deployments that run with the feed
-// switched off.
+// markEnabled records that a threat feed refresh loop is running.
+//
+// Called from Client.Run, not from NewClient: the gauge asserts "the feed is
+// being refreshed", which is a fact about a running loop rather than about an
+// object existing. Without a call to this the enabled gauge stays 0, which is
+// what an operator alert must key off to avoid firing on deployments that run
+// with the feed switched off.
 func markEnabled() {
 	feedEnabled.Set(1)
 	// Materialise both counter series so a zero success count is visible as

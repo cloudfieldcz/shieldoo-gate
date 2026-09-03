@@ -41,8 +41,12 @@ type Client struct {
 }
 
 // NewClient creates a new Client using the given database handle and feed URL.
+//
+// Constructing a client has no effect on the feed metrics — Client.Run publishes those,
+// because "the feed is enabled" is a claim about a refresh loop that is running, not
+// about an object that exists. A Client built and never run (test scaffolding, a wiring
+// path that bails) must not leave the process asserting a feed is being refreshed.
 func NewClient(db *config.GateDB, feedURL string) *Client {
-	markEnabled()
 	return &Client{
 		db:      db,
 		feedURL: feedURL,

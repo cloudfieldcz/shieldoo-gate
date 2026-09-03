@@ -541,10 +541,18 @@ shieldoo_gate_threat_feed_last_success_timestamp_seconds         # gauge (unix s
 shieldoo_gate_threat_feed_entries                                # gauge (rows in the local threat_feed table)
 ```
 
-All five series exist from process start with an explicit value, including the
-zeroes. That is deliberate: the state worth alerting on is a feed that has
+All five series exist from the moment the refresh loop starts, with an explicit value
+including the zeroes. That is deliberate: the state worth alerting on is a feed that has
 *never* loaded, and a missing time series is indistinguishable from a scraper
 that never reached the process.
+
+`shieldoo_gate_threat_feed_enabled` is published by `Client.Run`, not by the constructor
+— it asserts that a loop is refreshing, so a client that is built but never started must
+not set it. On a deployment with `threat_feed.enabled: false` no client is built at all
+and the series is absent, which is why the alerts below guard on `== 1` rather than on
+absence. `threat_feed.enabled: true` with an empty `url` is rejected at startup, so it
+can never produce a deployment where the checker reports unhealthy while this gauge says
+the feed is off.
 
 Read them together:
 

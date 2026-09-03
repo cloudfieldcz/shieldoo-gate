@@ -2,6 +2,7 @@ package threatfeed
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -40,10 +41,35 @@ func refreshFailureLevel(consecutiveFailures int, entries int64) zerolog.Level {
 	return zerolog.WarnLevel
 }
 
+// runningLoops counts Client.Run invocations currently in flight.
+//
+// The feed metrics are package-level singletons — unlabelled gauges and one counter —
+// so they describe *the* feed, not *a* feed. That is correct for the single client
+// main.go wires, and it is exactly why a second concurrent Run is a bug and not a
+// configuration: two loops would interleave their outcomes into one set of series, and
+// shieldoo_gate_threat_feed_enabled would assert "the feed is running" on behalf of
+// whichever one wrote last. Counted and reported rather than refused — refusing to
+// refresh would turn a wiring mistake into a silently dead feed, which is the failure
+// this package was rewritten to make impossible to miss.
+var runningLoops atomic.Int32
+
 // Run refreshes the feed once immediately and then on every tick of interval,
 // logging each outcome, until ctx is cancelled. It is meant to be run in its
 // own goroutine; refresh errors are never fatal.
+//
+// Run, not NewClient, is what publishes shieldoo_gate_threat_feed_enabled and
+// materialises the refresh counters at zero: the gauge means "a refresh loop is
+// running", and a client that is built and never run must not claim otherwise.
 func (c *Client) Run(ctx context.Context, interval time.Duration) {
+	if n := runningLoops.Add(1); n > 1 {
+		log.Error().
+			Int("running_loops", int(n)).
+			Str("url", c.feedURL).
+			Msg("threat feed: more than one refresh loop is running — the feed metrics are process-global and now describe all of them")
+	}
+	defer runningLoops.Add(-1)
+
+	markEnabled()
 	_ = c.RefreshNow(ctx)
 
 	ticker := time.NewTicker(interval)
