@@ -15,7 +15,11 @@ env:
   REGISTRY: ghcr.io
   # Keep in lockstep with go.mod's `go` directive and docker/Dockerfile's
   # golang builder tag — 1.27.0 carries the go1.26.6 stdlib fixes for
-  # GO-2026-6218/6091/6090/6089/6088/5972/5026.
+  # GO-2026-6218/6091/6090/6089/6088/5972/5026. Also keep in lockstep with
+  # the sibling GO_VERSION in ci.yml/codeql.yml and, easy to miss, the
+  # tests/e2e-shell/Dockerfile.test-runner ARG GO_VERSION/GO_SHA256 pair
+  # (a separate toolchain, two-value bump) — see ADR-010 for the full
+  # seven-location list.
   GO_VERSION: "1.27.0"
 
 jobs:
