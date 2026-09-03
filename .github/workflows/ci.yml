@@ -47,7 +47,10 @@ jobs:
       - name: Trivy version parity (docker/Dockerfile vs cmd/shdg/trivy.go)
         run: |
           set -euo pipefail
-          dockerfile_version=$(grep -oE 'aquasec/trivy:[0-9]+\.[0-9]+\.[0-9]+' docker/Dockerfile | head -1 | cut -d: -f2)
+          # Anchored at ^FROM on purpose: an unanchored match would also hit a
+          # comment mentioning aquasec/trivy:<old>, and `head -1` would then
+          # compare the comment instead of the pin — real drift, green check.
+          dockerfile_version=$(grep -oE '^FROM aquasec/trivy:[0-9]+\.[0-9]+\.[0-9]+' docker/Dockerfile | head -1 | cut -d: -f2)
           shdg_version=$(grep -oE 'trivyVersion = "[0-9]+\.[0-9]+\.[0-9]+"' cmd/shdg/trivy.go | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
           echo "docker/Dockerfile pins aquasec/trivy:${dockerfile_version}"
           echo "cmd/shdg/trivy.go pins trivyVersion=${shdg_version}"
