@@ -561,7 +561,14 @@ attempt, at a level driven by whether the scanner can still detect anything:
 | Fetch failed, feed has entries, under 3 consecutive failures | WARN |
 | Fetch failed, feed has entries, 3+ consecutive failures | ERROR |
 | Fetch failed, feed is empty | ERROR, from the first failure |
-| Fetch failed, entry count unavailable (`feed_entries: -1`) | Treated as populated |
+| Fetch failed, entry count unavailable | Treated as populated |
+
+`feed_entries: -1` means **the entry count could not be taken** — the
+`SELECT COUNT(*)` against `threat_feed` failed or timed out — not that the feed
+has minus-one entries. It is deliberately negative so it can never be confused
+with an empty feed: a database hiccup must not be reported as "the scanner
+detects nothing", and it does not escalate the log level or move the
+`shieldoo_gate_threat_feed_entries` gauge, which keeps its previous value.
 
 ```json
 {"level":"info","feed_entries":2,"time":"2026-09-03T13:12:52+02:00",

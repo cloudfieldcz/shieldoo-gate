@@ -555,6 +555,11 @@ Read them together:
 | `entries == 0` | **The `builtin-threat-feed` scanner has nothing to match against and returns `CLEAN` with confidence 1 for every artifact.** See [Threat feed health](scanners.md#feed-health-and-failure-escalation). |
 | `last_success_timestamp` old but non-zero, `entries > 0` | Loaded at some point, now going stale — the scanner still detects everything the last good fetch contained. |
 
+`shieldoo_gate_threat_feed_entries` never goes negative: when the row count
+cannot be taken (DB error or timeout) the gauge holds its previous value rather
+than dropping to 0, so a database hiccup cannot fire `ThreatFeedEmpty`. The
+corresponding log line reports `feed_entries: -1`, meaning "count unavailable".
+
 `last_success_timestamp_seconds` is in-process state and resets to 0 on restart;
 `entries` reflects the database and survives restarts. Use `entries` for "is the
 scanner able to detect anything at all", and the timestamp for "how fresh is it".
