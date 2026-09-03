@@ -96,6 +96,19 @@ func main() {
 		log.Logger = log.Output(logWriter)
 	}
 
+	// Graceful-shutdown context. Created here, at the top of main, so every
+	// background loop started below cancels on shutdown — the threat-feed refresh
+	// loop used to be handed context.Background() because this pair was created 200+
+	// lines further down, next to its first consumer. Its only hard constraint is
+	// that it exists before setupVulnScan, which latches the vuln-scan schedulers
+	// onto it.
+	//
+	// The deferred cancel is a backstop for an early return; the signal handler below
+	// calls cancel() explicitly before anything is torn down, so background loops
+	// always stop before the DB handle closes.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Init database
 	db, err := config.InitDB(cfg.Database)
 	if err != nil {
@@ -475,10 +488,12 @@ func main() {
 		refreshInterval := parseDuration(cfg.ThreatFeed.RefreshInterval, 1*time.Hour)
 
 		// Initial refresh plus the periodic loop, in the background; refresh
-		// errors are logged, not fatal. Client.Run owns the logging and the
-		// failure escalation (WARN, rising to ERROR once the feed has been
-		// failing for a while or is empty) — see internal/threatfeed.
-		go feedClient.Run(context.Background(), refreshInterval)
+		// errors are logged, not fatal. Client.Run owns the logging, the failure
+		// escalation (WARN, rising to ERROR once the feed has been failing for a
+		// while or is empty) and the enabled gauge — see internal/threatfeed. It
+		// gets the graceful-shutdown ctx, so an in-flight refresh is cancelled on
+		// SIGTERM rather than racing the DB handle closing.
+		go feedClient.Run(ctx, refreshInterval)
 		// Str, not Dur: no zerolog.DurationFieldUnit is set anywhere in this
 		// repo, so Dur would print "interval":3.6e+06 bare milliseconds.
 		log.Info().
@@ -692,11 +707,6 @@ func main() {
 		}
 		return h
 	}
-
-	// Graceful shutdown context — created BEFORE setupVulnScan so the vuln-scan
-	// schedulers can latch on to it for cancellation.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// Rate limiter — always constructed so endpoints outside the vuln-scan
 	// gate (project SBOM export) stay protected. Vuln-scan adds its own
