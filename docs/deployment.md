@@ -112,23 +112,11 @@ forced download rather than trusting a green build:
 docker run --rm --user root <image> /usr/local/bin/python -m pip install --no-cache-dir --require-hashes --force-reinstall --ignore-installed -r /app/pip-bootstrap.txt
 ```
 
-### Why `httpx` is pinned explicitly, and where TLS trust comes from
+### Where TLS trust comes from
 
 `openai` 3.0 made **HTTPX2** its default HTTP client and stopped installing
-`httpx` at all. Two consequences for the bridge:
+`httpx` at all. One consequence for the bridge:
 
-- **`httpx` is now pinned in `requirements.in` for the test suite only — no
-  code running in the image imports it.** `scanner-bridge/ssrf_guard.py` does
-  `import httpx`, but that module is deliberately **not** in the runtime
-  Dockerfile's `COPY` list and no shipped module imports it (`vuln_drafter.py`
-  mentions it in a docstring only). Its one live consumer is
-  `scanner-bridge/tests/test_ssrf_guard.py`, which fails collection without
-  `httpx` — and until the openai 3.x bump that import was satisfied only as an
-  openai transitive dep, so the pin had to become explicit. The lock therefore
-  carries two HTTP stacks: `httpx2`/`httpcore2` (openai — the one actually used
-  at runtime) and `httpx`/`httpcore` (dev/test only). **If `ssrf_guard.py` is
-  ever wired in or retired, the `httpx` pin moves or goes with it** — do not
-  read it as a production dependency.
 - HTTPX2 verifies TLS against the **operating-system trust store** (via
   `truststore`) instead of the `certifi` bundle. The pinned `python:3.13.x-slim`
   base ships `ca-certificates` (151 CAs), so outbound calls to the
