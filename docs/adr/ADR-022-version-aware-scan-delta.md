@@ -74,11 +74,22 @@ own audit row (`ignore.expired`), not a new vulnerability.
 
 ## Consequences
 
-- **`scan.new_critical` / `scan.new_high` fire more often.** Any dependency bump that
-  carries an unfixed CRITICAL or HIGH forward re-alerts. Deployments that bump frequently
-  and patch slowly will see repeat alerts for the same CVE id at successive versions. The
-  alert payload (`metadata_json`) already carries `{"cve":…,"pkg":…,"version":…}`, so the
-  version is what distinguishes them.
+- **`scan.new_critical` / `scan.new_high` fire more often — and `shdg --fail-on` breaks
+  more builds.** Any dependency bump that carries an unfixed CRITICAL or HIGH forward
+  re-alerts. Deployments that bump frequently and patch slowly will see repeat alerts for
+  the same CVE id at successive versions. The alert payload (`metadata_json`) already
+  carries `{"cve":…,"pkg":…,"version":…}`, so the version is what distinguishes them.
+
+  This is the change with the widest blast radius, because the same counters gate CI:
+  `cmd/shdg/poll.go:exitCodeFor` keys exit 1 on `new_critical_count` /
+  `new_high_count`, so **a bump that carries an unfixed CRITICAL now fails a
+  `shdg scan --wait --fail-on critical` gate that went green before the bump.** Under the
+  old `(cve, package)` key that CVE was "already known" on that package and the pipeline
+  stayed green while the vulnerable artefact underneath it changed. The remedy for a CVE
+  the team has consciously accepted is a version-pinned ignore
+  ([ADR-021](ADR-021-version-aware-cve-suppression.md)) — but it has to be re-raised
+  after a bump, which is the point. Documented for CI owners in
+  [docs/cli/shdg.md](../cli/shdg.md).
 - **`new_critical_count` on `scan_runs` counts vulnerable artefacts, not distinct CVEs.**
   The same CVE on two versions of the same package counts twice. This matches how
   `critical_count` has always been computed (it counts finding rows), so the two columns
@@ -88,6 +99,18 @@ own audit row (`ignore.expired`), not a new vulnerability.
   they answer different questions ("what did the operator decide to stop counting" versus
   "is there still anything to act on") — but it means a CVE fixed on one package while
   still open on another is not reported resolved until both are clear.
+- **Raising an ignore reports the CVE resolved.** "Resolved" is measured over
+  *unsuppressed* findings, so a CVE that was visible on run *N* and suppressed on run
+  *N+1* leaves `activeCVEs(current)` and lands in `ResolvedCVEs` — silencing reads as
+  fixing. That follows directly from the definition ("nothing actionable is left for this
+  component"), and it is the right answer for the driving case: when our own copy of
+  `stdlib` is fixed and only the suppressed vendored copy remains, the operator's CVE
+  genuinely is resolved, and there is no way to tell those two shapes apart from the
+  finding sets alone. Nothing consumes `ResolvedCVEs` today, so this costs nothing yet —
+  but anything built on it later (a resolved-CVE digest, a "fixed since last release"
+  report) must either say "no longer reported" rather than "fixed", or cross-reference
+  `ignore_created` audit rows to separate the two. Pinned by
+  `TestComputeDelta_OnlySuppressedCopyRemains_ReportedResolved`.
 - **`ResolvedCVEs` is deterministic.** It was previously produced by map iteration. It is
   now sorted, so the same pair of runs always yields the same list. Nothing consumes it in
   the product today; it is part of the `Delta` contract and is what a resolved-CVE alert
