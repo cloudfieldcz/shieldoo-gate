@@ -177,7 +177,7 @@ class ScannerBridgeServicer(scanner_pb2_grpc.ScannerBridgeServicer):
                 import ai_scanner
                 self._ai_scanner = ai_scanner
                 # Re-initialize the OpenAI client inside the persistent loop so the
-                # underlying httpx connection pool is bound to the correct loop.
+                # underlying httpx2 connection pool is bound to the correct loop.
                 asyncio.run_coroutine_threadsafe(
                     self._reinit_ai_client(), self._ai_loop
                 ).result(timeout=10)

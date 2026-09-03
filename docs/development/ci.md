@@ -113,10 +113,15 @@ locally with `npm run lint` from `ui/`.
 
 ## Held-back dependencies
 
-Dependencies that are deliberately **not** on their latest major, with the
-condition that releases the hold. Each has a matching `ignore:` entry in
+Dependencies deliberately **pinned below the version Dependabot wants to move
+them to** — usually a major, sometimes only a minor (the scanner-bridge base
+image is held inside major 3) — with the condition that releases the hold. Each
+has a matching `ignore:` entry in
 [`.github/dependabot.yml`](../../.github/dependabot.yml) so the bot stops
-reopening an unmergeable PR every patch release.
+reopening an unmergeable PR on every release. Check that entry's
+`update-types` when adding a row: it must match the kind of bump actually being
+blocked, which is not always the semver level it looks like (a docker tag bump
+`3.13.14` -> `3.14.7` is a *minor*, not a major).
 
 | Dependency | Pinned at | Blocked by | Release condition |
 |---|---|---|---|
