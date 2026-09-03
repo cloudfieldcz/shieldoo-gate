@@ -226,3 +226,52 @@ func TestFindActiveIgnoresForRun_VersionPinnedIgnore_KeyedByVersion(t *testing.T
 		"CVE-2026-8888|oras-go":       blind.ID,
 	}, mapping)
 }
+
+func TestUpdateScanRunStatus_RunningRun_TransitionsToDone(t *testing.T) {
+	db := newTestDB(t)
+	store := component.NewStore(db)
+	ctx := context.Background()
+
+	_, runID, _ := seedRunWithFindings(t, db, "gate-image", "CVE-1", "pkg")
+	_, err := db.Exec(`UPDATE scan_runs SET status = 'running', finished_at = NULL WHERE id = ?`, runID)
+	require.NoError(t, err)
+
+	require.NoError(t, store.UpdateScanRunStatus(ctx, runID, component.StatusDone,
+		map[string]string{"engine": "ok"}, "", 1, 2, 3, 4, 5, 6, 7))
+
+	run, err := store.GetScanRun(ctx, runID)
+	require.NoError(t, err)
+	assert.Equal(t, component.StatusDone, run.Status)
+	assert.Equal(t, int64(1), run.CriticalCount)
+	assert.Equal(t, int64(7), run.ComponentCount)
+}
+
+func TestUpdateScanRunStatus_TerminalRun_RefusesAndKeepsRow(t *testing.T) {
+	db := newTestDB(t)
+	store := component.NewStore(db)
+	ctx := context.Background()
+
+	_, runID, _ := seedRunWithFindings(t, db, "gate-image", "CVE-1", "pkg")
+	_, err := db.Exec(
+		`UPDATE scan_runs SET status = 'failed', error_message = 'reaped: stuck in running' WHERE id = ?`, runID)
+	require.NoError(t, err)
+
+	err = store.UpdateScanRunStatus(ctx, runID, component.StatusDone,
+		map[string]string{"engine": "ok"}, "", 1, 2, 3, 4, 5, 6, 7)
+	require.ErrorIs(t, err, component.ErrScanRunTerminal)
+
+	run, err := store.GetScanRun(ctx, runID)
+	require.NoError(t, err)
+	assert.Equal(t, component.StatusFailed, run.Status)
+	assert.Equal(t, "reaped: stuck in running", run.ErrorMessage)
+	assert.Zero(t, run.CriticalCount, "a refused update must not write counters")
+}
+
+func TestUpdateScanRunStatus_UnknownRun_ReturnsTerminal(t *testing.T) {
+	db := newTestDB(t)
+	store := component.NewStore(db)
+
+	err := store.UpdateScanRunStatus(context.Background(), 4242, component.StatusDone,
+		nil, "", 0, 0, 0, 0, 0, 0, 0)
+	require.ErrorIs(t, err, component.ErrScanRunTerminal)
+}

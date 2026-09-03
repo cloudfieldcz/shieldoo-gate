@@ -235,6 +235,20 @@ func (s *scanServiceImpl) Run(ctx context.Context, runID int64) error {
 		result.ScannerStatus, "",
 		crit, high, med, low,
 		newCritical, newHigh, result.ComponentCount); err != nil {
+		if errors.Is(err, ErrScanRunTerminal) {
+			// The row was closed under us — in practice reaped by the stale-run reaper
+			// after this scan outlived the threshold. The reap already made the
+			// component rescan-eligible, so another run may be in flight for it.
+			// Publishing now would clear the reaper's error_message, advance
+			// last_scan_id onto a run nobody was waiting for, and let two runs compute
+			// their delta against the same predecessor — a spurious
+			// scan.new_critical alert. Leave the findings in place as evidence and
+			// stop here.
+			log.Warn().
+				Int64("run_id", run.ID).
+				Int64("component_id", run.ComponentID).
+				Msg("scan_service: run finished after it was closed elsewhere, results not published")
+		}
 		return err
 	}
 	_ = s.store.SetLastScanID(ctx, run.ComponentID, run.ID)

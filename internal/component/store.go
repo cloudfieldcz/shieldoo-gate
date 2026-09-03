@@ -241,6 +241,14 @@ func (s *Store) ListScanRunsByComponent(ctx context.Context, componentID, cursor
 
 // UpdateScanRunStatus updates status, scanner_status JSON, finished_at, error_message,
 // and severity counters all in one round-trip.
+//
+// Only a run still in 'pending' or 'running' can be closed. Without that predicate a
+// scan that outlives the stale-run reaper resurrects the row it already marked 'failed':
+// the reap has made the component rescan-eligible again, so a second run may already be
+// in flight, and both would then call FindPreviousSuccessfulRun against the same
+// predecessor and emit scan.new_critical alerts off a wrong new_critical_count. Returns
+// ErrScanRunTerminal when the row is already closed, so the caller can decline to
+// publish results it can no longer own.
 func (s *Store) UpdateScanRunStatus(ctx context.Context, runID int64, status string,
 	scannerStatus map[string]string, errorMessage string,
 	critical, high, medium, low, newCritical, newHigh, componentCount int64,
@@ -251,17 +259,27 @@ func (s *Store) UpdateScanRunStatus(ctx context.Context, runID int64, status str
 	if status == StatusDone || status == StatusFailed {
 		finishedAt = sql.NullTime{Time: now, Valid: true}
 	}
-	_, err := s.db.ExecContext(ctx,
+	res, err := s.db.ExecContext(ctx,
 		`UPDATE scan_runs
 		   SET status = ?, scanner_status = ?, finished_at = ?,
 		       error_message = ?,
 		       critical_count = ?, high_count = ?, medium_count = ?, low_count = ?,
 		       new_critical_count = ?, new_high_count = ?,
 		       component_count = ?
-		 WHERE id = ?`,
+		 WHERE id = ? AND status IN ('pending', 'running')`,
 		status, string(statusJSON), finishedAt, errorMessage,
 		critical, high, medium, low, newCritical, newHigh, componentCount, runID)
-	return err
+	if err != nil {
+		return fmt.Errorf("scan_runs: updating run %d to %s: %w", runID, status, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("scan_runs: rows affected for run %d: %w", runID, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("scan_runs: run %d not updated to %s: %w", runID, status, ErrScanRunTerminal)
+	}
+	return nil
 }
 
 // FindPreviousSuccessfulRun returns the most recent done scan_run for a component

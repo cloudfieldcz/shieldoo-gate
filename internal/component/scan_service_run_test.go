@@ -85,15 +85,37 @@ func (a *recordingAudit) WriteVulnEvent(_ context.Context, e model.AuditEntry) e
 	return nil
 }
 
+// seedDoneRun inserts a finished scan_run for an existing component. Used to give the
+// delta path a predecessor to compare against.
+func seedDoneRun(t *testing.T, db *config.GateDB, componentID int64) int64 {
+	t.Helper()
+	res, err := db.Exec(
+		`INSERT INTO scan_runs
+		   (component_id, trigger, status, sbom_blob_path, sbom_size_bytes, sbom_format,
+		    sbom_sha256, started_at, finished_at, scanner_status, critical_count, high_count,
+		    medium_count, low_count, new_critical_count, new_high_count, component_count)
+		 VALUES (?, 'upload', 'done', 'sboms/prev.json', 0, 'cyclonedx-json', '',
+		         datetime('now'), datetime('now'), 'ok', 0, 0, 0, 0, 0, 0, 0)`, componentID)
+	require.NoError(t, err)
+	id, err := res.LastInsertId()
+	require.NoError(t, err)
+	return id
+}
+
 // seedPendingRun inserts a component plus a pending scan_run whose SBOM blob is already
-// in the store, bypassing Submit's CycloneDX validation.
-func seedPendingRun(t *testing.T, db *config.GateDB, blobs *memBlobStore, name string) (componentID, runID int64) {
+// in the store, bypassing Submit's CycloneDX validation. previousRuns finished 'done'
+// runs are inserted first, so their ids sort below the pending one.
+func seedPendingRun(t *testing.T, db *config.GateDB, blobs *memBlobStore, name string, previousRuns int) (componentID, runID int64) {
 	t.Helper()
 	res, err := db.Exec(`INSERT INTO components (project_id, name, ecosystem, enabled)
 	                     VALUES (1, ?, 'go', 1)`, name)
 	require.NoError(t, err)
 	componentID, err = res.LastInsertId()
 	require.NoError(t, err)
+
+	for i := 0; i < previousRuns; i++ {
+		seedDoneRun(t, db, componentID)
+	}
 
 	body := []byte(`{"bomFormat":"CycloneDX"}`)
 	sum := sha256.Sum256(body)
@@ -134,7 +156,7 @@ func TestScanServiceRun_VersionPinnedIgnore_SuppressesOnlyMatchingVersion(t *tes
 	store := component.NewStore(db)
 	ctx := context.Background()
 
-	componentID, runID := seedPendingRun(t, db, blobs, "gate-image")
+	componentID, runID := seedPendingRun(t, db, blobs, "gate-image", 0)
 	_, err := store.CreateIgnore(ctx, &component.Ignore{
 		ComponentID: componentID, CVEID: "CVE-2026-9999", PackageName: "stdlib",
 		PackageVersion: "1.24.6", Reason: "bundled trivy binary", CreatedByEmail: "ops@example.com",
@@ -173,7 +195,7 @@ func TestScanServiceRun_VersionBlindIgnore_SuppressesEveryVersion(t *testing.T) 
 	store := component.NewStore(db)
 	ctx := context.Background()
 
-	componentID, runID := seedPendingRun(t, db, blobs, "gate-image")
+	componentID, runID := seedPendingRun(t, db, blobs, "gate-image", 0)
 	_, err := store.CreateIgnore(ctx, &component.Ignore{
 		ComponentID: componentID, CVEID: "CVE-2026-9999", PackageName: "stdlib",
 		Reason: "not exploitable in our usage", CreatedByEmail: "ops@example.com",
@@ -200,4 +222,90 @@ func TestScanServiceRun_VersionBlindIgnore_SuppressesEveryVersion(t *testing.T) 
 	run, err := store.GetScanRun(ctx, runID)
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), run.HighCount)
+}
+
+// The reaper marks a wedged run failed. If the scan behind that row is still alive and
+// finishes afterwards, it must not resurrect the row: doing so clears the reaper's
+// error_message, advances last_scan_id, and — because the reap already made the
+// component rescan-eligible — lets two runs compute their delta against the same
+// predecessor, which surfaces as a spurious scan.new_critical alert.
+func TestScanServiceRun_RunReapedMidScan_StaysReaped(t *testing.T) {
+	db := newTestDB(t)
+	blobs := newMemBlobStore()
+	store := component.NewStore(db)
+	ctx := context.Background()
+	audit := &recordingAudit{}
+
+	componentID, runID := seedPendingRun(t, db, blobs, "gate-image", 1) // one previous done run so the delta path really runs
+
+	deltaCalls := 0
+	svc := component.NewScanService(component.ScanServiceConfig{}, component.ScanServiceDeps{
+		DB:    db,
+		Store: store,
+		Blob:  blobs,
+		Audit: audit,
+		Scanner: &stubScanner{
+			findings: []*component.ScanFinding{
+				finding("CVE-2026-1111", "oras-go", "1.2.3", component.SeverityCritical),
+			},
+			// Simulate the reaper firing while the scan is in flight, exactly as
+			// StaleRunReaper.RunOnce writes it.
+			before: func() {
+				_, err := db.Exec(
+					`UPDATE scan_runs SET status = 'failed', finished_at = datetime('now'),
+					        error_message = 'reaped: stuck in running'
+					 WHERE id = ? AND status IN ('pending', 'running')`, runID)
+				require.NoError(t, err)
+			},
+		},
+		DeltaFunc: func(context.Context, *component.ScanRun, *component.ScanRun, []*component.ScanFinding) (int64, int64, []model.AuditEntry, error) {
+			deltaCalls++
+			return 9, 9, []model.AuditEntry{{EventType: model.EventScanNewCritical}}, nil
+		},
+	})
+
+	require.ErrorIs(t, svc.Run(ctx, runID), component.ErrScanRunTerminal)
+
+	run, err := store.GetScanRun(ctx, runID)
+	require.NoError(t, err)
+	assert.Equal(t, component.StatusFailed, run.Status, "a reaped run must stay failed")
+	assert.Equal(t, "reaped: stuck in running", run.ErrorMessage,
+		"the reaper's diagnosis must survive")
+	assert.Zero(t, run.NewCriticalCount, "delta counters must not be written onto a closed run")
+
+	var lastScanID *int64
+	require.NoError(t, db.Get(&lastScanID, `SELECT last_scan_id FROM components WHERE id = ?`, componentID))
+	assert.Nil(t, lastScanID, "last_scan_id must not advance onto a reaped run")
+
+	assert.Empty(t, audit.entries, "no regression alert may be emitted for a run that was never published")
+	assert.Equal(t, 1, deltaCalls, "the delta was computed — its alerts just never reached the audit log")
+}
+
+func TestScanServiceRun_LiveRun_ClosesToDone(t *testing.T) {
+	db := newTestDB(t)
+	blobs := newMemBlobStore()
+	store := component.NewStore(db)
+	ctx := context.Background()
+
+	componentID, runID := seedPendingRun(t, db, blobs, "gate-image", 0)
+	svc := component.NewScanService(component.ScanServiceConfig{}, component.ScanServiceDeps{
+		DB:    db,
+		Store: store,
+		Blob:  blobs,
+		Scanner: &stubScanner{findings: []*component.ScanFinding{
+			finding("CVE-2026-1111", "oras-go", "1.2.3", component.SeverityCritical),
+		}},
+	})
+
+	require.NoError(t, svc.Run(ctx, runID))
+
+	run, err := store.GetScanRun(ctx, runID)
+	require.NoError(t, err)
+	assert.Equal(t, component.StatusDone, run.Status)
+	assert.Equal(t, int64(1), run.CriticalCount)
+
+	var lastScanID *int64
+	require.NoError(t, db.Get(&lastScanID, `SELECT last_scan_id FROM components WHERE id = ?`, componentID))
+	require.NotNil(t, lastScanID)
+	assert.Equal(t, runID, *lastScanID, "the happy path must still advance last_scan_id")
 }

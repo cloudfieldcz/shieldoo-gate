@@ -132,6 +132,10 @@ var (
 	ErrIgnoreExists     = errors.New("component: active ignore already exists")
 	ErrIgnoreNotFound   = errors.New("component: ignore not found")
 	ErrRateLimited      = errors.New("component: rate limit exceeded")
+	// ErrScanRunTerminal is returned by Store.UpdateScanRunStatus when the target run
+	// has already left 'pending'/'running' — typically reaped by the stale-run reaper
+	// while the scan was still executing. Its results must not be published.
+	ErrScanRunTerminal = errors.New("component: scan run already terminal")
 )
 
 // componentNameRegex mirrors NormalizeLabel from the project package, slightly extended
