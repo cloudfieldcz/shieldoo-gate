@@ -94,6 +94,23 @@ Every released artifact is signed and carries SLSA build provenance using
 in Rekor — no long-lived signing key). See
 [ADR-018](../adr/ADR-018-build-provenance-and-signing.md) for the rationale.
 
+- **Images** — built with `provenance: mode=max` + `sbom: true` (BuildKit
+  attaches SLSA provenance + a CycloneDX SBOM as OCI referrers),
+  `actions/attest-build-provenance` (GitHub-hosted provenance, pushed to the
+  registry), and `cosign sign` **by digest**.
+- **`shdg` binaries** — one `actions/attest-build-provenance` attestation over
+  all five archives.
+- **Dogfooded SBOMs** — persisted via `shdg scan --sbom-output`, attached to the
+  release (`*.cdx.json`), folded into `SHA256SUMS`, and signed with
+  `cosign sign-blob --bundle`. The signed bytes are the same ones uploaded to
+  the gate. Fail-closed guards reject an incomplete `SHA256SUMS` or an empty SBOM.
+- **Scorecard-compatible assets** — because OpenSSF Scorecard's `Signed-Releases`
+  check only reads release *assets* by filename suffix (and doesn't recognise
+  ghcr referrers, the attestations API, or `.cosign.bundle`), each archive +
+  `SHA256SUMS` also ships a detached `*.sig` + `*.pem`, and the binary provenance
+  is republished as `shdg-<ver>.intoto.jsonl`. Same keyless Sigstore material,
+  scanner-readable names. See [ADR-018](../adr/ADR-018-build-provenance-and-signing.md).
+
 #### Runtime-stage OS package upgrades
 
 Both release Dockerfiles pin their base image by digest
@@ -131,23 +148,6 @@ mechanism, same `runtime` stage name. `release.yml`'s build step sets
 stage of *both* matrix legs to always re-execute, while `ui-builder`/
 `go-builder` (and scanner-bridge's builder stage) keep their expensive
 layers cached.
-
-- **Images** — built with `provenance: mode=max` + `sbom: true` (BuildKit
-  attaches SLSA provenance + a CycloneDX SBOM as OCI referrers),
-  `actions/attest-build-provenance` (GitHub-hosted provenance, pushed to the
-  registry), and `cosign sign` **by digest**.
-- **`shdg` binaries** — one `actions/attest-build-provenance` attestation over
-  all five archives.
-- **Dogfooded SBOMs** — persisted via `shdg scan --sbom-output`, attached to the
-  release (`*.cdx.json`), folded into `SHA256SUMS`, and signed with
-  `cosign sign-blob --bundle`. The signed bytes are the same ones uploaded to
-  the gate. Fail-closed guards reject an incomplete `SHA256SUMS` or an empty SBOM.
-- **Scorecard-compatible assets** — because OpenSSF Scorecard's `Signed-Releases`
-  check only reads release *assets* by filename suffix (and doesn't recognise
-  ghcr referrers, the attestations API, or `.cosign.bundle`), each archive +
-  `SHA256SUMS` also ships a detached `*.sig` + `*.pem`, and the binary provenance
-  is republished as `shdg-<ver>.intoto.jsonl`. Same keyless Sigstore material,
-  scanner-readable names. See [ADR-018](../adr/ADR-018-build-provenance-and-signing.md).
 
 Permissions are least-privilege: top-level `contents: read`, with each job
 widening only the scopes it needs (`packages`/`id-token`/`attestations` on the
