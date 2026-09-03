@@ -167,8 +167,10 @@ RUN apk upgrade --no-cache && apk add --no-cache ca-certificates sqlite-libs
 
 This clears 2 HIGH + 6 MEDIUM + 12 LOW openssl findings on `gate-image` by pulling
 `openssl 3.5.8-r0` from the pinned branch's live repo. The base image stays pinned by
-digest; the `apk add` line already resolves against live repos, so this does not change
-the reproducibility posture. Document the rationale next to the pin comment and in
+digest, but `apk upgrade` deliberately widens the build-time surface to the entire
+installed base set — a trade-off (security currency over byte-for-byte OS-layer
+reproducibility) bounded by apk's package signature verification against the pinned
+base's alpine keys, not a no-op. Document the rationale next to the pin comment and in
 `docs/development/` alongside the existing base-image pinning notes (ADR-014).
 
 Apply the same treatment to `scanner-bridge/Dockerfile` (`apt-get upgrade`) only after
