@@ -12,13 +12,16 @@ import (
 )
 
 type ignoreCreateRequest struct {
-	CVEID          string  `json:"cve_id"`
-	PackageName    string  `json:"package_name"`
-	PackageVersion string  `json:"package_version"`
-	Reason         string  `json:"reason"`
-	ExpiresAt      *string `json:"expires_at,omitempty"`
-	AIDraftAccepted bool   `json:"ai_draft_accepted"`
-	AgainstRunID   int64   `json:"against_run_id"`
+	CVEID       string `json:"cve_id"`
+	PackageName string `json:"package_name"`
+	// PackageVersion selects the suppression scope (ADR-021): empty means per-package
+	// (every version), non-empty pins the ignore to that exact version. Callers that
+	// only want to record what was installed must not send it.
+	PackageVersion  string  `json:"package_version"`
+	Reason          string  `json:"reason"`
+	ExpiresAt       *string `json:"expires_at,omitempty"`
+	AIDraftAccepted bool    `json:"ai_draft_accepted"`
+	AgainstRunID    int64   `json:"against_run_id"`
 }
 
 // handleListIgnores returns active ignores for a component. With ?include=expired
@@ -69,6 +72,10 @@ func (s *Server) handleCreateIgnore(w http.ResponseWriter, r *http.Request) {
 	}
 	req.CVEID = strings.TrimSpace(req.CVEID)
 	req.PackageName = strings.TrimSpace(req.PackageName)
+	// package_version is no longer informational: a non-empty value narrows the
+	// suppression to that one version (ADR-021). Trim so a whitespace-only value cannot
+	// pin the ignore to a version no finding will ever carry.
+	req.PackageVersion = strings.TrimSpace(req.PackageVersion)
 	if req.CVEID == "" || req.PackageName == "" {
 		writeError(w, http.StatusBadRequest, "cve_id and package_name required")
 		return

@@ -1131,7 +1131,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "501":
-          description: SBOM disabled in config (`sbom.enabled: false`)
+          description: "SBOM disabled in config (`sbom.enabled: false`)"
 
   /api/v1/projects/{id}/license-policy:
     parameters:
@@ -2803,7 +2803,7 @@ components:
         component_id:             { type: integer, format: int64 }
         cve_id:                   { type: string }
         package_name:             { type: string }
-        package_version:          { type: string, description: "Informational only — suppression is per-package" }
+        package_version:          { type: string, description: "Suppression scope: empty = per-package (every version), non-empty = that version only. See ADR-021." }
         reason:                   { type: string }
         ai_draft_accepted:        { type: boolean }
         expires_at:               { type: string, format: date-time, nullable: true }
@@ -2819,7 +2819,15 @@ components:
       properties:
         cve_id:             { type: string }
         package_name:       { type: string }
-        package_version:    { type: string }
+        package_version:
+          type: string
+          description: |
+            Selects the suppression scope. Omit or send an empty string for per-package
+            suppression (the CVE on that package at every version — the historical
+            behaviour). Send a version to pin the ignore to that exact version, so the
+            same CVE stays visible if the package reappears at another version — the
+            case for a vulnerable copy vendored inside another artifact, e.g. a bundled
+            scanner binary. Whitespace is trimmed. See ADR-021.
         reason:             { type: string }
         expires_at:         { type: string, format: date-time, nullable: true }
         ai_draft_accepted:  { type: boolean }
