@@ -55,13 +55,18 @@ Two structural problems made remediation harder than it should be:
    **glibc-only wheels**, so musl would force slow, fragile from-source builds.
 
 2. **Unify the Go toolchain on a single patched version.** `go.mod`'s `go`
-   directive, the `golang:<ver>-alpine` builder tag in `docker/Dockerfile`, and CI
-   `GO_VERSION` must always name the **same** version. Bumping the Go patch level is
-   done in lockstep across all three. The current target is **1.26.5** (fixes
-   GO-2026-5856 / CVE-2026-39822 — crypto/tls Encrypted Client Hello privacy
-   leak; previously 1.26.4 for CVE-2026-42504, CVE-2026-42507,
-   CVE-2026-27145), validated with a full `make build && make lint &&
-   make test` pass after the 1.25 → 1.26 minor-version jump.
+   directive, the `golang:<ver>-alpine` builder tag in both `docker/Dockerfile`
+   (`go-builder` stage) and `tests/e2e-shell/Dockerfile.test-runner`
+   (`shdg-build` stage), and CI `GO_VERSION` (`ci.yml`, `codeql.yml`,
+   `release.yml`) must always name the **same** version. Bumping the Go patch
+   level is done in lockstep across all six locations. The current target is
+   **1.27.0** (carries the go1.26.6 stdlib fixes for GO-2026-6218 (net/url),
+   GO-2026-6091 (html/template), GO-2026-6090 (crypto/tls), GO-2026-6089
+   (net/http), GO-2026-6088 (encoding/xml), GO-2026-5972 (encoding/asn1) and
+   GO-2026-5026 (net/http); previously 1.26.5 for GO-2026-5856 /
+   CVE-2026-39822 — crypto/tls Encrypted Client Hello privacy leak),
+   validated with a full `make build && make lint && make test` pass plus a
+   clean `govulncheck ./...` after the jump.
 
 3. **Third-party embedded binaries are tracked, not silently shipped.** Go-stdlib
    findings originating from bundled third-party binaries (e.g. `aquasec/trivy`'s
