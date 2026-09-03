@@ -284,7 +284,15 @@ func (s *scanServiceImpl) applyExistingIgnores(ctx context.Context, run *ScanRun
 		return nil
 	}
 	for _, f := range result.Findings {
-		if id, ok := mapping[f.CVEID+"|"+f.PackageName]; ok {
+		// Version-pinned ignore first, per-package ignore second. The unique index on
+		// cve_ignores(component_id, cve_id, package_name) allows only one active ignore
+		// per package, so at most one of the two keys is ever present — the ordering is
+		// belt and braces, not a precedence rule anyone can exploit.
+		id, ok := mapping[IgnoreMatchKey(f.CVEID, f.PackageName, f.PackageVersion)]
+		if !ok {
+			id, ok = mapping[IgnoreMatchKey(f.CVEID, f.PackageName, "")]
+		}
+		if ok {
 			f.IsSuppressed = true
 			f.SuppressedBy = ptrInt64(id)
 		}

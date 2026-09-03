@@ -783,14 +783,16 @@ in 100-row VALUES batches.
 
 ### `cve_ignores` (vuln-scan)
 
-Per-package CVE suppression with optional expiry and AI-draft acceptance flag.
+Per-component CVE suppression with optional expiry and AI-draft acceptance flag. The
+matching scope is per-package or per-version depending on `package_version` — see
+[ADR-021](adr/ADR-021-version-aware-cve-suppression.md).
 
 | Column | Type | Description |
 |---|---|---|
 | `id` | INTEGER PK | Ignore ID |
 | `component_id` | INTEGER NOT NULL REFERENCES components(id) ON DELETE CASCADE | Owning component |
 | `cve_id` / `package_name` | TEXT NOT NULL | Suppression key |
-| `package_version` | TEXT NOT NULL DEFAULT '' | **Informational only** — suppression is per-package, not per-version |
+| `package_version` | TEXT (nullable) | **Selects the matching scope.** NULL or `''` → per-package (every version of the package, the historical behaviour). Non-empty → per-version: only findings at exactly that version are suppressed |
 | `reason` | TEXT NOT NULL | Operator-supplied explanation |
 | `ai_draft_accepted` | BOOLEAN NOT NULL DEFAULT FALSE | True when reason came verbatim from the AI drafter |
 | `expires_at` | TIMESTAMPTZ | Optional expiry; the ignore-expiry watcher revokes after this time |
