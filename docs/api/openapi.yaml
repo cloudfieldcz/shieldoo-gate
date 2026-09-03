@@ -586,15 +586,33 @@ paths:
   /api/v1/feed/refresh:
     post:
       summary: Trigger an async threat feed refresh
+      description: >
+        Starts a threat feed fetch detached from this request and returns
+        immediately. Success or failure is reported through the server log and
+        the shieldoo_gate_threat_feed_* metrics, not in the response. Rate
+        limited (dimension "feed-refresh"): it is an outbound fetch to a
+        third-party host.
       operationId: refreshFeed
       tags: [feed]
       responses:
         "202":
-          description: Refresh queued
+          description: Refresh started
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/AcceptedResponse"
+        "429":
+          description: Too many refresh requests
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "501":
+          description: No threat feed is configured, so there is nothing to refresh
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /api/v1/docker/repositories:
     get:

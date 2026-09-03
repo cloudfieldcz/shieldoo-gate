@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -40,6 +41,7 @@ type Server struct {
 	adminScopeEnforced bool
 	publicURLs       config.PublicURLsConfig
 	onRescanQueued   func()
+	feedRefresher    func(context.Context) error
 	projectSvc       project.Service
 	sbomStore        sbom.Storage
 	sbomGenerator    *sbom.Generator
@@ -108,6 +110,13 @@ func (s *Server) RateLimiter() *auth.RateLimiter {
 // allowing the rescan scheduler to wake up immediately.
 func (s *Server) SetRescanNotifier(fn func()) {
 	s.onRescanQueued = fn
+}
+
+// SetFeedRefresher wires the threat feed refresh used by
+// POST /api/v1/feed/refresh. Without it that endpoint reports 501 rather than
+// claiming to have queued work nothing will perform.
+func (s *Server) SetFeedRefresher(fn func(context.Context) error) {
+	s.feedRefresher = fn
 }
 
 // SetProxyAuth configures proxy auth state so that API key management routes
@@ -244,9 +253,17 @@ func (s *Server) Routes() chi.Router {
 			r.Get("/stats/summary", s.handleStatsSummary)
 			r.Get("/stats/blocked", s.handleStatsBlocked)
 
-			// Threat feed
+			// Threat feed. The refresh is an admin-triggered outbound fetch to a
+			// third-party host, so it carries its own rate-limit dimension —
+			// generous enough for a human retrying, tight enough that a script
+			// cannot turn the gate into a hammer aimed at the feed provider.
 			r.Get("/feed", s.handleListFeed)
-			r.Post("/feed/refresh", s.handleRefreshFeed)
+			r.Group(func(r chi.Router) {
+				if s.rateLimiter != nil {
+					r.Use(s.rateLimiter.Middleware("feed-refresh"))
+				}
+				r.Post("/feed/refresh", s.handleRefreshFeed)
+			})
 
 			// Docker management
 			r.Get("/docker/repositories", s.handleListDockerRepositories)

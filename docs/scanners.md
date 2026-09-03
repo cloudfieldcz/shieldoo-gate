@@ -504,6 +504,12 @@ The community threat feed (`internal/threatfeed/client.go`) provides a database 
 3. Entries are upserted using `INSERT OR REPLACE`
 4. Every attempt — success or failure — updates the [feed health metrics](deployment.md#threat-feed-health) and emits exactly one log line
 
+`POST /api/v1/feed/refresh` triggers the same `Client.Refresh` out of band and
+returns `202` once the fetch has started; it reports `501` when no feed is
+configured, and is rate limited because it is an outbound request to a
+third-party host. The result is reported through the log line and the metrics,
+not in the HTTP response — the response is written before the fetch finishes.
+
 **Feed format** (OSV-compatible JSON):
 ```json
 {

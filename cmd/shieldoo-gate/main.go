@@ -465,9 +465,13 @@ func main() {
 		}
 	}()
 
-	// Init threat feed client with periodic refresh (if enabled)
+	// Init threat feed client with periodic refresh (if enabled). The client is
+	// hoisted out of the block so the admin API can reuse this one instance for
+	// POST /api/v1/feed/refresh — a second Client would double-register the feed
+	// as enabled and refresh on its own schedule.
+	var feedClient *threatfeed.Client
 	if cfg.ThreatFeed.Enabled && cfg.ThreatFeed.URL != "" {
-		feedClient := threatfeed.NewClient(db, cfg.ThreatFeed.URL)
+		feedClient = threatfeed.NewClient(db, cfg.ThreatFeed.URL)
 		refreshInterval := parseDuration(cfg.ThreatFeed.RefreshInterval, 1*time.Hour)
 
 		// Initial refresh plus the periodic loop, in the background; refresh
@@ -519,6 +523,11 @@ func main() {
 	apiServer.SetPublicURLs(cfg.PublicURLs)
 	apiServer.SetTrustedProxies(cfg.Server.TrustedProxies)
 	apiServer.SetCSRFAllowedOrigins(cfg.Auth.AllowedOrigins)
+	if feedClient != nil {
+		// Same Refresh the periodic loop calls, so a manual refresh updates the
+		// feed health metrics exactly like a scheduled one.
+		apiServer.SetFeedRefresher(feedClient.Refresh)
+	}
 
 	// Init OIDC authentication (if enabled).
 	var oidcMw *auth.OIDCMiddleware
@@ -688,7 +697,11 @@ func main() {
 	// dimensions on top inside setupVulnScan.
 	defaultRate := rateOrDefault(cfg.VulnScan.RateLimit.UploadsPerHour, 60)
 	apiRateLimiter := auth.NewRateLimiter(defaultRate, 10).
-		WithDimensionLimit("sbom-download", 30.0/60.0, 5)
+		WithDimensionLimit("sbom-download", 30.0/60.0, 5).
+		// Manual feed refresh is an outbound fetch to a third-party host: 6/hour
+		// with a burst of 2 covers an operator retrying after fixing the feed,
+		// and stops an admin script from pointing the gate at the provider.
+		WithDimensionLimit("feed-refresh", 6.0/3600.0, 2)
 	apiServer.SetRateLimiter(apiRateLimiter)
 
 	// Vulnerability-scan wiring MUST run before apiServer.Routes() — Routes()
