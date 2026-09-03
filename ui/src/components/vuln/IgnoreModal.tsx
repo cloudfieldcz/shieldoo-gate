@@ -43,7 +43,9 @@ export default function IgnoreModal({
   // Suppression scope. Unchecked sends no package_version, which keeps the historical
   // per-package reach (every version of the package). Checked pins the ignore to this
   // exact version — see ADR-021. Restoring an expired ignore inherits the scope the
-  // original had, so a restore never silently widens it.
+  // stored row has: migration 040 nulled package_version on every pre-existing row, so
+  // this can only pre-tick for an ignore somebody deliberately pinned, and a restore
+  // therefore never widens or narrows the scope it is restoring.
   const [versionScoped, setVersionScoped] = useState(
     !!restoreFromExpired && !!finding.package_version,
   )

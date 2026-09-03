@@ -790,7 +790,7 @@ matching scope is per-package or per-version depending on `package_version` — 
 | Column | Type | Description |
 |---|---|---|
 | `id` | INTEGER PK | Ignore ID |
-| `component_id` | INTEGER NOT NULL REFERENCES components(id) ON DELETE CASCADE | Owning component |
+| `component_id` | INTEGER NOT NULL REFERENCES components(id) ON DELETE **RESTRICT** | Owning component. RESTRICT, not CASCADE: ignore rows are audit evidence and a component delete must not silently destroy them |
 | `cve_id` / `package_name` | TEXT NOT NULL | Suppression key |
 | `package_version` | TEXT (nullable) | **Selects the matching scope.** NULL or `''` → per-package (every version of the package, the historical behaviour). Non-empty → per-version: only findings at exactly that version are suppressed |
 | `reason` | TEXT NOT NULL | Operator-supplied explanation |

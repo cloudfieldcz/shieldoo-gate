@@ -1,0 +1,19 @@
+-- Migration 040_cve_ignores_preserve_per_package_scope
+-- Preserve the meaning of every cve_ignores row created before version-aware
+-- suppression (ADR-021).
+--
+-- Until ADR-021, ApplySuppression matched on (component_id, cve_id, package_name) only
+-- and package_version was informational: the admin UI wrote the finding's version into
+-- every ignore it created, but nothing read it. Under the new predicate a non-empty
+-- package_version narrows the match to that one version, so leaving those rows as they
+-- are would silently re-scope decisions their authors made per-package.
+--
+-- Nulling the column restores each row to the scope it actually had. The informational
+-- value is lost; it remains recoverable through created_against_run_id -> scan_findings.
+-- Deliberately unfiltered: revoked rows are re-created by the UI's "restore" panel,
+-- which pre-fills from the stored row, so a revoked row carrying a version would
+-- reintroduce the scope change on the next restore.
+--
+-- From here on, a version reaches cve_ignores only when an operator ticks "Only version
+-- X" in the ignore dialog, which is what makes version scoping opt-in.
+UPDATE cve_ignores SET package_version = NULL;
