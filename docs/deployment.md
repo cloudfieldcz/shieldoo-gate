@@ -305,7 +305,8 @@ npm run build  # Production build to dist/
 | `make test` | Run unit tests (excludes e2e) |
 | `make test-e2e` | Run Go e2e tests |
 | `make test-e2e-containerized` | Run containerized E2E tests (no host tools needed) |
-| `make lint` | Run `go vet` |
+| `make lint` | Validate `docs/api/openapi.yaml` (pinned Redocly CLI), then run `go vet`. Needs node + network — see [CI](development/ci.md#openapi-spec-validation) |
+| `make lint-openapi` | The OpenAPI half of `make lint` on its own |
 | `make proto` | Regenerate protobuf/gRPC code from `scanner-bridge/proto/scanner.proto` |
 | `make clean` | Remove `bin/` directory |
 
