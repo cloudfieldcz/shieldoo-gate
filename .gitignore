@@ -83,3 +83,6 @@ config.yaml
 # Claude Code local state
 .claude/
 tools/version-diff-replay/known-malicious/out/
+
+# Playwright MCP scratch output (screenshots, page snapshots, console logs)
+.playwright-mcp/

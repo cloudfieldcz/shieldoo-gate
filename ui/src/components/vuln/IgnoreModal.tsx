@@ -106,7 +106,8 @@ export default function IgnoreModal({
       <div className="bg-white rounded-lg shadow-2xl w-full max-w-2xl">
         <div className="px-6 py-4 border-b border-gray-200">
           <h2 className="text-lg font-semibold">
-            {restoreFromExpired ? 'Restore' : 'Ignore'} {finding.cve_id} on {finding.package_name}@{finding.package_version}
+            {restoreFromExpired ? 'Restore' : 'Ignore'} {finding.cve_id} on{' '}
+            {finding.package_version ? `${finding.package_name}@${finding.package_version}` : finding.package_name}
           </h2>
           {restoreFromExpired && (
             <p className="mt-1 text-xs text-amber-700">
