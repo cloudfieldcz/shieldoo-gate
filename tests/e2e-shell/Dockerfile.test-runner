@@ -10,6 +10,18 @@
 # We do NOT need the rest of internal/ — the shdg main package is Go-stdlib-only.
 # We also do NOT git-stamp the binary (no .git in the build context); a hard-coded
 # "e2e" value is sufficient for the smoke test.
+#
+# The `FROM golang:...` below is an ADR-010 Go-toolchain lockstep location —
+# it compiles the `shdg` binary shipped into the e2e image. Keep it in
+# lockstep with go.mod's `go` directive, docker/Dockerfile's `go-builder`
+# stage, the three CI GO_VERSION values (.github/workflows/{ci,codeql,
+# release}.yml), and — easy to miss — the SEPARATE ARG GO_VERSION/GO_SHA256
+# tarball install further down in *this same file*, which is an independent
+# toolchain that neither implies nor updates this one. Bump the tag AND the
+# @sha256 digest together: Docker resolves `name:tag@digest` by digest, so
+# editing only the tag silently keeps building the old, unpatched image with
+# no checksum failure to catch it. See ADR-010 for the authoritative
+# seven-location list.
 FROM golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc AS shdg-build
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -99,7 +111,12 @@ RUN apt-get update && \
 # sha256sum -c below fails the build. Get the checksum from
 # https://go.dev/dl/?mode=json (the linux-amd64 tarball entry) — never
 # invent one. Keep in lockstep with go.mod's `go` directive, both Dockerfile
-# builder images, and the three CI GO_VERSION values (see ADR-010).
+# builder images (docker/Dockerfile's `go-builder` stage and the `shdg-build`
+# stage above — on those `FROM golang:<tag>@sha256:<digest>` lines the tag and
+# the digest must move together, since Docker resolves by digest and a
+# tag-only edit silently keeps the old image), and the three CI GO_VERSION
+# values in .github/workflows/{ci,codeql,release}.yml. See ADR-010 for the
+# authoritative seven-location list.
 # ---------------------------------------------------------------------------
 ARG GO_VERSION=1.27.0
 ARG GO_SHA256=675c26c449cbb18fc24b74650de1eabbae6e16f64326fd85a283fb3b58280685

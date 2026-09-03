@@ -23,7 +23,10 @@ env:
   # Keep in lockstep with go.mod's `go` directive, docker/Dockerfile's
   # go-builder stage, tests/e2e-shell/Dockerfile.test-runner (shdg-build
   # stage + its ARG GO_VERSION/GO_SHA256 pair), and the sibling GO_VERSION
-  # in ci.yml and release.yml. See ADR-010 for the full seven-location
+  # in ci.yml and release.yml. On both `FROM golang:<tag>@sha256:<digest>`
+  # lines the tag and the digest must move together — Docker resolves such a
+  # reference by digest, so editing only the tag silently keeps building the
+  # old, unpatched image. See ADR-010 for the authoritative seven-location
   # list and the CVEs this version fixes.
   GO_VERSION: "1.27.0"
 

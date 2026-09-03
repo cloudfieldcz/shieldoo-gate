@@ -16,10 +16,15 @@ env:
   # Keep in lockstep with go.mod's `go` directive and docker/Dockerfile's
   # golang builder tag — 1.27.0 carries the go1.26.6 stdlib fixes for
   # GO-2026-6218/6091/6090/6089/6088/5972/5026. Also keep in lockstep with
-  # the sibling GO_VERSION in ci.yml/codeql.yml and, easy to miss, the
-  # tests/e2e-shell/Dockerfile.test-runner ARG GO_VERSION/GO_SHA256 pair
-  # (a separate toolchain, two-value bump) — see ADR-010 for the full
-  # seven-location list.
+  # the sibling GO_VERSION in ci.yml/codeql.yml and, easy to miss, BOTH Go
+  # toolchains inside tests/e2e-shell/Dockerfile.test-runner: its
+  # `shdg-build` stage's own `FROM golang:...` line AND the separate
+  # ARG GO_VERSION/GO_SHA256 tarball install later in that same file
+  # (a second, independent toolchain; a two-value bump). On every
+  # `FROM golang:<tag>@sha256:<digest>` line the tag and the digest must
+  # move together — Docker resolves such a reference by digest, so editing
+  # only the tag silently keeps building the old, unpatched image with a
+  # green build. See ADR-010 for the authoritative seven-location list.
   GO_VERSION: "1.27.0"
 
 jobs:

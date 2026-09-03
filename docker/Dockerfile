@@ -29,8 +29,11 @@ RUN npm run build
 # .github/workflows/{ci,codeql,release}.yml, and — easy to miss —
 # tests/e2e-shell/Dockerfile.test-runner's own `FROM golang:...` stage AND
 # its separate ARG GO_VERSION/GO_SHA256 tarball install, so all build paths
-# embed the same patched stdlib. See ADR-010 for the full seven-location
-# list.
+# embed the same patched stdlib. On both `FROM golang:<tag>@sha256:<digest>`
+# lines the tag and the @sha256 digest must move together — Docker resolves
+# such a reference by digest, so editing only the tag silently keeps building
+# the old, unpatched image with a green build and no checksum failure. See
+# ADR-010 for the authoritative seven-location list.
 FROM golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc AS go-builder
 
 ARG SGW_TOKEN=""
