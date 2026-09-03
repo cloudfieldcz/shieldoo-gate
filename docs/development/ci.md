@@ -121,6 +121,7 @@ reopening an unmergeable PR every patch release.
 | Dependency | Pinned at | Blocked by | Release condition |
 |---|---|---|---|
 | `typescript` | 6.0.3 | `typescript-eslint` (incl. its canary) declares `peer typescript >=4.8.4 <6.1.0`, so TS 7 fails `npm ci` with `ERESOLVE` and leaves the type-aware lint rules without a supported parser | `typescript-eslint`'s peer range admits 7.x |
+| `python` (scanner-bridge base image) | 3.13.14-slim | `guarddog` (all releases through 3.2.0, and `main`) constrains `pygit2 >=1.11,<1.19`, and `pygit2` ships `cp314` wheels only from 1.19.0 on. On 3.14 `uv` falls back to the pygit2 sdist, which links the builder's `libgit2-dev`; that `.so` is absent from the runtime stage (ADR-010), so the image fails its build-time import check with `libgit2.so.1.9: cannot open shared object file` (#184) | a `guarddog` release that allows `pygit2 >=1.19` |
 
 Removing a hold means deleting the `ignore:` entry **and** the row above in the
 same PR.
