@@ -112,6 +112,24 @@ forced download rather than trusting a green build:
 docker run --rm --user root <image> /usr/local/bin/python -m pip install --no-cache-dir --require-hashes --force-reinstall --ignore-installed -r /app/pip-bootstrap.txt
 ```
 
+### Why `httpx` is pinned explicitly, and where TLS trust comes from
+
+`openai` 3.0 made **HTTPX2** its default HTTP client and stopped installing
+`httpx` at all. Two consequences for the bridge:
+
+- `scanner-bridge/ssrf_guard.py` imports `httpx` **directly**, and until the
+  openai 3.x bump that import was satisfied only as an openai transitive dep.
+  `httpx` is therefore now a first-class pin in `requirements.in`; the lock
+  carries both stacks (`httpx`/`httpcore` for the SSRF guard, `httpx2`/
+  `httpcore2` for openai).
+- HTTPX2 verifies TLS against the **operating-system trust store** (via
+  `truststore`) instead of the `certifi` bundle. The pinned `python:3.13.x-slim`
+  base ships `ca-certificates` (151 CAs), so outbound calls to the
+  Azure OpenAI / OpenAI endpoint work out of the box. A deployment behind a
+  TLS-inspecting proxy must install its CA into the OS store
+  (`/usr/local/share/ca-certificates` + `update-ca-certificates`) — patching
+  `certifi` no longer affects the openai client.
+
 ### Why the venv, and why the base image is stuck on Python 3.13
 
 Dependencies live in `/opt/venv` rather than the interpreter's own
@@ -124,7 +142,7 @@ verbatim, and every base-image bump failed on a path that no longer existed.
 **The base image cannot move to Python 3.14 yet.** The blocker is upstream, not
 the paths:
 
-- `guarddog` (all releases through 3.1.0, and `main`) constrains `pygit2 >=1.11,<1.19`.
+- `guarddog` (all releases through 3.2.0, and `main`) constrains `pygit2 >=1.11,<1.19`.
 - `pygit2` publishes `cp314` wheels only from **1.19.0** onward; 1.18.x stops at `cp313`.
 
 On 3.14 `uv` therefore falls back to the pygit2 **sdist**, which links against the

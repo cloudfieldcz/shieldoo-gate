@@ -21,7 +21,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-GUARDDOG_VERSION = "3.0.2"
+GUARDDOG_VERSION = "3.2.0"
 
 # AI scanner is optional — only loaded when enabled via environment.
 AI_SCANNER_ENABLED = os.environ.get("AI_SCANNER_ENABLED", "false").lower() == "true"
