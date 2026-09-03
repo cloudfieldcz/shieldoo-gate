@@ -19,7 +19,14 @@ import (
 const (
 	// trivyVersion is the pinned Trivy release shdg downloads at first run.
 	// Bumping requires updating expectedChecksums below.
-	trivyVersion = "0.72.0"
+	//
+	// KEEP IN LOCKSTEP with docker/Dockerfile's `FROM aquasec/trivy:...` line
+	// (the gate's bundled Trivy) — the two are independent pins with no
+	// shared automation, so nothing else catches a mismatch. CI enforces
+	// this: the "Trivy version parity" step in .github/workflows/ci.yml
+	// greps both files and fails the build if the versions disagree. See
+	// docs/development/ci.md ("Trivy version lockstep").
+	trivyVersion = "0.74.0"
 
 	// defaultTrivyBaseURL is the GitHub releases host. Override via the second
 	// arg to ensureTrivy in tests.
@@ -34,16 +41,16 @@ const (
 //
 // IMPLEMENTER: replace the placeholders below with real values from
 //
-//	curl -L https://github.com/aquasecurity/trivy/releases/download/v0.72.0/trivy_0.72.0_checksums.txt
+//	curl -L https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_checksums.txt
 //
 // A unit test (TestExpectedChecksums_AllPinned) FAILS the build if any value
 // is missing or still starts with the placeholder, so the placeholder cannot
 // ship to production.
 var expectedChecksums = map[string]string{
-	"trivy_0.72.0_Linux-64bit.tar.gz": "bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea",
-	"trivy_0.72.0_Linux-ARM64.tar.gz": "2ca2c023109c2db6b2b77366b6717291452d4531167377d95c79547f0c8e3467",
-	"trivy_0.72.0_macOS-64bit.tar.gz": "ee5e60df8a98e5b89fd74a6d86f9e5c7e9a266a35002cb1e43291698b3bfee08",
-	"trivy_0.72.0_macOS-ARM64.tar.gz": "88f208680dc05da2b459e19b4f5aa2b4dc7c2117892ba4aab2ae63baba330016",
+	"trivy_0.74.0_Linux-64bit.tar.gz": "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a",
+	"trivy_0.74.0_Linux-ARM64.tar.gz": "b94ce1976bbf3c15b514b605ee88be7c6d94a29be2302847ff01cb794d47aad5",
+	"trivy_0.74.0_macOS-64bit.tar.gz": "472816f6888dda689d075c30254d4210b4d1035acf365aa72332f584c2f60485",
+	"trivy_0.74.0_macOS-ARM64.tar.gz": "1caada5e0e2091909357c7525d3aa76f4b660b13821bc143b190c7483e31cc11",
 }
 
 // ErrUnsupportedPlatform is returned when shdg runs on a (GOOS, GOARCH) for
@@ -235,10 +242,21 @@ func extractTrivyBinary(tarPath, target string) error {
 		//      explicitly rather than being skipped)
 		//   2. exact-name match (not filepath.Base — `subdir/trivy` is skipped)
 		//   3. only regular files (no symlinks / hardlinks / devices)
-		//   4. per-entry size cap (200 MiB — Trivy v0.70 binary is ~70 MB
-		//      compressed, ~150 MB raw; pick a value comfortably above the real
-		//      binary and below "abuse"). The outer 200 MiB cap on the on-disk
-		//      tarball is independent.
+		//   4. per-entry size cap (400 MiB). Measured raw trivy binary sizes
+		//      at the 0.74.0 pin: Linux-64bit 168,456,354 B (~160.7 MiB),
+		//      Linux-ARM64 156,106,914 B (~148.9 MiB), macOS-64bit
+		//      172,598,512 B (~164.6 MiB, the largest), macOS-ARM64
+		//      161,425,922 B (~153.9 MiB) — measured directly by extracting
+		//      each release tarball, not estimated. 400 MiB leaves ~235 MiB
+		//      of headroom over the largest (the cap is ~2.4x that binary),
+		//      versus the previous 200 MiB cap's ~35 MiB (~18% headroom) —
+		//      the old comment's "~150 MB raw" baseline was stale and the
+		//      real margin had shrunk to nearly nothing. Re-measure and
+		//      adjust on every version bump; this is still a meaningful
+		//      bomb cap, not a `math.MaxInt64` free pass. The outer 200 MiB
+		//      cap on the on-disk *compressed* tarball (~50 MB real, see
+		//      `download`) is a separate, independent check and is
+		//      unaffected by this raw-size cap.
 		if strings.Contains(h.Name, "..") {
 			return fmt.Errorf("tar entry name contains '..' — refusing: %q", h.Name)
 		}
@@ -248,7 +266,7 @@ func extractTrivyBinary(tarPath, target string) error {
 		if h.Typeflag != tar.TypeReg {
 			return fmt.Errorf("tar entry 'trivy' is not a regular file (typeflag=%d) — refusing", h.Typeflag)
 		}
-		const perEntryCap = 200 << 20
+		const perEntryCap = 400 << 20
 		out, err := os.Create(target)
 		if err != nil {
 			return err
