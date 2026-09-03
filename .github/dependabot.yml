@@ -54,17 +54,45 @@ updates:
     commit-message:
       prefix: "chore(deps)"
 
-  # Base image digests — production Dockerfiles + e2e test runner.
+  # Base image digests — production Dockerfile + e2e test runner.
   - package-ecosystem: "docker"
     directories:
       - "/docker"
-      - "/scanner-bridge"
       - "/tests/e2e-shell"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
     commit-message:
       prefix: "build(docker)"
+
+  # Base image digest for the Python scanner bridge. Split out from the entry
+  # above so the `python` hold below applies ONLY here — the other Dockerfiles
+  # use node/golang/alpine/ubuntu bases and must keep receiving every bump.
+  - package-ecosystem: "docker"
+    directory: "/scanner-bridge"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "build(docker)"
+    ignore:
+      # Python 3.14 is unusable here until guarddog relaxes its pygit2 bound:
+      # every guarddog release through 3.2.0 (and `main`) constrains
+      # `pygit2 >=1.11,<1.19`, and pygit2 ships cp314 wheels only from 1.19.0
+      # on. Under 3.14 uv therefore falls back to the pygit2 sdist, which links
+      # the builder's libgit2-dev; that .so is deliberately absent from the
+      # runtime stage (ADR-010), so the image dies on its build-time import
+      # check with `libgit2.so.1.9: cannot open shared object file`.
+      # Dependabot reopened the same unmergeable PR on every 3.14.x release
+      # (#184). Note the update-types: a docker tag bump 3.13.14 -> 3.14.7 is a
+      # *minor* version change, not a major one, so semver-major alone would
+      # not stop it; major is listed too because a hypothetical 4.x base hits
+      # the identical missing-wheel blocker.
+      # REMOVE this entry once a guarddog release allows `pygit2 >=1.19`.
+      - dependency-name: "python"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
 
   # GitHub Actions SHA pins (release.yml + future workflows).
   - package-ecosystem: "github-actions"

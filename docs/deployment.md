@@ -112,6 +112,34 @@ forced download rather than trusting a green build:
 docker run --rm --user root <image> /usr/local/bin/python -m pip install --no-cache-dir --require-hashes --force-reinstall --ignore-installed -r /app/pip-bootstrap.txt
 ```
 
+### Why `httpx` is pinned explicitly, and where TLS trust comes from
+
+`openai` 3.0 made **HTTPX2** its default HTTP client and stopped installing
+`httpx` at all. Two consequences for the bridge:
+
+- **`httpx` is now pinned in `requirements.in` for the test suite only — no
+  code running in the image imports it.** `scanner-bridge/ssrf_guard.py` does
+  `import httpx`, but that module is deliberately **not** in the runtime
+  Dockerfile's `COPY` list and no shipped module imports it (`vuln_drafter.py`
+  mentions it in a docstring only). Its one live consumer is
+  `scanner-bridge/tests/test_ssrf_guard.py`, which fails collection without
+  `httpx` — and until the openai 3.x bump that import was satisfied only as an
+  openai transitive dep, so the pin had to become explicit. The lock therefore
+  carries two HTTP stacks: `httpx2`/`httpcore2` (openai — the one actually used
+  at runtime) and `httpx`/`httpcore` (dev/test only). **If `ssrf_guard.py` is
+  ever wired in or retired, the `httpx` pin moves or goes with it** — do not
+  read it as a production dependency.
+- HTTPX2 verifies TLS against the **operating-system trust store** (via
+  `truststore`) instead of the `certifi` bundle. The pinned `python:3.13.x-slim`
+  base ships `ca-certificates` (151 CAs), so outbound calls to the
+  Azure OpenAI / OpenAI endpoint work out of the box. **A deployment behind a
+  TLS-inspecting proxy must install its CA in both places:** the OS store
+  (`/usr/local/share/ca-certificates` + `update-ca-certificates`) for the openai
+  client, *and* `certifi` for the `requests`/`urllib3` path that GuardDog uses
+  for its metadata lookups (`certifi` is still in the lock, `# via requests`).
+  Patching `certifi` alone no longer covers the openai client; patching only the
+  OS store no longer covers GuardDog.
+
 ### Why the venv, and why the base image is stuck on Python 3.13
 
 Dependencies live in `/opt/venv` rather than the interpreter's own
@@ -124,7 +152,7 @@ verbatim, and every base-image bump failed on a path that no longer existed.
 **The base image cannot move to Python 3.14 yet.** The blocker is upstream, not
 the paths:
 
-- `guarddog` (all releases through 3.1.0, and `main`) constrains `pygit2 >=1.11,<1.19`.
+- `guarddog` (all releases through 3.2.0, and `main`) constrains `pygit2 >=1.11,<1.19`.
 - `pygit2` publishes `cp314` wheels only from **1.19.0** onward; 1.18.x stops at `cp313`.
 
 On 3.14 `uv` therefore falls back to the pygit2 **sdist**, which links against the

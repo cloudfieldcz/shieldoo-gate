@@ -6,7 +6,10 @@ legitimate packages) alongside real ``threat-*`` / metadata detectors, plus an
 aggregate ``risk_score`` with a ``label``. The bridge must treat capability-only
 results as CLEAN (else it false-positive-blocks any package that touches the
 network or a subprocess) while still flagging real threats. The fixtures below
-are trimmed copies of actual ``guarddog==3.0.2`` output.
+are trimmed copies of real GuardDog output, captured under 3.0.x; the contract
+they encode (``capability-`` rule-name prefix, ``risk_score["label"] ==
+"no_risks_detected"``) was re-verified as unchanged in the currently pinned
+``guarddog==3.2.0``. Re-verify it here whenever that pin moves.
 """
 
 import sys
@@ -17,7 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from main import classify_guarddog_result  # noqa: E402
 
 
-# Real guarddog==3.0.2 output for a package doing base64-exec + download-and-run.
+# Real GuardDog output for a package doing base64-exec + download-and-run
+# (shape re-verified against the pinned guarddog==3.2.0).
 MALICIOUS_PYPI = {
     "results": {
         "threat-process-download-exec": 1,
@@ -52,7 +56,8 @@ MALICIOUS_PYPI = {
     ],
 }
 
-# Real guarddog==3.0.2 output for a benign package that uses subprocess + urllib.
+# Real GuardDog output for a benign package that uses subprocess + urllib
+# (shape re-verified against the pinned guarddog==3.2.0).
 BENIGN_CAPABILITY_ONLY = {
     "results": {
         "capability-filesystem-read": 1,

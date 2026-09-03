@@ -113,14 +113,20 @@ locally with `npm run lint` from `ui/`.
 
 ## Held-back dependencies
 
-Dependencies that are deliberately **not** on their latest major, with the
-condition that releases the hold. Each has a matching `ignore:` entry in
+Dependencies deliberately **pinned below the version Dependabot wants to move
+them to** — usually a major, sometimes only a minor (the scanner-bridge base
+image is held inside major 3) — with the condition that releases the hold. Each
+has a matching `ignore:` entry in
 [`.github/dependabot.yml`](../../.github/dependabot.yml) so the bot stops
-reopening an unmergeable PR every patch release.
+reopening an unmergeable PR on every release. Check that entry's
+`update-types` when adding a row: it must match the kind of bump actually being
+blocked, which is not always the semver level it looks like (a docker tag bump
+`3.13.14` -> `3.14.7` is a *minor*, not a major).
 
 | Dependency | Pinned at | Blocked by | Release condition |
 |---|---|---|---|
 | `typescript` | 6.0.3 | `typescript-eslint` (incl. its canary) declares `peer typescript >=4.8.4 <6.1.0`, so TS 7 fails `npm ci` with `ERESOLVE` and leaves the type-aware lint rules without a supported parser | `typescript-eslint`'s peer range admits 7.x |
+| `python` (scanner-bridge base image) | 3.13.14-slim | `guarddog` (all releases through 3.2.0, and `main`) constrains `pygit2 >=1.11,<1.19`, and `pygit2` ships `cp314` wheels only from 1.19.0 on. On 3.14 `uv` falls back to the pygit2 sdist, which links the builder's `libgit2-dev`; that `.so` is absent from the runtime stage (ADR-010), so the image fails its build-time import check with `libgit2.so.1.9: cannot open shared object file` (#184) | a `guarddog` release that allows `pygit2 >=1.19` |
 
 Removing a hold means deleting the `ignore:` entry **and** the row above in the
 same PR.

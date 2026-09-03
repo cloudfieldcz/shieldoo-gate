@@ -3,7 +3,10 @@
 # pip ships with the python:slim base image and is NOT a runtime dependency of
 # the bridge (which only runs `python main.py` out of /opt/venv), but the vuln
 # scanner still sees it, so it is upgraded to a patched release at build time.
-# 26.1.2 fixes CVE-2026-3219, CVE-2026-6357 and PYSEC-2026-196.
+# 26.1.2 fixed CVE-2026-3219, CVE-2026-6357 and PYSEC-2026-196; 26.2 adds
+# CVE-2026-13346 (double-decoded URL path when deriving a link filename) plus
+# hardened tar validation against symlink traversal, and 26.2.1 is the keyring
+# regression fix on top of it.
 #
 # It lives in its own file rather than inline in the Dockerfile so the install
 # can run under `--require-hashes`: an exact version alone still lets a
@@ -12,6 +15,6 @@
 #
 # To bump: take the digests from https://pypi.org/pypi/pip/<version>/json
 # (`urls[].digests.sha256`) — never from a local download.
-pip==26.1.2 \
-    --hash=sha256:382ff9f685ee3bc25864f820aa50505825f10f5458ffff07e30a6d96e5715cab \
-    --hash=sha256:f49cd134c61cf2fd75e0ce2676db03e4054504a5a4986d00f8299ae632dc4605
+pip==26.2.1 \
+    --hash=sha256:71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e \
+    --hash=sha256:f6ad667e89a1fe78046c8f13232b247200f5258d7828f3f7883d660878e0813f

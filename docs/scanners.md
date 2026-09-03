@@ -178,7 +178,7 @@ External scanners are **optional** — enabled/disabled via configuration. They 
 | **Communication** | gRPC over Unix socket to Python sidecar |
 | **Config key** | `scanners.guarddog.enabled`, `scanners.guarddog.bridge_socket` |
 
-GuardDog is a behavioral scanner by Datadog that detects malicious patterns in Python and JavaScript packages using source-code + metadata heuristics. Since GuardDog is Python-native, it runs in a separate Python process (`scanner-bridge/main.py`) communicating via gRPC. The bridge pins **`guarddog==3.0.2`** (`scanner-bridge/requirements.in`); 3.0 replaced the semgrep source-code engine with a native one (and dropped the `semgrep` dependency — see [ADR-010](adr/ADR-010-base-image-security-patching.md)).
+GuardDog is a behavioral scanner by Datadog that detects malicious patterns in Python and JavaScript packages using source-code + metadata heuristics. Since GuardDog is Python-native, it runs in a separate Python process (`scanner-bridge/main.py`) communicating via gRPC. The bridge pins **`guarddog==3.2.0`** (`scanner-bridge/requirements.in`); 3.0 replaced the semgrep source-code engine with a native one (and dropped the `semgrep` dependency — see [ADR-010](adr/ADR-010-base-image-security-patching.md)).
 
 The gRPC protocol (`scanner-bridge/proto/scanner.proto`) defines one service with six RPCs — GuardDog uses `ScanArtifact`; the others back the AI scanner, version-diff scanner, and vuln-scan AI surfaces:
 
