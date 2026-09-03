@@ -34,11 +34,50 @@ release pipeline (`release.yml`) is the only workflow today and the priority
 target because of its write scopes; the rule applies to every workflow added
 later.
 
-Resolving a tag to its commit SHA (dereferencing annotated tags):
+Resolving a tag to its commit SHA:
 
 ```
 gh api repos/<owner>/<repo>/git/ref/tags/<tag> --jq '.object.sha'
 ```
+
+**This alone is only correct for a *lightweight* tag.** A ref of type `tag`
+points straight at a commit, so the command above already returns the commit
+SHA — e.g. `actions/checkout`'s tags are lightweight, and
+`gh api repos/actions/checkout/git/ref/tags/v7.0.1 --jq '.object.sha'` returns
+`3d3c42e5aac5ba805825da76410c181273ba90b1`, a commit, ready to pin.
+
+An *annotated* tag inserts an extra Git object between the ref and the commit:
+the ref points at a tag object, and the tag object points at the commit. For
+those, the command above returns the tag object's SHA, not the commit's — and
+that SHA is **not** a valid pin: `uses:` requires a commit, and GitHub Actions
+fails a workflow using a tag-object SHA with `unable to resolve action ...
+revision not found`. `github/codeql-action` uses annotated tags, so this is
+not a corner case — it's the action this repo pins by SHA in every CodeQL
+workflow. Concretely, for v4.37.9:
+
+```
+$ gh api repos/github/codeql-action/git/ref/tags/v4.37.9 --jq '.object.sha, .object.type'
+a35ac6e6798d72df5475948b28efb89edc2e19ca
+tag
+```
+
+That SHA is the tag object, not the commit — do not pin it. Dereference once
+more to reach the commit it points to:
+
+```
+$ gh api repos/github/codeql-action/git/tags/a35ac6e6798d72df5475948b28efb89edc2e19ca --jq '.object.sha, .object.type'
+cdf488f595d80d6e07e03d4674febd5ab45fa938
+commit
+```
+
+`cdf488f595d80d6e07e03d4674febd5ab45fa938` is what actually belongs in the
+`uses:` pin (and is what this repo's workflows pin for
+`github/codeql-action/*@...# v4.37.9`). The `--jq '.object.type'` in both
+commands is not decorative: check it before trusting `.object.sha` as a
+commit — if it prints `tag`, you have not reached the commit yet and must run
+the second command; only `commit` is safe to pin. Do not "simplify" this back
+to the single-command form — that form is silently wrong for every annotated
+tag, and the failure only surfaces later, in CI, as an unresolvable revision.
 
 SHAs are auto-bumped by Dependabot's `github-actions` ecosystem
 (`.github/dependabot.yml`, weekly); manual re-resolution remains a fallback.
