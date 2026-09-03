@@ -57,7 +57,10 @@ func (c StaleRunReaperConfig) withDefaults() StaleRunReaperConfig {
 	}
 	switch {
 	case c.Threshold <= 0:
-		// Unset, negative, or an unparseable duration string upstream.
+		// Unset (the zero value of a struct literal that omitted it) or explicitly
+		// negative. An unparseable duration string does NOT land here: parseDurationOr
+		// in the wiring returns its fallback, which for this knob is already
+		// DefaultStaleRunThreshold(rescan.Timeout).
 		c.Threshold = DefaultStaleRunThreshold(0)
 	case c.Threshold < StaleRunThresholdFloor:
 		// An explicitly configured value below the floor would reap live scans on

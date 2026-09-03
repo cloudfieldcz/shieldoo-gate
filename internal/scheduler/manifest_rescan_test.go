@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -103,4 +104,49 @@ func TestManifestRescan_InFlightWithoutLastScan_LogsNothing(t *testing.T) {
 	s.RunOnce(context.Background())
 
 	assert.NotContains(t, buf.String(), "scan already in flight")
+}
+
+// The skip line's grace has to track the scan budget the operator configured. With the
+// default 5m timeout the 15m floor stands; an operator running a 30m timeout would
+// otherwise get a WARN for every legitimately slow scan.
+func TestManifestRescan_LongTimeout_WidensTheSkipGrace(t *testing.T) {
+	db := reaperTestDB(t)
+	componentID := seedReaperComponent(t, db, "slow-image")
+	lastGoodID := seedStaleRun(t, db, componentID, "done", 500)
+	_, err := db.Exec(`UPDATE components SET last_scan_id = ? WHERE id = ?`, lastGoodID, componentID)
+	require.NoError(t, err)
+	seedStaleRun(t, db, componentID, "running", 1) // one hour in
+
+	buf := captureLogs(t)
+	// 2 x 45m = 1h30m of grace, so a one-hour-old run is still a benign overlap.
+	s := scheduler.NewManifestRescanScheduler(
+		scheduler.ManifestRescanConfig{Timeout: 45 * time.Minute}, db, nil, nil)
+	s.RunOnce(context.Background())
+
+	out := buf.String()
+	assert.Contains(t, out, "manifest_rescan: component skipped, scan already in flight")
+	assert.Contains(t, out, `"stuck":false`)
+	assert.Contains(t, out, `"grace":"1h30m0s"`, "the line must say which grace it judged against")
+	assert.NotContains(t, out, `"level":"warn"`)
+}
+
+// The floor still dominates a short timeout: 2 x 5m is below 15m, so a 20-minute-old run
+// is still reported as stuck.
+func TestManifestRescan_ShortTimeout_KeepsTheFifteenMinuteFloor(t *testing.T) {
+	db := reaperTestDB(t)
+	componentID := seedReaperComponent(t, db, "quick-image")
+	lastGoodID := seedStaleRun(t, db, componentID, "done", 500)
+	_, err := db.Exec(`UPDATE components SET last_scan_id = ? WHERE id = ?`, lastGoodID, componentID)
+	require.NoError(t, err)
+	seedStaleRun(t, db, componentID, "running", 1)
+
+	buf := captureLogs(t)
+	s := scheduler.NewManifestRescanScheduler(
+		scheduler.ManifestRescanConfig{Timeout: 5 * time.Minute}, db, nil, nil)
+	s.RunOnce(context.Background())
+
+	out := buf.String()
+	assert.Contains(t, out, `"grace":"15m0s"`)
+	assert.Contains(t, out, `"stuck":true`)
+	assert.Contains(t, out, `"level":"warn"`)
 }

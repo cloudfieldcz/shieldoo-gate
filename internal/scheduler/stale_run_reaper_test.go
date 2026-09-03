@@ -189,11 +189,7 @@ func TestStaleRunReaper_ReapedComponent_BecomesRescanEligible(t *testing.T) {
 
 	// Runs the production predicate itself, not a copy of it, so the two cannot drift.
 	eligible := func() []int64 {
-		type row struct {
-			ID         int64  `db:"id"`
-			LastScanID *int64 `db:"last_scan_id"`
-		}
-		var rows []row
+		var rows []scheduler.RescanEligibleComponent
 		require.NoError(t, db.Select(&rows, scheduler.RescanEligibleComponentsQuery))
 		ids := make([]int64, 0, len(rows))
 		for _, r := range rows {
