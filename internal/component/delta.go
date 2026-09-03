@@ -11,7 +11,7 @@ import (
 // Delta is the diff between two scan runs (current vs previous).
 //
 // The two halves are measured at deliberately different granularities — see
-// ComputeDelta and [ADR-022](../../docs/adr/ADR-022-version-aware-scan-delta.md).
+// ComputeDelta, and docs/adr/ADR-022-version-aware-scan-delta.md for the reasoning.
 type Delta struct {
 	// NewCritical / NewHigh are the unsuppressed findings whose exact
 	// (cve, package, version) triple was absent from the previous run.
@@ -61,8 +61,8 @@ func keyOf(f *ScanFinding) findingKey {
 //     CVE as resolved every time the package it sits on is bumped, including when the
 //     new version still carries it.
 //
-// The consequence, stated plainly: **bumping a package that still carries the CVE
-// re-alerts it against the new version and does not report it resolved.** That is a
+// The consequence, stated plainly: bumping a package that still carries the CVE
+// re-alerts it against the new version and does not report it resolved. That is a
 // false positive by choice. The alternative — treating a CVE as already-known for a
 // package at every version — is what produced the missed regression above, and on a
 // security alert an extra line costs attention while a missing one costs coverage.
