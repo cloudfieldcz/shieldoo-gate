@@ -17,9 +17,9 @@ kept current by Dependabot (`.github/dependabot.yml`).
 
 Three jobs, all `permissions: contents: read`:
 
-- **`go`** — `make build`, `make lint` (`go vet`), `make test` (`go test -race`).
-  CGO is on (go-sqlite3 + `-race` require it); gcc is present on
-  `ubuntu-latest`.
+- **`go`** — a "Trivy version parity" grep check (below), `make build`,
+  `make lint` (`go vet`), `make test` (`go test -race`). CGO is on
+  (go-sqlite3 + `-race` require it); gcc is present on `ubuntu-latest`.
 - **`ui`** — `npm ci`, `npm run lint` (ESLint 10 flat config), `npm run build`
   (`tsc` + Vite — the type-check gate).
 - **`ui-e2e`** — `make test-ui`: brings up a dedicated fresh open-mode gate and
@@ -34,6 +34,21 @@ Three jobs, all `permissions: contents: read`:
 
 Go and Node versions are pinned via `env:` and kept in lockstep with `go.mod`
 and `docker/Dockerfile`.
+
+#### Trivy version lockstep
+
+Trivy is pinned in two independent places with no shared automation:
+`docker/Dockerfile`'s `FROM aquasec/trivy:...` line (the gate's bundled
+binary) and `cmd/shdg/trivy.go`'s `trivyVersion` constant (what the `shdg`
+CLI downloads at first run, alongside its own per-platform SHA-256 pins).
+Because Dependabot only ever proposes the Docker tag bump, a routine
+single-concern merge of that PR would silently leave `trivyVersion` behind —
+there is no test or doc to catch it on its own. The `go` job's "Trivy version
+parity" step greps both files and fails the build if the versions disagree,
+so a bump must always land as one commit that moves both. When bumping,
+also verify the four `expectedChecksums` entries in `cmd/shdg/trivy.go` by
+downloading the real release tarballs and hashing them — never trust the
+upstream `checksums.txt` alone (see the comment above `expectedChecksums`).
 
 ### Security scan (`codeql.yml`)
 

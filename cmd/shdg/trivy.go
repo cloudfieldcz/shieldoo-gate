@@ -19,6 +19,13 @@ import (
 const (
 	// trivyVersion is the pinned Trivy release shdg downloads at first run.
 	// Bumping requires updating expectedChecksums below.
+	//
+	// KEEP IN LOCKSTEP with docker/Dockerfile's `FROM aquasec/trivy:...` line
+	// (the gate's bundled Trivy) — the two are independent pins with no
+	// shared automation, so nothing else catches a mismatch. CI enforces
+	// this: the "Trivy version parity" step in .github/workflows/ci.yml
+	// greps both files and fails the build if the versions disagree. See
+	// docs/development/ci.md ("Trivy version lockstep").
 	trivyVersion = "0.74.0"
 
 	// defaultTrivyBaseURL is the GitHub releases host. Override via the second

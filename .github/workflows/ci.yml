@@ -38,6 +38,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # docker/Dockerfile's `FROM aquasec/trivy:...` and cmd/shdg/trivy.go's
+      # trivyVersion are two independent pins with no shared automation (see
+      # docs/development/ci.md, "Trivy version lockstep"). A Dependabot bump
+      # of the Docker tag alone would otherwise land clean and silently drift
+      # from the shdg downloader — this grep-level check fails the build
+      # loudly instead.
+      - name: Trivy version parity (docker/Dockerfile vs cmd/shdg/trivy.go)
+        run: |
+          set -euo pipefail
+          dockerfile_version=$(grep -oE 'aquasec/trivy:[0-9]+\.[0-9]+\.[0-9]+' docker/Dockerfile | head -1 | cut -d: -f2)
+          shdg_version=$(grep -oE 'trivyVersion = "[0-9]+\.[0-9]+\.[0-9]+"' cmd/shdg/trivy.go | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          echo "docker/Dockerfile pins aquasec/trivy:${dockerfile_version}"
+          echo "cmd/shdg/trivy.go pins trivyVersion=${shdg_version}"
+          if [ "$dockerfile_version" != "$shdg_version" ]; then
+            echo "::error::Trivy version drift: docker/Dockerfile pins ${dockerfile_version} but cmd/shdg/trivy.go pins ${shdg_version}. Bump both together (see docs/development/ci.md, \"Trivy version lockstep\")."
+            exit 1
+          fi
+
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
