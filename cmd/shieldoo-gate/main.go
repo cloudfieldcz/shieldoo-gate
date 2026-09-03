@@ -470,25 +470,11 @@ func main() {
 		feedClient := threatfeed.NewClient(db, cfg.ThreatFeed.URL)
 		refreshInterval := parseDuration(cfg.ThreatFeed.RefreshInterval, 1*time.Hour)
 
-		// Initial refresh in background; errors are logged, not fatal
-		go func() {
-			ctx := context.Background()
-			if err := feedClient.Refresh(ctx); err != nil {
-				log.Warn().Err(err).Msg("threat feed initial refresh failed")
-			} else {
-				log.Info().Msg("threat feed initial refresh completed")
-			}
-
-			ticker := time.NewTicker(refreshInterval)
-			defer ticker.Stop()
-			for range ticker.C {
-				if err := feedClient.Refresh(ctx); err != nil {
-					log.Warn().Err(err).Msg("threat feed periodic refresh failed")
-				} else {
-					log.Info().Msg("threat feed periodic refresh completed")
-				}
-			}
-		}()
+		// Initial refresh plus the periodic loop, in the background; refresh
+		// errors are logged, not fatal. Client.Run owns the logging and the
+		// failure escalation (WARN, rising to ERROR once the feed has been
+		// failing for a while or is empty) — see internal/threatfeed.
+		go feedClient.Run(context.Background(), refreshInterval)
 		log.Info().Str("url", cfg.ThreatFeed.URL).Dur("interval", refreshInterval).Msg("threat feed client started")
 	}
 
