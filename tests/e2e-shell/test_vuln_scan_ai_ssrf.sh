@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 # test_vuln_scan_ai_ssrf.sh — adversarial repo_url smoke test against the AI drafter.
 # Verifies the bridge stays alive and never returns 5xx for malicious URLs.
+#
+# SCOPE, honestly: this asserts the API surface does not blow up on a hostile
+# repo_url. It does NOT prove SSRF protection, and cannot — the drafter never
+# fetches repo source in this release, so no URL reaches an HTTP client and the
+# assertion holds vacuously. It is still worth keeping: it pins the "accept at
+# write time, validate at fetch time" contract and it will start doing real work
+# the moment a fetch lands. If you land that fetch, extend this test to assert
+# the fetch is actually refused (a link-local target must not be reached), not
+# merely that the response is not 5xx.
 
 test_vuln_scan_ai_ssrf() {
     log_section "Vuln-scan AI: SSRF-adversarial repo_url smoke"

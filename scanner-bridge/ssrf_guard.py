@@ -10,15 +10,32 @@ route through `validate_url` first. The guard enforces:
    public hosts; deployments override via SSRF_ALLOWED_HOSTS env (comma
    separated regex patterns).
 3. Resolved-IP block: rejects RFC 1918 / loopback / link-local / multicast
-   ranges. Done at validate time AND at fetch time — DNS rebind protection
-   requires both: the validate-time check ensures the URL initially resolves
-   to a public IP; a "DNS-rebind-safe" HTTP client must re-resolve once and
-   pin the connection to the validated IP (we provide a `safe_get` helper
-   that does this).
+   ranges, at validate time.
 
 Defense-in-depth: even if an attacker bypasses the regex allowlist (e.g. a
 GitHub-hosted bug-bait repo), the resolved-IP check still excludes the
 internal network from reach.
+
+THERE IS NO FETCH HELPER HERE, DELIBERATELY. Validation alone does not close
+the DNS-rebind window: between `validate_url` resolving a public IP and a
+caller opening the connection, a hostile DNS server can rotate the answer to
+an internal address. Closing that requires the *client* to pin the connection
+to the IP the validator returned.
+
+This module used to ship a `safe_get` that claimed to do exactly that, by
+requesting `https://<ip>/path` with a `Host:` header. That cannot work and
+never did: httpx (like requests, and like any correct TLS client) takes both
+the SNI name and the certificate-verification hostname from the URL host, so
+every https fetch died with `IP address mismatch, certificate is not valid
+for '<ip>'` — and all four allow-listed hosts are https-only in practice. It
+was removed rather than repaired because nothing called it, so a plausible-
+looking rebind guarantee was the only thing it actually delivered.
+
+Pinning correctly needs the resolution overridden *below* TLS, not a rewritten
+URL — e.g. an httpx transport with a custom resolver, or `socket.create_connection`
+to the validated IP with `server_hostname=host` passed to the TLS wrapper.
+Whoever lands the repo-source fetch owns writing that, with tests. Do not
+reintroduce the Host-header shape.
 """
 
 from __future__ import annotations
@@ -29,8 +46,6 @@ import os
 import re
 import socket
 import urllib.parse
-
-import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -98,8 +113,9 @@ def validate_url(raw: str) -> tuple[str, str, str]:
     """Validate `raw` and return (canonical_url, host, resolved_ip).
 
     Raises SSRFError when rejected. The returned `resolved_ip` MUST be used
-    to pin the connection (see `safe_get`) — re-resolving the host name at
-    fetch time would re-open the rebind window the validator just closed.
+    to pin the connection — re-resolving the host name at fetch time would
+    re-open the rebind window the validator just closed. See the module
+    docstring for why pinning cannot be done with a rewritten URL.
     """
     if not raw or not isinstance(raw, str):
         raise SSRFError("ssrf_guard: empty url")
@@ -134,32 +150,3 @@ def validate_url(raw: str) -> tuple[str, str, str]:
 
     canonical = urllib.parse.urlunparse(parsed._replace(scheme=parsed.scheme.lower(), netloc=host + (f":{parsed.port}" if parsed.port else "")))
     return canonical, host, public_ips[0]
-
-
-def safe_get(url: str, timeout: float = 5.0, max_bytes: int = 64 * 1024) -> str:
-    """Fetch `url` with SSRF + DNS-rebind protection. Returns response text.
-
-    The fetch pins the TCP connection to the IP that `validate_url` resolved,
-    so a malicious DNS server that rotated the answer between validate and
-    fetch (the classic rebind attack) cannot redirect us to an internal host.
-
-    Raises SSRFError on validation; httpx.* on transport failures. Truncates
-    the body to `max_bytes` so an attacker can't make us swallow a giant
-    response.
-    """
-    canonical, host, ip = validate_url(url)
-    parsed = urllib.parse.urlparse(canonical)
-    # Build a URL that hits the IP directly, but keep Host header = original
-    # host so TLS SNI and HTTP routing still work for shared-tenancy hosts.
-    netloc = ip if not parsed.port else f"{ip}:{parsed.port}"
-    pinned = parsed._replace(netloc=netloc)
-    req_url = urllib.parse.urlunparse(pinned)
-
-    headers = {"Host": host, "User-Agent": "shieldoo-gate-ssrf-safe/1.0"}
-    with httpx.Client(timeout=timeout, follow_redirects=False) as client:
-        resp = client.get(req_url, headers=headers)
-        resp.raise_for_status()
-        # Bytes are read-bounded by httpx via stream=False default; trim.
-        if len(resp.content) > max_bytes:
-            return resp.text[:max_bytes]
-        return resp.text

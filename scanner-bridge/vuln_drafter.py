@@ -15,10 +15,12 @@ Hardening:
 - Output is bounded to MAX_REASON_CHARS (500) to prevent operator overload.
 - Every call counts against the daily TokenBudget on the Go side; this
   module reports tokens_used so the counter stays accurate.
-- repo_url, when present, is SSRF-validated before any fetch — current
-  release does NOT actually fetch repo source (we keep the prompt narrow
-  and predictable). When that capability lands, it routes through
-  ssrf_guard.safe_get.
+- repo_url is accepted and stored but NOT used here: this release does not
+  fetch repo source at all (we keep the prompt narrow and predictable), so
+  no URL from a component ever reaches an HTTP client. `ssrf_guard.validate_url`
+  is the gate that capability must pass through when it lands — note the guard
+  has no fetch helper, so that change also owns writing a connection-pinning
+  client. See ssrf_guard's module docstring.
 
 Returns ErrDrafterDisabled-equivalent (empty reason) when AI is not
 configured; the Go side surfaces 503 to the UI which then hides the panel.
