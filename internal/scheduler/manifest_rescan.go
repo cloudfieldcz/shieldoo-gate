@@ -14,9 +14,9 @@ import (
 
 // ManifestRescanConfig controls the periodic rescan loop.
 type ManifestRescanConfig struct {
-	Interval       time.Duration // default 6h
-	MaxConcurrent  int64         // default 4
-	Timeout        time.Duration // per-component timeout; default 5m
+	Interval      time.Duration // default 6h
+	MaxConcurrent int64         // default 4
+	Timeout       time.Duration // per-component timeout; default 5m
 }
 
 func (c ManifestRescanConfig) withDefaults() ManifestRescanConfig {
@@ -87,6 +87,25 @@ func (s *ManifestRescanScheduler) Stop() {
 	<-s.doneC
 }
 
+// RescanEligibleComponentsQuery selects the components a rescan sweep will act on:
+// enabled, and with no scan already in flight (a manual rescan, an upload, or a
+// previous cycle). It is exported because StaleRunReaper's regression test asserts that
+// reaping a wedged run puts its component back into this exact selection; a copy of the
+// predicate in that test could silently drift from this one and stop being load-bearing.
+const RescanEligibleComponentsQuery = `SELECT id, last_scan_id FROM components
+	 WHERE enabled = TRUE
+	   AND NOT EXISTS (
+	     SELECT 1 FROM scan_runs sr
+	     WHERE sr.component_id = components.id
+	       AND sr.status IN ('pending', 'running')
+	   )`
+
+// inFlightSkipWarnGrace splits the skip line by severity. Below it, an in-flight scan is
+// almost certainly a manual rescan or an upload that merely overlapped the sweep; above
+// it, the run has outlived every legitimate scan budget (the longest is the API's 10m
+// detached context) and is a candidate wedge.
+const inFlightSkipWarnGrace = 15 * time.Minute
+
 // RunOnce performs a single rescan sweep with single-flight overlap protection.
 func (s *ManifestRescanScheduler) RunOnce(ctx context.Context) {
 	if !s.running.CompareAndSwap(false, true) {
@@ -102,15 +121,7 @@ func (s *ManifestRescanScheduler) RunOnce(ctx context.Context) {
 		LastScanID *int64 `db:"last_scan_id"`
 	}
 	var components []row
-	// Skip components with an in-flight scan (manual rescan or previous cycle).
-	err := s.db.SelectContext(ctx, &components,
-		`SELECT id, last_scan_id FROM components
-		 WHERE enabled = TRUE
-		   AND NOT EXISTS (
-		     SELECT 1 FROM scan_runs sr
-		     WHERE sr.component_id = components.id
-		       AND sr.status IN ('pending', 'running')
-		   )`)
+	err := s.db.SelectContext(ctx, &components, RescanEligibleComponentsQuery)
 	if err != nil {
 		log.Warn().Err(err).Msg("manifest_rescan: select components")
 		return
@@ -150,10 +161,17 @@ func (s *ManifestRescanScheduler) RunOnce(ctx context.Context) {
 //
 // Deliberately not rate-limited. At the default 6h cadence this is four lines a day per
 // affected component, and StaleRunReaper bounds it in time: a genuinely wedged row is
-// marked failed within its threshold, after which the line stops on its own. A line for
-// a scan that is merely concurrent (a manual rescan overlapping the sweep) carries a
-// small age_seconds and is self-evidently benign. Suppressing repeats would reintroduce
-// exactly the silence this exists to remove.
+// marked failed within its threshold, after which the line stops on its own.
+// Suppressing repeats would reintroduce exactly the silence this exists to remove.
+//
+// Split by severity instead. Because the reaper clears a wedge within its threshold
+// (<=1h) while this sweep only runs every 6h, in steady state almost every line here is
+// a benign overlap with a manual rescan or an upload — so logging all of them at WARN
+// would train the operator to ignore the one line that matters. Runs younger than
+// inFlightSkipWarnGrace log at INFO; older ones log at WARN and carry stuck=true, so the
+// candidate wedges are both loud and greppable. The 15m grace is an approximation: this
+// scheduler does not know the reaper's configured threshold, but 15m already exceeds
+// every legitimate scan budget (the longest is the API's 10m detached context).
 func (s *ManifestRescanScheduler) logInFlightSkips(ctx context.Context) {
 	type skipRow struct {
 		ComponentID int64     `db:"component_id"`
@@ -176,11 +194,18 @@ func (s *ManifestRescanScheduler) logInFlightSkips(ctx context.Context) {
 	}
 	now := time.Now().UTC()
 	for _, r := range skipped {
-		log.Warn().
+		age := now.Sub(r.StartedAt).Round(time.Second)
+		stuck := age > inFlightSkipWarnGrace
+		ev := log.Info()
+		if stuck {
+			ev = log.Warn()
+		}
+		ev.
 			Int64("component_id", r.ComponentID).
 			Int64("run_id", r.RunID).
 			Str("run_status", r.Status).
-			Dur("age", now.Sub(r.StartedAt).Round(time.Second)).
+			Str("age", age.String()).
+			Bool("stuck", stuck).
 			Msg("manifest_rescan: component skipped, scan already in flight")
 	}
 }

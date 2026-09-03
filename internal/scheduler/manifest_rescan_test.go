@@ -44,8 +44,35 @@ func TestManifestRescan_InFlightComponent_LogsSkip(t *testing.T) {
 	assert.Contains(t, out, `"level":"warn"`)
 	assert.Contains(t, out, `"run_id":`)
 	assert.Contains(t, out, `"run_status":"running"`)
-	assert.Contains(t, out, `"age":`)
 	assert.Contains(t, out, `"component_id":`)
+	assert.Contains(t, out, `"stuck":true`, "a run past the grace must be greppable")
+	// Exact rendering, not just presence: zerolog's Dur() would emit a bare unlabelled
+	// millisecond count here, and eyeball-triage of this one line is the deliverable.
+	assert.Contains(t, out, `"age":"2160h0m0s"`)
+	assert.NotContains(t, out, `"age":7776000000`)
+}
+
+// TestManifestRescan_RecentInFlight_LogsInfoNotWarn is the severity gradient. In steady
+// state the reaper clears real wedges within an hour while this sweep runs every 6h, so
+// nearly every line here is a benign overlap with a manual rescan or an upload. Logging
+// those at WARN would train the operator to ignore the only line that matters.
+func TestManifestRescan_RecentInFlight_LogsInfoNotWarn(t *testing.T) {
+	db := reaperTestDB(t)
+	componentID := seedReaperComponent(t, db, "gate")
+	lastGoodID := seedStaleRun(t, db, componentID, "done", 500)
+	_, err := db.Exec(`UPDATE components SET last_scan_id = ? WHERE id = ?`, lastGoodID, componentID)
+	require.NoError(t, err)
+	seedStaleRun(t, db, componentID, "running", 0) // started just now
+
+	buf := captureLogs(t)
+	s := scheduler.NewManifestRescanScheduler(scheduler.ManifestRescanConfig{}, db, nil, nil)
+	s.RunOnce(context.Background())
+
+	out := buf.String()
+	assert.Contains(t, out, "manifest_rescan: component skipped, scan already in flight")
+	assert.Contains(t, out, `"level":"info"`)
+	assert.Contains(t, out, `"stuck":false`)
+	assert.NotContains(t, out, `"level":"warn"`, "a benign overlap must not log at WARN")
 }
 
 // TestManifestRescan_NoInFlightRun_LogsNothing is the negative branch: a healthy
