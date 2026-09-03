@@ -1062,7 +1062,6 @@ func (c *Config) validateProxyAuth() error {
 	return nil
 }
 
-// validateTyposquat checks typosquatting scanner configuration.
 // validateThreatFeed rejects `threat_feed.enabled: true` with no `url`.
 //
 // Without this the two surfaces that report on the feed contradict each other. main.go
@@ -1083,6 +1082,7 @@ func (c *Config) validateThreatFeed() error {
 	return nil
 }
 
+// validateTyposquat checks typosquatting scanner configuration.
 func (c *Config) validateTyposquat() error {
 	tc := c.Scanners.Typosquat
 	if !tc.Enabled {
