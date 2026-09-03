@@ -2,12 +2,23 @@ package api
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/semaphore"
+
+	"github.com/cloudfieldcz/shieldoo-gate/internal/component"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 )
+
+// scanSlotFailureWriteTimeout bounds the two statements failUnscheduledRun needs after
+// Acquire gave up. It is short on purpose: the common cause of Acquire failing is
+// process shutdown, and a janitorial write must not hold the exit open.
+const scanSlotFailureWriteTimeout = 5 * time.Second
 
 // scanSchedulerInFlight tracks how many ScanService.Run goroutines are
 // currently mid-flight across upload + rescan paths. Exposed as a
@@ -82,9 +93,64 @@ func (s *Server) runScanInBackground(runID int64) {
 	go func() {
 		ctx := s.detachedCtx()
 		if err := s.scanSched.Acquire(ctx); err != nil {
+			s.failUnscheduledRun(runID, err)
 			return
 		}
 		defer s.scanSched.Release()
 		_ = s.vulnDeps.ScanService.Run(ctx, runID)
 	}()
+}
+
+// failUnscheduledRun closes a scan_run that never got a concurrency slot.
+//
+// Acquire fails only when the detached scan context is done: the hardcoded 10 m budget
+// in detachedCtx expired while the semaphore stayed saturated, or the process is
+// shutting down. Either way the row is left 'pending' with nothing behind it — the same
+// shape a restart mid-scan leaves, and the shape that excludes the component from every
+// scheduled rescan (ManifestRescanScheduler.RunOnce's in-flight predicate) until the
+// stale-run reaper clears it up to an hour later. The reaper is the backstop; this is
+// the source.
+//
+// The write needs a fresh context — the one Acquire failed on is already done.
+func (s *Server) failUnscheduledRun(runID int64, cause error) {
+	if s.vulnDeps.Store == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), scanSlotFailureWriteTimeout)
+	defer cancel()
+
+	run, err := s.vulnDeps.Store.GetScanRun(ctx, runID)
+	if err != nil {
+		log.Warn().Err(err).Int64("run_id", runID).
+			Msg("api: no concurrency slot for scan run and the run could not be read back")
+		return
+	}
+	reason := "scan concurrency slot not acquired: " + cause.Error()
+	if err := s.vulnDeps.Store.UpdateScanRunStatus(ctx, runID, component.StatusFailed,
+		nil, reason, 0, 0, 0, 0, 0, 0, 0); err != nil {
+		// ErrScanRunTerminal means the row was already closed — in practice reaped
+		// while this goroutine sat on the semaphore. Leave the reaper's diagnosis in
+		// place and write no audit row: audit_log is append-only (CLAUDE.md invariant
+		// 5), so a duplicate scan_run_failed could never be cleaned up afterwards.
+		if !errors.Is(err, component.ErrScanRunTerminal) {
+			log.Warn().Err(err).Int64("run_id", runID).
+				Msg("api: no concurrency slot for scan run and the run could not be closed")
+		}
+		return
+	}
+
+	log.Warn().
+		Err(cause).
+		Int64("run_id", runID).
+		Int64("component_id", run.ComponentID).
+		Msg("api: scan run closed as failed, no concurrency slot became available")
+
+	if s.vulnDeps.Audit != nil {
+		_ = s.vulnDeps.Audit.WriteVulnEvent(ctx, model.AuditEntry{
+			EventType:   model.EventScanRunFailed,
+			ComponentID: &run.ComponentID,
+			ScanRunID:   &runID,
+			Reason:      reason,
+		})
+	}
 }
