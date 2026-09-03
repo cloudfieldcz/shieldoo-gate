@@ -173,7 +173,7 @@ func setupVulnScan(ctx context.Context, cfg *config.Config, db *config.GateDB, b
 		Interval:  parseDurationOr(cfg.VulnScan.StaleRunReaper.Interval, 15*time.Minute),
 		Threshold: parseDurationOr(cfg.VulnScan.StaleRunReaper.Threshold, scheduler.DefaultStaleRunThreshold(rescanCfg.Timeout)),
 	}
-	staleRunReaper := scheduler.NewStaleRunReaper(staleReaperCfg, db)
+	staleRunReaper := scheduler.NewStaleRunReaper(staleReaperCfg, db).WithAudit(auditWriter)
 	staleRunReaper.Start(ctx)
 
 	retentionCfg := scheduler.ScanRunRetentionConfig{

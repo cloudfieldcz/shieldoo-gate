@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 	"github.com/rs/zerolog/log"
 )
 
@@ -92,10 +93,11 @@ func (c StaleRunReaperConfig) withDefaults() StaleRunReaperConfig {
 // history to hide the gap instead of surfacing it.
 //
 // scan_runs is not the audit log — UPDATE on it is permitted (CLAUDE.md invariant 5
-// covers audit_log only, which this reaper never writes).
+// covers audit_log, which this reaper only ever INSERTs into, via WithAudit).
 type StaleRunReaper struct {
 	cfg   StaleRunReaperConfig
 	db    *config.GateDB
+	audit AuditWriter
 	stop  chan struct{}
 	doneC chan struct{}
 }
@@ -108,6 +110,17 @@ func NewStaleRunReaper(cfg StaleRunReaperConfig, db *config.GateDB) *StaleRunRea
 		stop:  make(chan struct{}),
 		doneC: make(chan struct{}),
 	}
+}
+
+// WithAudit wires an audit writer so each reap also emits a scan_run_reaped row.
+//
+// Optional: without it the reaper still logs, which is what the operator on the console
+// sees. The audit row is for the operator whose pipeline alerts on audit_log rather than
+// on log lines — a reap means a component's vulnerability data stopped moving, which is
+// worth noticing however you watch the gate.
+func (r *StaleRunReaper) WithAudit(w AuditWriter) *StaleRunReaper {
+	r.audit = w
+	return r
 }
 
 // Start runs the reaper loop until Stop is called.
@@ -197,12 +210,32 @@ func (r *StaleRunReaper) RunOnce(ctx context.Context) (int, error) {
 			continue
 		}
 		reaped++
+		age := now.Sub(row.StartedAt).Round(time.Second).String()
 		log.Warn().
 			Int64("run_id", row.ID).
 			Int64("component_id", row.ComponentID).
 			Str("stuck_status", row.Status).
-			Str("age", now.Sub(row.StartedAt).Round(time.Second).String()).
+			Str("age", age).
 			Msg("stale_run_reaper: scan run stuck past threshold, marked failed")
+
+		if r.audit != nil {
+			// scan_run_reaped, not scan_run_failed: a pipeline that pages on a failed
+			// scan must not be paged by janitorial cleanup. Errors are logged, never
+			// fatal — a reap that happened must not be undone because the record of it
+			// could not be written, and the row is already closed by this point.
+			runID, componentID := row.ID, row.ComponentID
+			if err := r.audit.WriteVulnEvent(ctx, model.AuditEntry{
+				EventType:   model.EventScanRunReaped,
+				ComponentID: &componentID,
+				ScanRunID:   &runID,
+				Reason:      "reaped: stuck in " + row.Status + " for " + age,
+				MetadataJSON: fmt.Sprintf(`{"stuck_status":%q,"age":%q,"threshold":%q}`,
+					row.Status, age, r.cfg.Threshold.String()),
+			}); err != nil {
+				log.Warn().Err(err).Int64("run_id", row.ID).
+					Msg("stale_run_reaper: writing scan_run_reaped audit row")
+			}
+		}
 	}
 	return reaped, nil
 }

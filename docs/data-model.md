@@ -839,7 +839,8 @@ The new event types written by the vuln-scan pipeline:
 | Event type | When |
 |---|---|
 | `sbom_uploaded` | CI pushed a new SBOM |
-| `scan_run_failed` | Scanner pipeline returned an error before findings were persisted |
+| `scan_run_failed` | Scanner pipeline returned an error before findings were persisted, or the run never got a scan-concurrency slot |
+| `scan_run_reaped` | The stale-run reaper aged out a run wedged in `pending`/`running`. Deliberately distinct from `scan_run_failed` so janitorial cleanup does not page a pipeline alerting on scan failures |
 | `rescan_triggered` | Manual or scheduled rescan |
 | `ignore_created` / `ignore_revoked` / `ignore_expired` | CVE-ignore lifecycle |
 | `ai_draft_called` / `ai_draft_accepted` | AI drafter invocation + acceptance |

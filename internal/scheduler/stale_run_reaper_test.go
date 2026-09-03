@@ -8,7 +8,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/cloudfieldcz/shieldoo-gate/internal/auth"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
+	"github.com/cloudfieldcz/shieldoo-gate/internal/model"
 	"github.com/cloudfieldcz/shieldoo-gate/internal/scheduler"
 )
 
@@ -298,4 +300,70 @@ func TestStaleRunReaper_ThresholdAboveFloor_Honoured(t *testing.T) {
 	assert.Equal(t, 1, reaped)
 	assert.Equal(t, "running", readRun(t, db, youngID).Status)
 	assert.Equal(t, "failed", readRun(t, db, oldID).Status)
+}
+
+// auditRow is one audit_log row, read back with the columns the reaper writes.
+type auditRow struct {
+	EventType    string  `db:"event_type"`
+	ComponentID  *int64  `db:"component_id"`
+	ScanRunID    *int64  `db:"scan_run_id"`
+	Reason       *string `db:"reason"`
+	MetadataJSON *string `db:"metadata_json"`
+}
+
+func readAuditRows(t *testing.T, db *config.GateDB) []auditRow {
+	t.Helper()
+	var rows []auditRow
+	require.NoError(t, db.Select(&rows,
+		`SELECT event_type, component_id, scan_run_id, reason, metadata_json
+		   FROM audit_log ORDER BY id ASC`))
+	return rows
+}
+
+// TestStaleRunReaper_WithAudit_WritesScanRunReapedEvent covers the operator who alerts
+// on audit_log rows rather than on log lines. The event type must NOT be
+// scan_run_failed: a pipeline that pages on a failed scan must not be paged by
+// janitorial cleanup.
+func TestStaleRunReaper_WithAudit_WritesScanRunReapedEvent(t *testing.T) {
+	db := reaperTestDB(t)
+	componentID := seedReaperComponent(t, db, "scanner-bridge-image")
+	runID := seedStaleRun(t, db, componentID, "running", 2160)
+
+	reaper := scheduler.NewStaleRunReaper(scheduler.StaleRunReaperConfig{
+		Threshold: time.Hour,
+	}, db).WithAudit(auth.NewAuditWriter(db))
+	reaped, err := reaper.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, reaped)
+
+	rows := readAuditRows(t, db)
+	require.Len(t, rows, 1)
+	assert.Equal(t, string(model.EventScanRunReaped), rows[0].EventType)
+	require.NotNil(t, rows[0].ComponentID)
+	assert.Equal(t, componentID, *rows[0].ComponentID)
+	require.NotNil(t, rows[0].ScanRunID)
+	assert.Equal(t, runID, *rows[0].ScanRunID)
+	require.NotNil(t, rows[0].Reason)
+	assert.Contains(t, *rows[0].Reason, "stuck in running")
+	require.NotNil(t, rows[0].MetadataJSON)
+	assert.Contains(t, *rows[0].MetadataJSON, `"stuck_status":"running"`)
+	assert.Contains(t, *rows[0].MetadataJSON, `"threshold":"1h0m0s"`)
+}
+
+// TestStaleRunReaper_WithAudit_NothingReaped_WritesNoEvent pins that a quiet sweep is
+// silent in audit_log too — the table is append-only, so a per-sweep heartbeat row
+// could never be pruned.
+func TestStaleRunReaper_WithAudit_NothingReaped_WritesNoEvent(t *testing.T) {
+	db := reaperTestDB(t)
+	componentID := seedReaperComponent(t, db, "gate-image")
+	seedStaleRun(t, db, componentID, "running", 0)
+
+	reaper := scheduler.NewStaleRunReaper(scheduler.StaleRunReaperConfig{
+		Threshold: time.Hour,
+	}, db).WithAudit(auth.NewAuditWriter(db))
+	reaped, err := reaper.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 0, reaped)
+
+	assert.Empty(t, readAuditRows(t, db))
 }
