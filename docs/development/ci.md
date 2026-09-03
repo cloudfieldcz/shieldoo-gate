@@ -73,6 +73,21 @@ tag was cut (e.g. `libssl3`/`libcrypto3` in alpine's `v3.24` repo) instead of
 waiting for the next base-tag bump. See ADR-010 for the full rationale and the
 `perl-base` force-purge that goes with it on the scanner-bridge side.
 
+**Does this layer actually execute on every release?** Only if it isn't
+served from cache. `release.yml`'s `docker` job caches every layer via
+`type=gha`, keyed on the `RUN` string plus the parent (pinned) base
+digest — neither of which changes release to release, so without
+intervention a cache hit would keep re-shipping whatever OS package
+versions were current when the layer was first cached, indefinitely, with
+nothing to detect the regression (`vuln-scan-image`'s `--fail-on critical`
+wouldn't catch a re-appearing HIGH). This applies equally to
+`scanner-bridge/Dockerfile`'s `apt-get upgrade` — same job, same cache
+mechanism, same `runtime` stage name. `release.yml`'s build step sets
+`no-cache-filters: runtime` for exactly this reason: it forces the `runtime`
+stage of *both* matrix legs to always re-execute, while `ui-builder`/
+`go-builder` (and scanner-bridge's builder stage) keep their expensive
+layers cached.
+
 ### Security scan (`codeql.yml`)
 
 - **CodeQL** — matrix over `go` and `javascript-typescript`, `security-extended`
