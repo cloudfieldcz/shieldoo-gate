@@ -498,10 +498,11 @@ Scanner Results         Aggregation                 Policy Engine
 
 The community threat feed (`internal/threatfeed/client.go`) provides a database of known-malicious package hashes. It is fetched from a remote URL and stored in the `threat_feed` table.
 
-**Refresh cycle:**
-1. On startup: initial fetch in a background goroutine (errors logged, not fatal)
-2. Periodic refresh via `time.Ticker` at configured interval (default 1 hour)
+**Refresh cycle** (`Client.Run`, started from `main.go` in its own goroutine):
+1. On startup: initial fetch immediately, before the first tick (errors logged, not fatal)
+2. Periodic refresh via `time.Ticker` at configured interval (default 1 hour), until the context is cancelled
 3. Entries are upserted using `INSERT OR REPLACE`
+4. Every attempt — success or failure — updates the [feed health metrics](deployment.md#threat-feed-health) and emits exactly one log line
 
 **Feed format** (OSV-compatible JSON):
 ```json
@@ -523,6 +524,73 @@ The community threat feed (`internal/threatfeed/client.go`) provides a database 
 ```
 
 The threat feed checker scanner (`builtin-threat-feed`) performs a fast-path SHA-256 lookup against this local table during every scan.
+
+### Feed health and failure escalation
+
+**An empty feed is a silent fail-open.** `ThreatFeedChecker.Scan` looks up
+`artifact.SHA256` in `threat_feed`; no row means `CLEAN` with confidence 1.0.
+That is correct for a healthy feed and indistinguishable from it when the table
+is empty — the scanner reports a check it is not performing, and because it is
+marked `required` in `config.example.yaml` it also satisfies the required-scanner
+gate while doing so. A feed that never loads therefore costs coverage without
+costing a single blocked request, which is exactly why it can go unnoticed.
+
+This happened: on one deployment the feed host served the wrong TLS certificate
+and the refresh failed **535 consecutive times over three weeks, including the
+initial one**. Each failure produced a single WARN line and nothing else.
+
+Two mechanisms make that impossible to miss now.
+
+**1. Metrics.** Five series, always present, described in
+[Prometheus metrics → Threat feed health](deployment.md#threat-feed-health).
+`shieldoo_gate_threat_feed_entries == 0` is the direct measure of the fail-open.
+
+**2. A log level that rises with severity.** One line per refresh attempt:
+
+```json
+{"level":"info","feed_entries":2,"time":"2026-09-03T13:12:52+02:00",
+ "message":"threat feed refresh completed"}
+```
+
+A populated feed that fails to refresh is going stale, not blind, so the first
+failures are WARN and carry how long it has been stale:
+
+```json
+{"level":"warn","error":"threatfeed: fetching feed from https://feed.shieldoo.io/… : …",
+ "consecutive_failures":1,"feed_entries":2,"stale_for":"1h0m0s",
+ "time":"2026-09-03T13:12:52+02:00",
+ "message":"threat feed refresh failed; still matching against the last feed contents"}
+```
+
+From the third consecutive failure (`escalateAfterConsecutiveFailures`, roughly
+three hours at the default 1 h interval) the same line is logged at ERROR. The
+threshold is a constant rather than a config knob: it selects a log level, not
+policy, and a loud line that fires on every transient blip is one operators learn
+to filter out — which is how the original single WARN became invisible.
+
+An **empty** local feed skips the threshold entirely and is ERROR from the very
+first failure, naming the consequence:
+
+```json
+{"level":"error","error":"threatfeed: fetching feed from https://feed.shieldoo.io/malicious-packages.json: … tls: failed to verify certificate: x509: certificate is valid for *.msha-slice-4-am2-1-ase.p.azurewebsites.net, … not feed.shieldoo.io",
+ "consecutive_failures":1,"feed_entries":0,"ever_loaded":false,
+ "time":"2026-09-03T13:12:52+02:00",
+ "message":"threat feed refresh failed and the local feed is empty: builtin-threat-feed is returning CLEAN for every artifact without checking anything"}
+```
+
+`ever_loaded:false` marks a feed that has not loaded since this process started;
+once it has, the field is replaced by `stale_for`.
+
+**What this does not change.** `builtin-threat-feed` still returns `CLEAN` when
+the feed is empty. Making it report `SCAN_UNAVAILABLE` instead would turn a
+broken feed into a blocked pipeline for every artifact — a policy change on a
+security-critical path that needs an ADR, not a bug fix. Until then the feed's
+health is an observability signal: alert on it, do not rely on the scan verdict
+to tell you.
+
+The `/api/v1/health` endpoint reports scanner health, but
+`ThreatFeedChecker.HealthCheck` returns `nil` unconditionally, so a gate with a
+dead feed still reports `builtin-threat-feed` as healthy there. Use the metrics.
 
 ## Ecosystem Coverage Matrix
 
