@@ -10,7 +10,19 @@
 # We do NOT need the rest of internal/ — the shdg main package is Go-stdlib-only.
 # We also do NOT git-stamp the binary (no .git in the build context); a hard-coded
 # "e2e" value is sufficient for the smoke test.
-FROM golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS shdg-build
+#
+# The `FROM golang:...` below is an ADR-010 Go-toolchain lockstep location —
+# it compiles the `shdg` binary shipped into the e2e image. Keep it in
+# lockstep with go.mod's `go` directive, docker/Dockerfile's `go-builder`
+# stage, the three CI GO_VERSION values (.github/workflows/{ci,codeql,
+# release}.yml), and — easy to miss — the SEPARATE ARG GO_VERSION/GO_SHA256
+# tarball install further down in *this same file*, which is an independent
+# toolchain that neither implies nor updates this one. Bump the tag AND the
+# @sha256 digest together: Docker resolves `name:tag@digest` by digest, so
+# editing only the tag silently keeps building the old, unpatched image with
+# no checksum failure to catch it. See ADR-010 for the authoritative
+# seven-location list.
+FROM golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc AS shdg-build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -93,10 +105,21 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
-# Go (pinned with checksum)
+# Go (pinned with checksum) — this is a SEVENTH ADR-010 lockstep location,
+# separate from the shdg-build stage's FROM golang:... above. It is a
+# two-value bump: GO_VERSION and GO_SHA256 must change together, or the
+# sha256sum -c below fails the build. Get the checksum from
+# https://go.dev/dl/?mode=json (the linux-amd64 tarball entry) — never
+# invent one. Keep in lockstep with go.mod's `go` directive, both Dockerfile
+# builder images (docker/Dockerfile's `go-builder` stage and the `shdg-build`
+# stage above — on those `FROM golang:<tag>@sha256:<digest>` lines the tag and
+# the digest must move together, since Docker resolves by digest and a
+# tag-only edit silently keeps the old image), and the three CI GO_VERSION
+# values in .github/workflows/{ci,codeql,release}.yml. See ADR-010 for the
+# authoritative seven-location list.
 # ---------------------------------------------------------------------------
-ARG GO_VERSION=1.26.4
-ARG GO_SHA256=1153d3d50e0ac764b447adfe05c2bcf08e889d42a02e0fe0259bd47f6733ad7f
+ARG GO_VERSION=1.27.0
+ARG GO_SHA256=675c26c449cbb18fc24b74650de1eabbae6e16f64326fd85a283fb3b58280685
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz && \
     echo "${GO_SHA256}  /tmp/go.tar.gz" | sha256sum -c - && \
     tar -C /usr/local -xzf /tmp/go.tar.gz && \

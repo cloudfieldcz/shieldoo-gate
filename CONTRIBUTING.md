@@ -18,7 +18,7 @@ have the right to submit it.
 
 ## Development Setup
 
-Prerequisites: **Go 1.25+**, **Node.js 20+**, **Python 3.13+** with
+Prerequisites: **Go 1.27+**, **Node.js 20+**, **Python 3.13+** with
 [uv](https://docs.astral.sh/uv/), and `protoc` (Protocol Buffers compiler).
 
 ```bash

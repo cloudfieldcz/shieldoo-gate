@@ -225,7 +225,7 @@ connections. To reproduce/verify breaker behaviour under load locally, see
 
 ### Prerequisites
 
-- **Go 1.25+** — for building and running the core proxy
+- **Go 1.27+** — for building and running the core proxy
 - **Node.js 20+** — for building the admin UI
 - **Python 3.13+** with [uv](https://docs.astral.sh/uv/) — for the scanner bridge
 - **protoc** (Protocol Buffers compiler) — for regenerating gRPC code
