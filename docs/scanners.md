@@ -539,7 +539,7 @@ This happened: on one deployment the feed host served the wrong TLS certificate
 and the refresh failed **535 consecutive times over three weeks, including the
 initial one**. Each failure produced a single WARN line and nothing else.
 
-Two mechanisms make that impossible to miss now.
+Three mechanisms make that impossible to miss now.
 
 **1. Metrics.** Five series, always present, described in
 [Prometheus metrics → Threat feed health](deployment.md#threat-feed-health).
@@ -608,9 +608,25 @@ security-critical path that needs an ADR, not a bug fix. Until then the feed's
 health is an observability signal: alert on it, do not rely on the scan verdict
 to tell you.
 
-The `/api/v1/health` endpoint reports scanner health, but
-`ThreatFeedChecker.HealthCheck` returns `nil` unconditionally, so a gate with a
-dead feed still reports `builtin-threat-feed` as healthy there. Use the metrics.
+**3. `GET /api/v1/health`.** `ThreatFeedChecker.HealthCheck` reports the scanner
+unhealthy when the feed is configured but the local table is empty:
+
+```json
+{"status":"ok","scanners":{"builtin-threat-feed":{"healthy":false,
+  "error":"builtin-threat-feed: local threat feed is empty, every artifact is reported CLEAN without being checked"}}}
+```
+
+It answers "can this scanner detect anything", not "how fresh is the feed" —
+a feed that loaded once and has gone stale still detects everything it contains,
+so staleness is left to `..._last_success_timestamp_seconds`. A **disabled**
+feed is healthy: the checker is registered unconditionally in `main.go`, so an
+empty table is the normal state wherever `threat_feed.enabled: false`, and
+`NewThreatFeedChecker` takes the configured flag purely so health reporting can
+tell the two apart. The flag does not reach `Scan`.
+
+The endpoint still returns **HTTP 200** regardless of scanner health — the
+per-scanner result only shapes the body — so the Helm chart's liveness and
+readiness probes cannot be tripped by a dead feed.
 
 ## Ecosystem Coverage Matrix
 
@@ -746,7 +762,7 @@ The sandbox's own `sgw-sandbox-*` temp is **not** a `shieldoo-` prefix and is ha
 
 ## Health Checks
 
-`Engine.HealthCheck()` runs `HealthCheck()` on every registered scanner **in parallel** and returns a map of scanner name to error (nil = healthy). This is exposed via `GET /api/v1/health` and includes scanner status in the response.
+`Engine.HealthCheck()` runs `HealthCheck()` on every registered scanner **in parallel** and returns a map of scanner name to error (nil = healthy). This is exposed via `GET /api/v1/health` and includes scanner status in the response. A health check reports capability, not freshness — see [`builtin-threat-feed`](#feed-health-and-failure-escalation) for a worked example.
 
 Parallelism matters here because individual scanners perform real I/O during their health check — `trivy` forks `trivy version`, `osv` does an HTTPS POST to `api.osv.dev`, `ai-scanner` makes a gRPC call to the scanner bridge. Running them sequentially would let a slow scanner consume the budget of the ones that follow, producing spurious `DeadlineExceeded` (gRPC/HTTP) or `signal: killed` (SIGKILL from `exec.CommandContext` when the parent context expires mid-fork) errors even when every individual scanner is healthy.
 

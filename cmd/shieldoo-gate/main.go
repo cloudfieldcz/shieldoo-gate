@@ -193,7 +193,7 @@ func main() {
 		builtin.NewObfuscationDetector(),
 		builtin.NewExfilDetector(),
 		builtin.NewPTHInspector(),
-		builtin.NewThreatFeedChecker(db),
+		builtin.NewThreatFeedChecker(db, cfg.ThreatFeed.Enabled),
 	}
 
 	// Optional: GuardDog scanner. We retain the *GuardDogScanner reference so the
