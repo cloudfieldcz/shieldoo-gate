@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,11 +37,36 @@ func TestRefreshFailureLevel_Thresholds_EscalatesToError(t *testing.T) {
 	}
 }
 
+// syncBuffer is a mutex-guarded bytes.Buffer. zerolog writes from whichever goroutine
+// logs, so an unguarded buffer here is a data race the moment anything logs off the test
+// goroutine.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // captureLogs redirects the global zerolog logger into a buffer for the
 // duration of the test and returns the decoded JSON lines.
+//
+// It swaps a process-global, which is only safe because no refresh loop is running while
+// it does: every test that starts Run does so through runFeedLoop, which joins the
+// goroutine before the test ends. Without that join a loop from an earlier test would
+// still hold the previous logger, log into this test's buffer, and race the swap.
 func captureLogs(t *testing.T, fn func()) []map[string]any {
 	t.Helper()
-	var buf bytes.Buffer
+	var buf syncBuffer
 	original := log.Logger
 	log.Logger = zerolog.New(&buf)
 	t.Cleanup(func() { log.Logger = original })
@@ -129,12 +155,7 @@ func TestClient_Run_CancelledContext_RefreshesOnceAndReturns(t *testing.T) {
 	srv := feedServer(t, []FeedEntry{maliciousEntry("999999")})
 	client := NewClient(testDB(t), srv.URL)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		client.Run(ctx, time.Hour)
-		close(done)
-	}()
+	stop := runFeedLoop(t, client, time.Hour)
 
 	// The immediate refresh happens before the first tick.
 	require.Eventually(t, func() bool {
@@ -142,12 +163,7 @@ func TestClient_Run_CancelledContext_RefreshesOnceAndReturns(t *testing.T) {
 		return successes == 1
 	}, 2*time.Second, 10*time.Millisecond, "Run must refresh once immediately, not wait for the first tick")
 
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Run did not return after its context was cancelled")
-	}
+	stop()
 }
 
 func TestClient_RefreshNow_Failure_ReturnsTheErrorItLogged(t *testing.T) {
@@ -180,12 +196,43 @@ func TestClient_Run_Ticks_RefreshesRepeatedly(t *testing.T) {
 	srv := feedServer(t, []FeedEntry{maliciousEntry("777777")})
 	client := NewClient(testDB(t), srv.URL)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go client.Run(ctx, 20*time.Millisecond)
+	runFeedLoop(t, client, 20*time.Millisecond)
 
 	require.Eventually(t, func() bool {
 		successes, _ := metricValue(t, "shieldoo_gate_threat_feed_refresh_total", map[string]string{"result": resultSuccess})
 		return successes >= 3
 	}, 3*time.Second, 10*time.Millisecond, "Run must keep refreshing on every tick")
+}
+
+// runFeedLoop starts Client.Run in its own goroutine and guarantees the goroutine has
+// returned before the test ends. The returned func stops it early and is safe to call
+// more than once.
+//
+// The join is the point. Run refreshes on every tick, and a loop that outlives its test
+// keeps logging through the process-global logger captureLogs swaps and keeps writing
+// the package-global feed metrics that resetFeedMetrics zeroes — a data race and a
+// corrupted metric assertion in whatever test runs next. These tests were green only
+// because they happened to be last in the file.
+func runFeedLoop(t *testing.T, c *Client, interval time.Duration) (stop func()) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.Run(ctx, interval)
+	}()
+
+	var once sync.Once
+	stop = func() {
+		once.Do(func() {
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Error("Run did not return after its context was cancelled")
+			}
+		})
+	}
+	t.Cleanup(stop)
+	return stop
 }
