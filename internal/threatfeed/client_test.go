@@ -23,11 +23,6 @@ func sampleFeed(entries []threatfeed.FeedEntry) []byte {
 	return data
 }
 
-func countRows(t *testing.T, db interface{ QueryRowContext(ctx context.Context, query string, args ...interface{}) interface{ Scan(...interface{}) error } }) int {
-	t.Helper()
-	return 0
-}
-
 func TestClient_Refresh_StoresEntries(t *testing.T) {
 	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)

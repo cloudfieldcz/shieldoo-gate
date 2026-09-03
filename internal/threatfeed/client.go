@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/cloudfieldcz/shieldoo-gate/internal/config"
@@ -33,10 +34,15 @@ type Client struct {
 	db         *config.GateDB
 	feedURL    string
 	httpClient *http.Client
+
+	mu                  sync.Mutex
+	consecutiveFailures int
+	lastSuccess         time.Time // zero value: never refreshed successfully in this process
 }
 
 // NewClient creates a new Client using the given database handle and feed URL.
 func NewClient(db *config.GateDB, feedURL string) *Client {
+	markEnabled()
 	return &Client{
 		db:      db,
 		feedURL: feedURL,
@@ -46,9 +52,70 @@ func NewClient(db *config.GateDB, feedURL string) *Client {
 	}
 }
 
-// Refresh fetches the threat feed and upserts all entries into the threat_feed table.
-// It returns an error if the HTTP request fails or the response cannot be parsed.
+// refreshOutcome is the observable result of one refresh attempt: what went
+// wrong (if anything), how big the local feed is now, and how long the feed has
+// been failing. The refresh loop turns this into a log line and the metrics
+// helpers turn it into gauges.
+type refreshOutcome struct {
+	err                 error
+	entries             int64 // rows in threat_feed, or entriesUnknown
+	consecutiveFailures int
+	lastSuccess         time.Time // zero: never loaded in this process
+}
+
+// Refresh fetches the threat feed, upserts all entries into the threat_feed
+// table and updates the feed health metrics. It returns an error if the HTTP
+// request fails or the response cannot be parsed.
 func (c *Client) Refresh(ctx context.Context) error {
+	return c.refreshOnce(ctx).err
+}
+
+// refreshOnce runs one refresh, records the outcome in the client state and in
+// the Prometheus metrics, and returns it.
+func (c *Client) refreshOnce(ctx context.Context) refreshOutcome {
+	err := c.fetchAndStore(ctx)
+	now := time.Now()
+
+	// Count against a context that survives cancellation of ctx so a shutdown
+	// mid-refresh still reports the feed size it left behind.
+	countCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	entries := c.countEntries(countCtx)
+
+	// State and metrics move together under the lock so concurrent refreshes
+	// cannot publish gauges that disagree with the state they were derived from.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err == nil {
+		c.consecutiveFailures = 0
+		c.lastSuccess = now
+		recordRefreshSuccess(now, entries)
+	} else {
+		c.consecutiveFailures++
+		recordRefreshFailure(c.consecutiveFailures, entries)
+	}
+
+	return refreshOutcome{
+		err:                 err,
+		entries:             entries,
+		consecutiveFailures: c.consecutiveFailures,
+		lastSuccess:         c.lastSuccess,
+	}
+}
+
+// countEntries returns the number of rows in the local threat_feed table, or
+// entriesUnknown when the count could not be taken.
+func (c *Client) countEntries(ctx context.Context) int64 {
+	var n int64
+	if err := c.db.GetContext(ctx, &n, "SELECT COUNT(*) FROM threat_feed"); err != nil {
+		return entriesUnknown
+	}
+	return n
+}
+
+// fetchAndStore performs the actual fetch and upsert.
+func (c *Client) fetchAndStore(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.feedURL, nil)
 	if err != nil {
 		return fmt.Errorf("threatfeed: creating request: %w", err)
