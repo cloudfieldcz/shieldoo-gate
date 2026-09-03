@@ -479,7 +479,12 @@ func main() {
 		// failure escalation (WARN, rising to ERROR once the feed has been
 		// failing for a while or is empty) — see internal/threatfeed.
 		go feedClient.Run(context.Background(), refreshInterval)
-		log.Info().Str("url", cfg.ThreatFeed.URL).Dur("interval", refreshInterval).Msg("threat feed client started")
+		// Str, not Dur: no zerolog.DurationFieldUnit is set anywhere in this
+		// repo, so Dur would print "interval":3.6e+06 bare milliseconds.
+		log.Info().
+			Str("url", cfg.ThreatFeed.URL).
+			Str("interval", refreshInterval.String()).
+			Msg("threat feed client started")
 	}
 
 	// Resolve upstream URLs with sensible defaults.
