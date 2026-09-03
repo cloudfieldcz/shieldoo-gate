@@ -349,7 +349,7 @@ Stores entries from the community threat feed. Used by the built-in threat feed 
 
 **Indexes:** `idx_threat_feed_ecosystem ON (ecosystem, package_name)`
 
-Entries are upserted by the `threatfeed.Client` during periodic refresh using `INSERT OR REPLACE`.
+Entries are upserted by the `threatfeed.Client` during periodic refresh with `INSERT … ON CONFLICT (sha256) DO UPDATE` — ANSI, so the same statement runs on the PostgreSQL backend, and it updates the row in place rather than deleting and re-inserting it.
 
 ### `policy_overrides`
 
