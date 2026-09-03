@@ -58,12 +58,29 @@ func (c *Client) Run(ctx context.Context, interval time.Duration) {
 	}
 }
 
+// emptyFeedConsequence spells out what an empty threat_feed table costs. It is
+// appended to every message describing one, because the entry count on its own
+// reads as a statistic rather than as a scanner that has stopped detecting.
+const emptyFeedConsequence = "builtin-threat-feed is returning CLEAN for every artifact without checking anything"
+
 // refreshAndLog performs one refresh and emits exactly one log line describing
 // the result, at a level that rises with how bad the situation is.
 func (c *Client) refreshAndLog(ctx context.Context) {
 	out := c.refreshOnce(ctx)
 
 	if out.err == nil {
+		// A refresh that succeeds and leaves the table empty is the same
+		// fail-open as one that never completes — the scanner has nothing to
+		// match against either way. An upstream serving a valid but empty
+		// document (truncated publish, misconfigured CDN, feed emptied at the
+		// source) must not be reported as a healthy refresh just because the
+		// HTTP exchange went well.
+		if out.entries == 0 {
+			log.Error().
+				Int64("feed_entries", out.entries).
+				Msg("threat feed refreshed successfully but the feed is empty: " + emptyFeedConsequence)
+			return
+		}
 		log.Info().Int64("feed_entries", out.entries).Msg("threat feed refresh completed")
 		return
 	}
@@ -80,7 +97,7 @@ func (c *Client) refreshAndLog(ctx context.Context) {
 	}
 
 	if out.entries == 0 {
-		ev.Msg("threat feed refresh failed and the local feed is empty: builtin-threat-feed is returning CLEAN for every artifact without checking anything")
+		ev.Msg("threat feed refresh failed and the local feed is empty: " + emptyFeedConsequence)
 		return
 	}
 	ev.Msg("threat feed refresh failed; still matching against the last feed contents")

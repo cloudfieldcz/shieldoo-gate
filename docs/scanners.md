@@ -545,11 +545,31 @@ Two mechanisms make that impossible to miss now.
 [Prometheus metrics → Threat feed health](deployment.md#threat-feed-health).
 `shieldoo_gate_threat_feed_entries == 0` is the direct measure of the fail-open.
 
-**2. A log level that rises with severity.** One line per refresh attempt:
+**2. A log level that rises with severity.** Exactly one line per refresh
+attempt, at a level driven by whether the scanner can still detect anything:
+
+| Outcome | Level |
+|---|---|
+| Refreshed, feed has entries | INFO |
+| **Refreshed, feed is empty** | **ERROR** |
+| Fetch failed, feed has entries, under 3 consecutive failures | WARN |
+| Fetch failed, feed has entries, 3+ consecutive failures | ERROR |
+| Fetch failed, feed is empty | ERROR, from the first failure |
+| Fetch failed, entry count unavailable (`feed_entries: -1`) | Treated as populated |
 
 ```json
 {"level":"info","feed_entries":2,"time":"2026-09-03T13:12:52+02:00",
  "message":"threat feed refresh completed"}
+```
+
+A refresh can succeed and still leave the gate blind — an upstream serving a
+valid but empty document (truncated publish, misconfigured CDN, a feed emptied
+at the source) returns 200 and parses fine. The HTTP exchange going well is not
+the thing worth reporting, so that case is ERROR, not INFO:
+
+```json
+{"level":"error","feed_entries":0,"time":"2026-09-03T13:12:52+02:00",
+ "message":"threat feed refreshed successfully but the feed is empty: builtin-threat-feed is returning CLEAN for every artifact without checking anything"}
 ```
 
 A populated feed that fails to refresh is going stale, not blind, so the first

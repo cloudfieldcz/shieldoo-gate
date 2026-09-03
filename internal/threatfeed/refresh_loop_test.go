@@ -108,6 +108,22 @@ func TestClient_RefreshAndLog_Success_LogsInfoWithEntryCount(t *testing.T) {
 	assert.Equal(t, 2.0, lines[0]["feed_entries"])
 }
 
+func TestClient_RefreshAndLog_SuccessWithEmptyFeed_LogsError(t *testing.T) {
+	resetFeedMetrics(t)
+	// A perfectly healthy exchange: 200, valid JSON, zero entries.
+	srv := feedServer(t, nil)
+	client := NewClient(testDB(t), srv.URL)
+
+	lines := captureLogs(t, func() { client.refreshAndLog(context.Background()) })
+
+	require.Len(t, lines, 1)
+	assert.Equal(t, "error", lines[0]["level"], "a successful refresh that leaves the feed empty is the same fail-open as a failed one")
+	assert.Equal(t, 0.0, lines[0]["feed_entries"])
+	assert.NotContains(t, lines[0], "error", "there is no fetch error to report on the success path")
+	assert.Contains(t, lines[0]["message"], "empty")
+	assert.Contains(t, lines[0]["message"], "builtin-threat-feed")
+}
+
 func TestClient_Run_CancelledContext_RefreshesOnceAndReturns(t *testing.T) {
 	resetFeedMetrics(t)
 	srv := feedServer(t, []FeedEntry{maliciousEntry("999999")})
