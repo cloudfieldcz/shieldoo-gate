@@ -1,3 +1,6 @@
+-- CVE ignores. See the sqlite twin of this migration for the full rationale; the
+-- matching scope is set by package_version (NULL/'' = per-package, non-empty =
+-- that version only) — ADR-021.
 CREATE TABLE IF NOT EXISTS cve_ignores (
     id                       BIGSERIAL PRIMARY KEY,
     component_id             BIGINT  NOT NULL REFERENCES components(id) ON DELETE RESTRICT,

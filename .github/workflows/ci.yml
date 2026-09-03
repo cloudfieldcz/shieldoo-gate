@@ -70,7 +70,20 @@ jobs:
       - name: Build
         run: make build
 
-      - name: Lint (go vet)
+      # `make lint` runs `redocly lint` on docs/api/openapi.yaml before `go vet`, so this
+      # job needs node. Pinned rather than relying on whatever the runner image ships,
+      # so the spec check behaves the same here as it does locally. No `cache: npm` —
+      # the validator is fetched by npx at a pinned version, not from a lockfile.
+      - name: Set up Node (for the OpenAPI spec check in `make lint`)
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # go vet + `redocly lint docs/api/openapi.yaml`. The spec is normative (CLAUDE.md:
+      # "API changes must update docs/api/openapi.yaml") and nothing validated it before
+      # — it was unparseable YAML on main. See the Makefile's lint-openapi target and
+      # redocly.yaml for which rules are enforced.
+      - name: Lint (go vet + OpenAPI spec)
         run: make lint
 
       - name: Test

@@ -498,10 +498,19 @@ Scanner Results         Aggregation                 Policy Engine
 
 The community threat feed (`internal/threatfeed/client.go`) provides a database of known-malicious package hashes. It is fetched from a remote URL and stored in the `threat_feed` table.
 
-**Refresh cycle:**
-1. On startup: initial fetch in a background goroutine (errors logged, not fatal)
-2. Periodic refresh via `time.Ticker` at configured interval (default 1 hour)
-3. Entries are upserted using `INSERT OR REPLACE`
+**Refresh cycle** (`Client.Run`, started from `main.go` in its own goroutine):
+1. On startup: initial fetch immediately, before the first tick (errors logged, not fatal)
+2. Periodic refresh via `time.Ticker` at configured interval (default 1 hour), until the context is cancelled
+3. Entries are upserted with `INSERT … ON CONFLICT (sha256) DO UPDATE` — ANSI, so the same statement runs on SQLite and PostgreSQL, and unlike `INSERT OR REPLACE` it never deletes and re-inserts the row
+4. Every attempt — success or failure — updates the [feed health metrics](deployment.md#threat-feed-health) and emits exactly one log line
+
+`POST /api/v1/feed/refresh` triggers `Client.RefreshNow` — the same entry point
+the periodic loop uses, so a manual refresh logs, escalates and moves the metrics
+exactly like a scheduled one. It returns `202` once the fetch has started,
+reports `501` when no feed is configured, and is rate limited because it is an
+outbound request to a third-party host. The result is reported through the log
+line and the metrics, not in the HTTP response — the response is written before
+the fetch finishes.
 
 **Feed format** (OSV-compatible JSON):
 ```json
@@ -523,6 +532,136 @@ The community threat feed (`internal/threatfeed/client.go`) provides a database 
 ```
 
 The threat feed checker scanner (`builtin-threat-feed`) performs a fast-path SHA-256 lookup against this local table during every scan.
+
+### Feed health and failure escalation
+
+**An empty feed is a silent fail-open.** `ThreatFeedChecker.Scan` looks up
+`artifact.SHA256` in `threat_feed`; no row means `CLEAN` with confidence 1.0.
+That is correct for a healthy feed and indistinguishable from it when the table
+is empty — the scanner reports a check it is not performing, and because it is
+marked `required` in `config.example.yaml` it also satisfies the required-scanner
+gate while doing so. A feed that never loads therefore costs coverage without
+costing a single blocked request, which is exactly why it can go unnoticed.
+
+This happened: on one deployment the feed host served the wrong TLS certificate
+and the refresh failed **535 consecutive times over three weeks, including the
+initial one**. Each failure produced a single WARN line and nothing else.
+
+Three mechanisms make that impossible to miss now.
+
+**1. Metrics.** Five series, always present, described in
+[Prometheus metrics → Threat feed health](deployment.md#threat-feed-health).
+`shieldoo_gate_threat_feed_entries == 0` is the direct measure of the fail-open.
+
+**2. A log level that rises with severity.** Exactly one line per refresh
+attempt, at a level driven by whether the scanner can still detect anything:
+
+| Outcome | Level |
+|---|---|
+| Refreshed, feed has entries | INFO |
+| **Refreshed, feed is empty** | **ERROR** |
+| Refreshed, entry count unavailable | INFO, `feed_entries: -1` — the refresh succeeded, only the count did not |
+| Fetch failed, feed has entries, under 3 consecutive failures | WARN |
+| Fetch failed, feed has entries, 3+ consecutive failures | ERROR |
+| Fetch failed, feed is empty | ERROR, from the first failure |
+| Fetch failed, entry count unavailable | Treated as populated |
+
+`feed_entries: -1` means **the entry count could not be taken** — the
+`SELECT COUNT(*)` against `threat_feed` failed or timed out — not that the feed
+has minus-one entries. It is deliberately negative so it can never be confused
+with an empty feed: a database hiccup must not be reported as "the scanner
+detects nothing", and it does not escalate the log level or move the
+`shieldoo_gate_threat_feed_entries` gauge, which keeps its previous value.
+
+```json
+{"level":"info","feed_entries":2,"time":"2026-09-03T13:12:52+02:00",
+ "message":"threat feed refresh completed"}
+```
+
+A refresh can succeed and still leave the gate blind — an upstream serving a
+valid but empty document (truncated publish, misconfigured CDN, a feed emptied
+at the source) returns 200 and parses fine. The HTTP exchange going well is not
+the thing worth reporting, so that case is ERROR, not INFO:
+
+```json
+{"level":"error","feed_entries":0,"time":"2026-09-03T13:12:52+02:00",
+ "message":"threat feed refreshed successfully but the feed is empty: builtin-threat-feed is returning CLEAN for every artifact without checking anything"}
+```
+
+A populated feed that fails to refresh is going stale, not blind, so the first
+failures are WARN and carry how long it has been stale:
+
+```json
+{"level":"warn","error":"threatfeed: fetching feed from https://feed.shieldoo.io/… : …",
+ "consecutive_failures":1,"feed_entries":2,"stale_for":"1h0m0s",
+ "time":"2026-09-03T13:12:52+02:00",
+ "message":"threat feed refresh failed; still matching against the last feed contents"}
+```
+
+From the third consecutive failure (`escalateAfterConsecutiveFailures`, roughly
+three hours at the default 1 h interval) the same line is logged at ERROR. The
+threshold is a constant rather than a config knob: it selects a log level, not
+policy, and a loud line that fires on every transient blip is one operators learn
+to filter out — which is how the original single WARN became invisible.
+
+An **empty** local feed skips the threshold entirely and is ERROR from the very
+first failure, naming the consequence:
+
+```json
+{"level":"error","error":"threatfeed: fetching feed from https://feed.shieldoo.io/malicious-packages.json: … tls: failed to verify certificate: x509: certificate is valid for *.msha-slice-4-am2-1-ase.p.azurewebsites.net, … not feed.shieldoo.io",
+ "consecutive_failures":1,"feed_entries":0,"ever_loaded":false,
+ "time":"2026-09-03T13:12:52+02:00",
+ "message":"threat feed refresh failed and the local feed is empty: builtin-threat-feed is returning CLEAN for every artifact without checking anything"}
+```
+
+`ever_loaded:false` marks a feed that has not loaded since this process started;
+once it has, the field is replaced by `stale_for`.
+
+**What this does not change.** `builtin-threat-feed` still returns `CLEAN` when
+the feed is empty. Making it report `SCAN_UNAVAILABLE` instead would turn a
+broken third-party feed host into a blocked pipeline for every artifact in every
+ecosystem — a policy change on a security-critical path, analysed in
+[ADR-020](adr/ADR-020-threat-feed-empty-verdict.md), which is **proposed and
+undecided**. Until it is decided, the feed's health is an observability signal:
+alert on it, do not rely on the scan verdict to tell you.
+
+**3. `GET /api/v1/health`.** `ThreatFeedChecker.HealthCheck` reports the scanner
+unhealthy when the feed is configured but the local table is empty:
+
+```json
+{"status":"ok","scanners":{"builtin-threat-feed":{"healthy":false,
+  "error":"threat feed empty"}}}
+```
+
+**The endpoint is unauthenticated**, and deliberately so — it is registered before the
+protected admin group precisely so Kubernetes liveness and readiness probes can reach it
+without credentials. Two consequences shaped the code:
+
+- **The message is terse on purpose.** `healthy:false` on `builtin-threat-feed` already
+  says the scanner cannot detect anything; spelling out *"every artifact is reported
+  CLEAN without being checked"* in the public body would hand an anonymous caller a
+  precise, pollable signal for when the known-malicious-hash layer is down — which is
+  exactly when it pays to push a package. The full consequence is named in the log lines
+  above and on this page, neither of which is public. What remains disclosed is that the
+  feed is empty, which is the minimum a health endpoint can say and still be one; a
+  deployment that cannot accept even that should not expose `/api/v1/health` beyond its
+  cluster.
+- **The check is a single-row probe, not a count.** `SELECT 1 FROM threat_feed LIMIT 1`
+  answers the presence question in O(1). Helm probes hit this endpoint roughly every
+  10 s, and `COUNT(*)` over the whole feed table is not a query to put behind an
+  unauthenticated route.
+
+It answers "can this scanner detect anything", not "how fresh is the feed" —
+a feed that loaded once and has gone stale still detects everything it contains,
+so staleness is left to `..._last_success_timestamp_seconds`. A **disabled**
+feed is healthy: the checker is registered unconditionally in `main.go`, so an
+empty table is the normal state wherever `threat_feed.enabled: false`, and
+`NewThreatFeedChecker` takes the configured flag purely so health reporting can
+tell the two apart. The flag does not reach `Scan`.
+
+The endpoint still returns **HTTP 200** regardless of scanner health — the
+per-scanner result only shapes the body — so the Helm chart's liveness and
+readiness probes cannot be tripped by a dead feed.
 
 ## Ecosystem Coverage Matrix
 
@@ -658,7 +797,7 @@ The sandbox's own `sgw-sandbox-*` temp is **not** a `shieldoo-` prefix and is ha
 
 ## Health Checks
 
-`Engine.HealthCheck()` runs `HealthCheck()` on every registered scanner **in parallel** and returns a map of scanner name to error (nil = healthy). This is exposed via `GET /api/v1/health` and includes scanner status in the response.
+`Engine.HealthCheck()` runs `HealthCheck()` on every registered scanner **in parallel** and returns a map of scanner name to error (nil = healthy). This is exposed via `GET /api/v1/health` and includes scanner status in the response. A health check reports capability, not freshness — see [`builtin-threat-feed`](#feed-health-and-failure-escalation) for a worked example.
 
 Parallelism matters here because individual scanners perform real I/O during their health check — `trivy` forks `trivy version`, `osv` does an HTTPS POST to `api.osv.dev`, `ai-scanner` makes a gRPC call to the scanner bridge. Running them sequentially would let a slow scanner consume the budget of the ones that follow, producing spurious `DeadlineExceeded` (gRPC/HTTP) or `signal: killed` (SIGKILL from `exec.CommandContext` when the parent context expires mid-fork) errors even when every individual scanner is healthy.
 

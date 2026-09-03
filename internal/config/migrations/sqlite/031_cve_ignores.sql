@@ -1,6 +1,11 @@
 -- CVE ignores: per-Component suppression of (cve_id, package_name) pairs.
--- Per-package semantics: package_version is informational only (records what was visible
--- when the ignore was created) and is NOT part of the matching predicate.
+--
+-- package_version selects the matching scope (see ADR-021):
+--   NULL / ''  — per-package: the ignore covers the CVE on that package at every version.
+--   non-empty  — per-version: the ignore covers that one version only, so a suppression
+--                raised against a vendored copy of a package cannot mask the same CVE
+--                when it reappears at a different version.
+-- The predicate lives in Store.ApplySuppression / Store.FindActiveIgnoresForRun.
 --
 -- ON DELETE RESTRICT on component_id (NOT CASCADE): ignore rows are audit evidence and
 -- cannot be silently destroyed by a component delete. Hard-delete requires explicit

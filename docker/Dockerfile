@@ -78,7 +78,15 @@ FROM aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9
 # Stage 3: Runtime image
 FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS runtime
 
-RUN apk add --no-cache ca-certificates sqlite-libs
+# The base tag is pinned by digest for reproducibility (ADR-014); `apk
+# upgrade` deliberately widens the build-time surface beyond that pin (the
+# whole installed base set, not just what `apk add` installs) to buy
+# security currency — picking up fixed packages (e.g. libssl3/libcrypto3)
+# published in alpine's *live* v3.24 repo between base-tag bumps — at the
+# cost of byte-for-byte OS-layer reproducibility. Bounded by apk's package
+# signature verification against the alpine keys baked into the pinned
+# base. Mirrors scanner-bridge/Dockerfile's apt-get upgrade. See ADR-010.
+RUN apk upgrade --no-cache && apk add --no-cache ca-certificates sqlite-libs
 
 COPY --from=trivy /usr/local/bin/trivy /usr/local/bin/trivy
 

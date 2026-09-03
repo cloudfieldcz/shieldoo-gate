@@ -155,9 +155,7 @@ func (s *scanServiceImpl) Run(ctx context.Context, runID int64) error {
 	if run.Status != StatusPending {
 		return nil // idempotent
 	}
-	// Mark running.
-	if _, err := s.db.ExecContext(ctx,
-		`UPDATE scan_runs SET status = 'running' WHERE id = ?`, run.ID); err != nil {
+	if err := s.markRunning(ctx, run); err != nil {
 		return err
 	}
 
@@ -235,6 +233,20 @@ func (s *scanServiceImpl) Run(ctx context.Context, runID int64) error {
 		result.ScannerStatus, "",
 		crit, high, med, low,
 		newCritical, newHigh, result.ComponentCount); err != nil {
+		if errors.Is(err, ErrScanRunTerminal) {
+			// The row was closed under us — in practice reaped by the stale-run reaper
+			// after this scan outlived the threshold. The reap already made the
+			// component rescan-eligible, so another run may be in flight for it.
+			// Publishing now would clear the reaper's error_message, advance
+			// last_scan_id onto a run nobody was waiting for, and let two runs compute
+			// their delta against the same predecessor — a spurious
+			// scan.new_critical alert. Leave the findings in place as evidence and
+			// stop here.
+			log.Warn().
+				Int64("run_id", run.ID).
+				Int64("component_id", run.ComponentID).
+				Msg("scan_service: run finished after it was closed elsewhere, results not published")
+		}
 		return err
 	}
 	_ = s.store.SetLastScanID(ctx, run.ComponentID, run.ID)
@@ -258,12 +270,66 @@ func (s *scanServiceImpl) Run(ctx context.Context, runID int64) error {
 	return nil
 }
 
-// failRun transitions the run to failed and writes scan_run_failed audit row.
+// markRunning transitions a pending run to 'running'.
+//
+// The status predicate is the third and last of the three writes that make a reap final.
+// Between Run's GetScanRun — which read the row as 'pending' — and this UPDATE, the
+// stale-run reaper can close the row. A blind write would resurrect it to 'running', the
+// scan would then complete and publish normally, and the component would be left with
+// status='done' next to error_message='reaped: stuck in pending'. Worse, the reap already
+// made the component rescan-eligible, so a second run may be in flight for it.
+//
+// Returns ErrScanRunTerminal when the row was closed underneath us; the caller stops
+// without touching it, leaving the reaper's diagnosis in place.
+func (s *scanServiceImpl) markRunning(ctx context.Context, run *ScanRun) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE scan_runs SET status = 'running' WHERE id = ? AND status = 'pending'`, run.ID)
+	if err != nil {
+		return fmt.Errorf("scan_service: starting run %d: %w", run.ID, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("scan_service: rows affected for run %d: %w", run.ID, err)
+	}
+	if affected == 0 {
+		log.Warn().
+			Int64("run_id", run.ID).
+			Int64("component_id", run.ComponentID).
+			Msg("scan_service: run was closed before it could start, not executed")
+		return fmt.Errorf("scan_service: starting run %d: %w", run.ID, ErrScanRunTerminal)
+	}
+	return nil
+}
+
+// failRun transitions the run to failed and writes a scan_run_failed audit row.
+//
+// Carries the same status predicate as UpdateScanRunStatus, for the same reason: a run
+// the stale-run reaper already closed must keep the reaper's diagnosis rather than have
+// it overwritten by whatever this scan tripped over on its way out. The audit row is
+// written only when the transition actually happened — audit_log is append-only
+// (CLAUDE.md invariant 5), so a second scan_run_failed row for a run that was already
+// failed could never be cleaned up afterwards.
 func (s *scanServiceImpl) failRun(ctx context.Context, run *ScanRun, reason string) error {
 	now := time.Now().UTC()
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE scan_runs SET status = 'failed', finished_at = ?, error_message = ? WHERE id = ?`,
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE scan_runs SET status = 'failed', finished_at = ?, error_message = ?
+		 WHERE id = ? AND status IN ('pending', 'running')`,
 		now, reason, run.ID)
+	if err != nil {
+		return fmt.Errorf("scan_service: failing run %d: %w", run.ID, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("scan_service: rows affected for run %d: %w", run.ID, err)
+	}
+	if affected == 0 {
+		log.Warn().
+			Int64("run_id", run.ID).
+			Int64("component_id", run.ComponentID).
+			Str("reason", reason).
+			Msg("scan_service: run failed after it was closed elsewhere, status left as found")
+		return fmt.Errorf("scan_service: failing run %d: %w", run.ID, ErrScanRunTerminal)
+	}
 	if s.audit != nil {
 		_ = s.audit.WriteVulnEvent(ctx, model.AuditEntry{
 			EventType:   model.EventScanRunFailed,
@@ -272,7 +338,7 @@ func (s *scanServiceImpl) failRun(ctx context.Context, run *ScanRun, reason stri
 			Reason:      reason,
 		})
 	}
-	return err
+	return nil
 }
 
 func (s *scanServiceImpl) applyExistingIgnores(ctx context.Context, run *ScanRun, result *ScanResult) error {
@@ -284,7 +350,15 @@ func (s *scanServiceImpl) applyExistingIgnores(ctx context.Context, run *ScanRun
 		return nil
 	}
 	for _, f := range result.Findings {
-		if id, ok := mapping[f.CVEID+"|"+f.PackageName]; ok {
+		// Version-pinned ignore first, per-package ignore second. The unique index on
+		// cve_ignores(component_id, cve_id, package_name) allows only one active ignore
+		// per package, so at most one of the two keys is ever present — the ordering is
+		// belt and braces, not a precedence rule anyone can exploit.
+		id, ok := mapping[IgnoreKey{CVEID: f.CVEID, PackageName: f.PackageName, PackageVersion: f.PackageVersion}]
+		if !ok {
+			id, ok = mapping[IgnoreKey{CVEID: f.CVEID, PackageName: f.PackageName}]
+		}
+		if ok {
 			f.IsSuppressed = true
 			f.SuppressedBy = ptrInt64(id)
 		}

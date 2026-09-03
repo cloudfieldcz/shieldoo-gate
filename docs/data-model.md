@@ -349,7 +349,7 @@ Stores entries from the community threat feed. Used by the built-in threat feed 
 
 **Indexes:** `idx_threat_feed_ecosystem ON (ecosystem, package_name)`
 
-Entries are upserted by the `threatfeed.Client` during periodic refresh using `INSERT OR REPLACE`.
+Entries are upserted by the `threatfeed.Client` during periodic refresh with `INSERT … ON CONFLICT (sha256) DO UPDATE` — ANSI, so the same statement runs on the PostgreSQL backend, and it updates the row in place rather than deleting and re-inserting it.
 
 ### `policy_overrides`
 
@@ -783,14 +783,16 @@ in 100-row VALUES batches.
 
 ### `cve_ignores` (vuln-scan)
 
-Per-package CVE suppression with optional expiry and AI-draft acceptance flag.
+Per-component CVE suppression with optional expiry and AI-draft acceptance flag. The
+matching scope is per-package or per-version depending on `package_version` — see
+[ADR-021](adr/ADR-021-version-aware-cve-suppression.md).
 
 | Column | Type | Description |
 |---|---|---|
 | `id` | INTEGER PK | Ignore ID |
-| `component_id` | INTEGER NOT NULL REFERENCES components(id) ON DELETE CASCADE | Owning component |
+| `component_id` | INTEGER NOT NULL REFERENCES components(id) ON DELETE **RESTRICT** | Owning component. RESTRICT, not CASCADE: ignore rows are audit evidence and a component delete must not silently destroy them |
 | `cve_id` / `package_name` | TEXT NOT NULL | Suppression key |
-| `package_version` | TEXT NOT NULL DEFAULT '' | **Informational only** — suppression is per-package, not per-version |
+| `package_version` | TEXT (nullable) | **Selects the matching scope.** NULL or `''` → per-package (every version of the package, the historical behaviour). Non-empty → per-version: only findings at exactly that version are suppressed |
 | `reason` | TEXT NOT NULL | Operator-supplied explanation |
 | `ai_draft_accepted` | BOOLEAN NOT NULL DEFAULT FALSE | True when reason came verbatim from the AI drafter |
 | `expires_at` | TIMESTAMPTZ | Optional expiry; the ignore-expiry watcher revokes after this time |
@@ -837,7 +839,8 @@ The new event types written by the vuln-scan pipeline:
 | Event type | When |
 |---|---|
 | `sbom_uploaded` | CI pushed a new SBOM |
-| `scan_run_failed` | Scanner pipeline returned an error before findings were persisted |
+| `scan_run_failed` | Scanner pipeline returned an error before findings were persisted, or the run never got a scan-concurrency slot |
+| `scan_run_reaped` | The stale-run reaper aged out a run wedged in `pending`/`running`. Deliberately distinct from `scan_run_failed` so janitorial cleanup does not page a pipeline alerting on scan failures |
 | `rescan_triggered` | Manual or scheduled rescan |
 | `ignore_created` / `ignore_revoked` / `ignore_expired` | CVE-ignore lifecycle |
 | `ai_draft_called` / `ai_draft_accepted` | AI drafter invocation + acceptance |

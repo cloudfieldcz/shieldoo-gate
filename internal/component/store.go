@@ -241,6 +241,14 @@ func (s *Store) ListScanRunsByComponent(ctx context.Context, componentID, cursor
 
 // UpdateScanRunStatus updates status, scanner_status JSON, finished_at, error_message,
 // and severity counters all in one round-trip.
+//
+// Only a run still in 'pending' or 'running' can be closed. Without that predicate a
+// scan that outlives the stale-run reaper resurrects the row it already marked 'failed':
+// the reap has made the component rescan-eligible again, so a second run may already be
+// in flight, and both would then call FindPreviousSuccessfulRun against the same
+// predecessor and emit scan.new_critical alerts off a wrong new_critical_count. Returns
+// ErrScanRunTerminal when the row is already closed, so the caller can decline to
+// publish results it can no longer own.
 func (s *Store) UpdateScanRunStatus(ctx context.Context, runID int64, status string,
 	scannerStatus map[string]string, errorMessage string,
 	critical, high, medium, low, newCritical, newHigh, componentCount int64,
@@ -251,17 +259,27 @@ func (s *Store) UpdateScanRunStatus(ctx context.Context, runID int64, status str
 	if status == StatusDone || status == StatusFailed {
 		finishedAt = sql.NullTime{Time: now, Valid: true}
 	}
-	_, err := s.db.ExecContext(ctx,
+	res, err := s.db.ExecContext(ctx,
 		`UPDATE scan_runs
 		   SET status = ?, scanner_status = ?, finished_at = ?,
 		       error_message = ?,
 		       critical_count = ?, high_count = ?, medium_count = ?, low_count = ?,
 		       new_critical_count = ?, new_high_count = ?,
 		       component_count = ?
-		 WHERE id = ?`,
+		 WHERE id = ? AND status IN ('pending', 'running')`,
 		status, string(statusJSON), finishedAt, errorMessage,
 		critical, high, medium, low, newCritical, newHigh, componentCount, runID)
-	return err
+	if err != nil {
+		return fmt.Errorf("scan_runs: updating run %d to %s: %w", runID, status, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("scan_runs: rows affected for run %d: %w", runID, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("scan_runs: run %d not updated to %s: %w", runID, status, ErrScanRunTerminal)
+	}
+	return nil
 }
 
 // FindPreviousSuccessfulRun returns the most recent done scan_run for a component
@@ -446,50 +464,92 @@ func (s *Store) ListRecentRevokedIgnores(ctx context.Context, componentID int64,
 	return out, nil
 }
 
-// FindActiveIgnoresForRun returns active ignores keyed by (cve_id, package_name)
-// for the component owning runID. Used by ApplySuppression / scan-time suppression.
-func (s *Store) FindActiveIgnoresForRun(ctx context.Context, runID int64) (map[string]int64, error) {
+// IgnoreKey identifies an active ignore for lookup against a scan finding.
+// PackageVersion is empty for a per-package ignore and set for a version-pinned one, so
+// the two scopes occupy distinct keys.
+//
+// It is a comparable struct rather than a delimited string on purpose. Package names
+// come from operator-uploaded CycloneDX and are not fully trusted: with a "|"-joined key
+// a blind ignore on a package literally named `stdlib|1.24.6` would produce the exact
+// key a finding for `stdlib` at version `1.24.6` probes first, and would silently
+// suppress a different package's finding — dropping it from critical_count and from the
+// `shdg --fail-on` gate. A struct key cannot collide.
+type IgnoreKey struct {
+	CVEID          string
+	PackageName    string
+	PackageVersion string
+}
+
+// FindActiveIgnoresForRun returns active ignores for the component owning runID, keyed
+// by IgnoreKey. Used by scan-time suppression. A version-pinned ignore lands under a key
+// carrying its version, so it can only ever match the exact version it was raised against.
+func (s *Store) FindActiveIgnoresForRun(ctx context.Context, runID int64) (map[IgnoreKey]int64, error) {
 	componentID, err := s.componentIDForRun(ctx, runID)
 	if err != nil {
 		return nil, err
 	}
 	rows := []struct {
-		ID          int64  `db:"id"`
-		CVEID       string `db:"cve_id"`
-		PackageName string `db:"package_name"`
+		ID             int64  `db:"id"`
+		CVEID          string `db:"cve_id"`
+		PackageName    string `db:"package_name"`
+		PackageVersion string `db:"package_version"`
 	}{}
 	err = s.db.SelectContext(ctx, &rows,
-		`SELECT id, cve_id, package_name FROM cve_ignores
+		`SELECT id, cve_id, package_name, COALESCE(package_version, '') AS package_version
+		   FROM cve_ignores
 		 WHERE component_id = ? AND revoked_at IS NULL`, componentID)
 	if err != nil {
 		return nil, err
 	}
-	m := make(map[string]int64, len(rows))
+	m := make(map[IgnoreKey]int64, len(rows))
 	for _, r := range rows {
-		m[r.CVEID+"|"+r.PackageName] = r.ID
+		m[IgnoreKey{CVEID: r.CVEID, PackageName: r.PackageName, PackageVersion: r.PackageVersion}] = r.ID
 	}
 	return m, nil
 }
 
-// ApplySuppression marks every scan_findings row in runID matching (component_id, cve_id, package_name)
-// of the supplied ignoreID as suppressed. Per-package semantics: version is NOT in predicate.
+// ApplySuppression marks every scan_findings row in runID covered by the supplied
+// ignore as suppressed. The match scope is decided by the ignore's package_version:
+//
+//   - empty or NULL — per-package: (component_id, cve_id, package_name), every version.
+//     This is the historical behaviour and is preserved byte for byte, so ignores
+//     created before version scoping existed keep meaning exactly what they meant.
+//   - non-empty — per-version: package_version has to match as well. An ignore raised
+//     against a vendored copy of a package then cannot mask the same CVE when it
+//     reappears at another version — e.g. suppressing a stdlib CVE that belongs to the
+//     bundled trivy binary must not hide the same CVE in our own binary.
+//
+// GetIgnore projects a NULL package_version to "", so NULL and empty string collapse
+// into the same branch here and no SQL NULL comparison is involved. On the findings
+// side the comparison stays a plain equality; scan_findings.package_version is NOT
+// NULL, so a versionless finding carries "" and a version-pinned ignore does not reach
+// it — the fail-closed direction.
 func (s *Store) ApplySuppression(ctx context.Context, ignoreID, runID int64) error {
 	ignore, err := s.GetIgnore(ctx, ignoreID)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx,
-		`UPDATE scan_findings
+	query := `UPDATE scan_findings
 		   SET is_suppressed = TRUE, suppressed_by = ?
 		 WHERE scan_run_id = ?
 		   AND component_id = ?
 		   AND cve_id = ?
-		   AND package_name = ?`,
-		ignoreID, runID, ignore.ComponentID, ignore.CVEID, ignore.PackageName)
-	return err
+		   AND package_name = ?`
+	args := []any{ignoreID, runID, ignore.ComponentID, ignore.CVEID, ignore.PackageName}
+	if ignore.PackageVersion != "" {
+		query += `
+		   AND package_version = ?`
+		args = append(args, ignore.PackageVersion)
+	}
+	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("cve_ignores: applying suppression of ignore %d to run %d: %w", ignoreID, runID, err)
+	}
+	return nil
 }
 
-// ClearSuppression undoes ApplySuppression. Idempotent.
+// ClearSuppression undoes ApplySuppression. Idempotent, and scope-agnostic by
+// construction: it unwinds exactly the rows this ignore stamped, so it needs no
+// knowledge of whether the ignore was per-package or per-version.
 func (s *Store) ClearSuppression(ctx context.Context, ignoreID, runID int64) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE scan_findings

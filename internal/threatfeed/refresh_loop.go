@@ -1,0 +1,137 @@
+package threatfeed
+
+import (
+	"context"
+	"sync/atomic"
+	"time"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+)
+
+// escalateAfterConsecutiveFailures is how many consecutive refresh failures are
+// tolerated at WARN before the failure is logged at ERROR.
+//
+// Three, at the default 1 h refresh interval, means roughly three hours of an
+// unrefreshed feed before the loud line — long enough that a single upstream
+// blip, a redeploy of the feed host or a transient DNS failure stays quiet, and
+// short enough that a genuinely broken feed is loud within a working morning.
+// A line that fires for every benign hiccup is a line operators learn to
+// ignore, which is exactly how the original single WARN became invisible.
+//
+// The threshold is deliberately NOT configurable: it is a log level, not
+// policy, and the case that actually matters — an empty feed — bypasses it
+// entirely (see refreshFailureLevel).
+const escalateAfterConsecutiveFailures = 3
+
+// refreshFailureLevel picks the log level for a failed refresh.
+//
+// An empty local feed is ERROR from the very first failure: with zero rows in
+// threat_feed the builtin-threat-feed scanner returns CLEAN with confidence 1
+// for every artifact it is asked about, so the gate is reporting a check it is
+// not performing. There is no "wait and see" version of that. A non-empty feed
+// is merely going stale, which is worth a WARN until it has persisted.
+func refreshFailureLevel(consecutiveFailures int, entries int64) zerolog.Level {
+	if entries == 0 {
+		return zerolog.ErrorLevel
+	}
+	if consecutiveFailures >= escalateAfterConsecutiveFailures {
+		return zerolog.ErrorLevel
+	}
+	return zerolog.WarnLevel
+}
+
+// runningLoops counts Client.Run invocations currently in flight.
+//
+// The feed metrics are package-level singletons — unlabelled gauges and one counter —
+// so they describe *the* feed, not *a* feed. That is correct for the single client
+// main.go wires, and it is exactly why a second concurrent Run is a bug and not a
+// configuration: two loops would interleave their outcomes into one set of series, and
+// shieldoo_gate_threat_feed_enabled would assert "the feed is running" on behalf of
+// whichever one wrote last. Counted and reported rather than refused — refusing to
+// refresh would turn a wiring mistake into a silently dead feed, which is the failure
+// this package was rewritten to make impossible to miss.
+var runningLoops atomic.Int32
+
+// Run refreshes the feed once immediately and then on every tick of interval,
+// logging each outcome, until ctx is cancelled. It is meant to be run in its
+// own goroutine; refresh errors are never fatal.
+//
+// Run, not NewClient, is what publishes shieldoo_gate_threat_feed_enabled and
+// materialises the refresh counters at zero: the gauge means "a refresh loop is
+// running", and a client that is built and never run must not claim otherwise.
+func (c *Client) Run(ctx context.Context, interval time.Duration) {
+	if n := runningLoops.Add(1); n > 1 {
+		log.Error().
+			Int("running_loops", int(n)).
+			Str("url", c.feedURL).
+			Msg("threat feed: more than one refresh loop is running — the feed metrics are process-global and now describe all of them")
+	}
+	defer runningLoops.Add(-1)
+
+	markEnabled()
+	_ = c.RefreshNow(ctx)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			_ = c.RefreshNow(ctx)
+		}
+	}
+}
+
+// emptyFeedConsequence spells out what an empty threat_feed table costs. It is
+// appended to every message describing one, because the entry count on its own
+// reads as a statistic rather than as a scanner that has stopped detecting.
+const emptyFeedConsequence = "builtin-threat-feed is returning CLEAN for every artifact without checking anything"
+
+// RefreshNow performs one refresh and emits exactly one log line describing the
+// result, at a level that rises with how bad the situation is. It returns the
+// refresh error, if any, for callers that need to react to it — the reporting
+// has already happened by then.
+//
+// This is the entry point for out-of-band refreshes (POST /api/v1/feed/refresh)
+// as well as for the periodic loop, so a manually triggered refresh escalates,
+// counts and reports exactly like a scheduled one.
+func (c *Client) RefreshNow(ctx context.Context) error {
+	out := c.refreshOnce(ctx)
+
+	if out.err == nil {
+		// A refresh that succeeds and leaves the table empty is the same
+		// fail-open as one that never completes — the scanner has nothing to
+		// match against either way. An upstream serving a valid but empty
+		// document (truncated publish, misconfigured CDN, feed emptied at the
+		// source) must not be reported as a healthy refresh just because the
+		// HTTP exchange went well.
+		if out.entries == 0 {
+			log.Error().
+				Int64("feed_entries", out.entries).
+				Msg("threat feed refreshed successfully but the feed is empty: " + emptyFeedConsequence)
+			return nil
+		}
+		log.Info().Int64("feed_entries", out.entries).Msg("threat feed refresh completed")
+		return nil
+	}
+
+	ev := log.WithLevel(refreshFailureLevel(out.consecutiveFailures, out.entries)).
+		Err(out.err).
+		Int("consecutive_failures", out.consecutiveFailures).
+		Int64("feed_entries", out.entries)
+
+	if out.lastSuccess.IsZero() {
+		ev = ev.Bool("ever_loaded", false)
+	} else {
+		ev = ev.Str("stale_for", time.Since(out.lastSuccess).Round(time.Second).String())
+	}
+
+	if out.entries == 0 {
+		ev.Msg("threat feed refresh failed and the local feed is empty: " + emptyFeedConsequence)
+		return out.err
+	}
+	ev.Msg("threat feed refresh failed; still matching against the last feed contents")
+	return out.err
+}

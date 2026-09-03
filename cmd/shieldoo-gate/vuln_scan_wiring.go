@@ -22,7 +22,8 @@ import (
 )
 
 // setupVulnScan wires up the vulnerability-scan pipeline: component services, scan
-// service, rescan scheduler, retention reaper, ignore expiry watcher, AI surfaces.
+// service, rescan scheduler, stale-run reaper, retention reaper, ignore expiry watcher,
+// AI surfaces.
 // Mutates apiServer in place via SetVulnDeps + SetAIDeps.
 func setupVulnScan(ctx context.Context, cfg *config.Config, db *config.GateDB, blobStore cache.BlobStore, projectSvc project.Service, apiServer *api.Server, alerter alert.Alerter, gd *guarddog.GuardDogScanner) {
 	_ = projectSvc
@@ -154,6 +155,26 @@ func setupVulnScan(ctx context.Context, cfg *config.Config, db *config.GateDB, b
 	}
 	rescanScheduler := scheduler.NewManifestRescanScheduler(rescanCfg, db, store, scanSvc)
 	rescanScheduler.Start(ctx)
+
+	// Stale scan-run reaper. Without it a single scan_runs row wedged in
+	// pending/running by a restart mid-scan excludes its component from every
+	// rescan cycle above, forever.
+	//
+	// Threshold defaults to max(4 x rescan.timeout, 1h). The derivation tracks the
+	// rescan timeout knob automatically, but note it only bounds the SCHEDULED path:
+	// the upload and manual-rescan paths run ScanService.Run under
+	// api.Server.detachedCtx(), a hardcoded 10m (internal/api/rescan.go), part of
+	// which can be spent blocked on the scan-concurrency semaphore with the row
+	// already 'pending'. 10m is therefore the true worst-case legitimate in-flight
+	// lifetime, and it is the 1h floor inside DefaultStaleRunThreshold — not the
+	// derivation — that dominates it. Raising rescan.timeout is safe (the derivation
+	// is monotonic); lowering the floor would not be.
+	staleReaperCfg := scheduler.StaleRunReaperConfig{
+		Interval:  parseDurationOr(cfg.VulnScan.StaleRunReaper.Interval, 15*time.Minute),
+		Threshold: parseDurationOr(cfg.VulnScan.StaleRunReaper.Threshold, scheduler.DefaultStaleRunThreshold(rescanCfg.Timeout)),
+	}
+	staleRunReaper := scheduler.NewStaleRunReaper(staleReaperCfg, db).WithAudit(auditWriter)
+	staleRunReaper.Start(ctx)
 
 	retentionCfg := scheduler.ScanRunRetentionConfig{
 		KeepN:       cfg.VulnScan.Retention.KeepN,

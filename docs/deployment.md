@@ -305,7 +305,8 @@ npm run build  # Production build to dist/
 | `make test` | Run unit tests (excludes e2e) |
 | `make test-e2e` | Run Go e2e tests |
 | `make test-e2e-containerized` | Run containerized E2E tests (no host tools needed) |
-| `make lint` | Run `go vet` |
+| `make lint` | Validate `docs/api/openapi.yaml` (pinned Redocly CLI), then run `go vet`. Needs node + network — see [CI](development/ci.md#openapi-spec-validation) |
+| `make lint-openapi` | The OpenAPI half of `make lint` on its own |
 | `make proto` | Regenerate protobuf/gRPC code from `scanner-bridge/proto/scanner.proto` |
 | `make clean` | Remove `bin/` directory |
 
@@ -530,6 +531,67 @@ shieldoo_gate_blocked_total{ecosystem, reason}         # counter
 shieldoo_gate_quarantined_total{ecosystem}             # counter
 shieldoo_gate_scanner_errors_total{scanner, kind}      # counter (kind: retryable|terminal|overload|throttled)
 ```
+
+### Threat feed health
+
+```
+shieldoo_gate_threat_feed_enabled                                # gauge (1 = feed configured and running)
+shieldoo_gate_threat_feed_refresh_total{result}                  # counter (result: success|failure)
+shieldoo_gate_threat_feed_consecutive_failures                   # gauge
+shieldoo_gate_threat_feed_last_success_timestamp_seconds         # gauge (unix seconds, 0 = never loaded since start)
+shieldoo_gate_threat_feed_entries                                # gauge (rows in the local threat_feed table)
+```
+
+All five series exist from the moment the refresh loop starts, with an explicit value
+including the zeroes. That is deliberate: the state worth alerting on is a feed that has
+*never* loaded, and a missing time series is indistinguishable from a scraper
+that never reached the process.
+
+`shieldoo_gate_threat_feed_enabled` is published by `Client.Run`, not by the constructor
+— it asserts that a loop is refreshing, so a client that is built but never started must
+not set it. On a deployment with `threat_feed.enabled: false` no client is built at all
+and the series is absent, which is why the alerts below guard on `== 1` rather than on
+absence. `threat_feed.enabled: true` with an empty `url` is rejected at startup, so it
+can never produce a deployment where the checker reports unhealthy while this gauge says
+the feed is off.
+
+Read them together:
+
+| Reading | Meaning |
+|---|---|
+| `enabled == 0` | Feed switched off in config. Nothing to alert on. |
+| `enabled == 1`, `last_success_timestamp == 0` | The feed has not loaded since this process started. |
+| `entries == 0` | **The `builtin-threat-feed` scanner has nothing to match against and returns `CLEAN` with confidence 1 for every artifact.** See [Threat feed health](scanners.md#feed-health-and-failure-escalation). |
+| `last_success_timestamp` old but non-zero, `entries > 0` | Loaded at some point, now going stale — the scanner still detects everything the last good fetch contained. |
+
+`shieldoo_gate_threat_feed_entries` never goes negative: when the row count
+cannot be taken (DB error or timeout) the gauge holds its previous value rather
+than dropping to 0, so a database hiccup cannot fire `ThreatFeedEmpty`. The
+corresponding log line reports `feed_entries: -1`, meaning "count unavailable".
+
+`last_success_timestamp_seconds` is in-process state and resets to 0 on restart;
+`entries` reflects the database and survives restarts. Use `entries` for "is the
+scanner able to detect anything at all", and the timestamp for "how fresh is it".
+
+Suggested alerts:
+
+```yaml
+- alert: ThreatFeedEmpty
+  # The fail-open: the gate reports a threat-feed check it is not performing.
+  expr: shieldoo_gate_threat_feed_enabled == 1 and shieldoo_gate_threat_feed_entries == 0
+  for: 15m
+  labels: { severity: critical }
+
+- alert: ThreatFeedStale
+  expr: shieldoo_gate_threat_feed_enabled == 1
+        and shieldoo_gate_threat_feed_last_success_timestamp_seconds > 0
+        and time() - shieldoo_gate_threat_feed_last_success_timestamp_seconds > 86400
+  for: 30m
+  labels: { severity: warning }
+```
+
+The `enabled == 1` guard on both is what keeps them quiet on deployments that
+run with `threat_feed.enabled: false` (E2E, air-gapped installs).
 
 ## Security Considerations
 

@@ -40,6 +40,15 @@ export default function IgnoreModal({
   const [draft, setDraft] = useState<string | null>(null)
   const [draftLoading, setDraftLoading] = useState(false)
   const [aiDraftAccepted, setAiDraftAccepted] = useState(false)
+  // Suppression scope. Unchecked sends no package_version, which keeps the historical
+  // per-package reach (every version of the package). Checked pins the ignore to this
+  // exact version — see ADR-021. Restoring an expired ignore inherits the scope the
+  // stored row has: migration 040 nulled package_version on every pre-existing row, so
+  // this can only pre-tick for an ignore somebody deliberately pinned, and a restore
+  // therefore never widens or narrows the scope it is restoring.
+  const [versionScoped, setVersionScoped] = useState(
+    !!restoreFromExpired && !!finding.package_version,
+  )
 
   const supportsDraft = aiEnabled && !!componentRepoURL
 
@@ -77,7 +86,7 @@ export default function IgnoreModal({
       await vulnApi.createIgnore(componentID, {
         cve_id: finding.cve_id,
         package_name: finding.package_name,
-        package_version: finding.package_version,
+        package_version: versionScoped ? finding.package_version : '',
         reason,
         expires_at: expiresAt,
         ai_draft_accepted: aiDraftAccepted,
@@ -97,7 +106,8 @@ export default function IgnoreModal({
       <div className="bg-white rounded-lg shadow-2xl w-full max-w-2xl">
         <div className="px-6 py-4 border-b border-gray-200">
           <h2 className="text-lg font-semibold">
-            {restoreFromExpired ? 'Restore' : 'Ignore'} {finding.cve_id} on {finding.package_name}@{finding.package_version}
+            {restoreFromExpired ? 'Restore' : 'Ignore'} {finding.cve_id} on{' '}
+            {finding.package_version ? `${finding.package_name}@${finding.package_version}` : finding.package_name}
           </h2>
           {restoreFromExpired && (
             <p className="mt-1 text-xs text-amber-700">
@@ -154,6 +164,27 @@ export default function IgnoreModal({
               className="w-full rounded border border-gray-300 px-3 py-2 text-sm"
             />
             <div className="text-xs text-gray-500 mt-1">{reason.length}/1000</div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Applies to</label>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={versionScoped}
+                disabled={!finding.package_version}
+                onChange={(e) => setVersionScoped(e.target.checked)}
+              />
+              <span>
+                Only version <span className="font-mono text-xs">{finding.package_version || 'n/a'}</span>
+                <span className="block text-xs text-gray-500">
+                  {versionScoped
+                    ? 'The finding comes back if this package moves to another version — use this when the vulnerable copy is vendored (e.g. a bundled scanner binary).'
+                    : `Suppresses ${finding.cve_id} on ${finding.package_name} at every version.`}
+                </span>
+              </span>
+            </label>
           </div>
 
           <div>

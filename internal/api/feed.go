@@ -37,9 +37,32 @@ func (s *Server) handleListFeed(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRefreshFeed handles POST /api/v1/feed/refresh.
-// The actual feed refresh requires the threatfeed.Client which would be injected in production.
-// For now the endpoint acknowledges the request and returns 202 Accepted.
-func (s *Server) handleRefreshFeed(w http.ResponseWriter, r *http.Request) {
+//
+// The refresh runs detached from the request: a feed fetch plus upsert can
+// outlast the client's patience, and the caller only needs to know the work
+// started. The outcome is not in this response — it is already written by then —
+// so the refresher is responsible for reporting it. The wired implementation
+// (threatfeed.Client.RefreshNow) is the same entry point the periodic loop uses,
+// so a manual refresh produces the same escalating log line and moves the same
+// shieldoo_gate_threat_feed_* metrics as a scheduled one. Its error is dropped
+// here rather than logged twice.
+//
+// When no refresher is wired the endpoint reports 501. It previously answered
+// 202 "queued" unconditionally while doing nothing at all, which is the worst
+// possible reply to an operator chasing a dead feed: it certifies that something
+// happened and leaves them looking for a second fault that does not exist.
+func (s *Server) handleRefreshFeed(w http.ResponseWriter, _ *http.Request) {
+	if s.feedRefresher == nil {
+		writeError(w, http.StatusNotImplemented, "threat feed refresh is not available: no threat feed is configured")
+		return
+	}
+
+	refresh := s.feedRefresher
+	ctx := s.detachedCtx()
+	go func() {
+		_ = refresh(ctx)
+	}()
+
 	writeJSON(w, http.StatusAccepted, map[string]string{
 		"status":  "accepted",
 		"message": "threat feed refresh queued",

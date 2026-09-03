@@ -69,6 +69,13 @@ const (
 	EventSuperTokenUsed       EventType = "super_token_used"
 	EventRepoURLChanged       EventType = "repo_url_changed"
 	EventSBOMIntegrityViolation EventType = "sbom_integrity_violation"
+
+	// EventScanRunReaped records the stale-run reaper ageing out a scan_runs row left
+	// 'pending' or 'running' past the configured threshold — in practice a process that
+	// died mid-scan. Deliberately NOT scan_run_failed: reaping is janitorial cleanup,
+	// and an operator whose pipeline pages on scan_run_failed must not be paged by it.
+	// MetadataJSON shape: {"stuck_status":"running","age":"2160h0m0s"}
+	EventScanRunReaped EventType = "scan_run_reaped"
 )
 
 // Vulnerability scan alert event types (consumed by the alerter; opt-in via Settings → Alerting).

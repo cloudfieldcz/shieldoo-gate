@@ -12,16 +12,16 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
 
 - [Architecture](architecture.md) — component overview, request flow, startup sequence, concurrency model
 - [Data Model](data-model.md) — database schema, Go structs, table relationships, migrations
-- [Scanners](scanners.md) — scan engine, built-in and external scanners, aggregation, threat feed, [scratch cleanup / temp janitor](scanners.md#scratch-cleanup-temp-janitor)
+- [Scanners](scanners.md) — scan engine, built-in and external scanners, aggregation, threat feed and its [health / failure escalation](scanners.md#feed-health-and-failure-escalation), [scratch cleanup / temp janitor](scanners.md#scratch-cleanup-temp-janitor)
 - [SBOM Export](sbom.md) — per-project CycloneDX 1.5 SBOM download (`GET /api/v1/projects/{id}/sbom`)
   - [Version-Diff Scanner](scanners/version-diff.md) — AI-driven cross-version semantic analysis (replaces v1.x heuristic, see [ADR-005](adr/ADR-005-ai-driven-version-diff.md))
-- [Vulnerability Scan](vulnerability-scan.md) — push-from-CI CycloneDX SBOM scanning (OSV + Trivy), scheduled rescans, per-component CVE ignore lifecycle, optional AI surfaces (see [ADR-007](adr/ADR-007-vulnerability-scan.md))
+- [Vulnerability Scan](vulnerability-scan.md) — push-from-CI CycloneDX SBOM scanning (OSV + Trivy), [background schedulers](vulnerability-scan.md#background-schedulers) (rescan, stale-run reaper, retention), per-component CVE ignore lifecycle, [scan delta and alerting](vulnerability-scan.md#scan-delta-and-alerting), optional AI surfaces (see [ADR-007](adr/ADR-007-vulnerability-scan.md))
 - [Protocol Adapters](adapters.md) — PyPI, npm, NuGet, Docker, Maven, RubyGems, Go Modules proxy implementations and routing
 - [Policy Engine](policy.md) — evaluation order, overrides, allowlists, aggregation rules, policy tiers (v1.2), AI triage
 - [Configuration](configuration.md) — full `config.yaml` reference, environment variables, Go structs
   - [Authentication](configuration.md) — OIDC admin API authentication (v1.1) — see the `auth:` block in the config reference
   - [Alerts](configuration.md) — webhook, Slack, and email notification channels — see the `alerts:` block in the config reference
-- [Deployment](deployment.md) — Docker Compose, Kubernetes (Helm), local development, client configuration, testing
+- [Deployment](deployment.md) — Docker Compose, Kubernetes (Helm), local development, client configuration, testing, [Prometheus metrics](deployment.md#prometheus-metrics)
 - [Continuous Integration & Security Scanning](development/ci.md) — the `ci.yml` (build/lint/test) and `codeql.yml` (CodeQL + govulncheck) workflows, plus UI ESLint config
 - [E2E Testing](development/e2e-testing.md) — the E2E shell suite: stack architecture, the test harness, full test inventory, and an in-depth guide to how **multi-upstream-index** behaviour is tested (the scan+cache release gate)
 - [UI Test Suite](development/ui-e2e.md) — the standalone Playwright suite for the admin UI: visual-regression baselines + interaction flows, run against a dedicated deterministic gate in a pinned browser container (`make test-ui`)
@@ -31,7 +31,7 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
 
 - [API Reference](api/) — OpenAPI 3.1 spec for the REST API
 - [`shdg` CLI](cli/shdg.md) — push CycloneDX SBOMs to the vulnerability-scan API from CI
-- [Architecture Decision Records](adr/) — ADR-001 through ADR-019 (latest: [ADR-019 — Terminal scanner errors block instead of retry](adr/ADR-019-terminal-scanner-errors-block-not-retry.md))
+- [Architecture Decision Records](adr/) — ADR-001 through ADR-022 (latest accepted: [ADR-022 — Version-aware scan delta, CVE-level resolution](adr/ADR-022-version-aware-scan-delta.md); [ADR-020 — Verdict semantics when the threat feed is empty](adr/ADR-020-threat-feed-empty-verdict.md) is **proposed/draft**)
 - [`SECURITY.md`](../SECURITY.md) — how to report a vulnerability (GitHub Private Vulnerability Reporting), SLA, safe harbor, scope
 - [Planned Features](features/index.md) — re-baselined roadmap (2026-06-24): where Shieldoo Gate sits vs the package-firewall and ASPM tool families, plus the prioritized, forward-looking backlog (version cooldown, developer CLI, inbound provenance, dependency graph, then compliance/SIEM/RBAC)
 

@@ -18,8 +18,10 @@ kept current by Dependabot (`.github/dependabot.yml`).
 Three jobs, all `permissions: contents: read`:
 
 - **`go`** — a "Trivy version parity" grep check (below), `make build`,
-  `make lint` (`go vet`), `make test` (`go test -race`). CGO is on
-  (go-sqlite3 + `-race` require it); gcc is present on `ubuntu-latest`.
+  `make lint` (OpenAPI spec validation + `go vet` — see below), `make test`
+  (`go test -race`). CGO is on (go-sqlite3 + `-race` require it); gcc is present on
+  `ubuntu-latest`. The job also sets up Node, because `make lint` shells out to the
+  pinned Redocly CLI.
 - **`ui`** — `npm ci`, `npm run lint` (ESLint 10 flat config), `npm run build`
   (`tsc` + Vite — the type-check gate).
 - **`ui-e2e`** — `make test-ui`: brings up a dedicated fresh open-mode gate and
@@ -34,6 +36,37 @@ Three jobs, all `permissions: contents: read`:
 
 Go and Node versions are pinned via `env:` and kept in lockstep with `go.mod`
 and `docker/Dockerfile`.
+
+#### OpenAPI spec validation
+
+`docs/api/openapi.yaml` is normative — CLAUDE.md requires every API change to update it
+— and until 2026-09 **nothing read it**. Neither the Makefile nor any workflow
+referenced the file, and it had been unparseable as YAML on `main` (an unquoted
+`sbom.enabled: false` inside a `description:`) for an unknown length of time.
+
+`make lint` now runs `redocly lint docs/api/openapi.yaml` before `go vet`, so the check
+fires locally and in CI from the same target.
+
+**Why a spec validator and not a YAML parse.** A parse would have caught the original
+breakage and nothing else. The document declares `openapi: 3.1.0` and carried 23
+properties written in OpenAPI 3.0's `nullable: true` form — perfectly valid YAML, and
+not a valid 3.1 schema; 3.1 expresses the same thing as `type: [string, "null"]`. Only a
+real validator sees that. (`openapi-spec-validator`, the Python alternative, reports the
+file as OK — JSON Schema tolerates unknown keywords — which is why Redocly was chosen.)
+
+**Pinning.** `REDOCLY_VERSION` in the Makefile pins `@redocly/cli` to an exact version,
+per CLAUDE.md's mandatory version-pinning rule. The pin also freezes what Redocly's
+`recommended` ruleset contains, so a new release cannot turn a green branch red on its
+own — bumping the version is a deliberate act. It runs via `npx --yes`, so there is no
+lockfile to maintain for a single lint tool; the exact version is what makes that
+reproducible. The check needs network and node.
+
+**Which rules are enforced** is in `redocly.yaml` at the repo root, with a reason next to
+each. In short: `struct` (the document is a valid OpenAPI 3.1 description) is an error;
+style rules are off. One known gap is recorded there rather than fixed —
+`security-defined`: the three `securitySchemes` (`BearerPAT`, `CookieSession`,
+`BasicPAT`) are defined but no operation references one, so every operation reads as
+unauthenticated to a code generator. Annotating ~73 operations is its own piece of work.
 
 #### Trivy version lockstep
 
@@ -117,6 +150,44 @@ image and release jobs). New actions are SHA-pinned per
 [ADR-015](../adr/ADR-015-sha-pin-github-actions.md). The release notes for each
 tag embed the exact `cosign verify` / `gh attestation verify` commands.
 
+#### Runtime-stage OS package upgrades
+
+Both release Dockerfiles pin their base image by digest
+([ADR-014](../adr/ADR-014-base-image-digest-pinning.md)) but also run an
+upgrade of already-installed OS packages in the runtime stage, on top of that
+pinned base: `docker/Dockerfile`'s `apk upgrade --no-cache` (gate, alpine) and
+`scanner-bridge/Dockerfile`'s `apt-get upgrade -y` (scanner-bridge, Debian).
+This **does** widen what the runtime layer can pull in at build time — for
+`docker/Dockerfile` it now covers the entire installed base set, not just the
+two packages `apk add` itself installs — and that is a deliberate trade-off,
+not a false one: security currency, bought at the cost of byte-for-byte
+reproducibility of the OS layer, same framing as
+[ADR-010](../adr/ADR-010-base-image-security-patching.md)'s Consequences. What
+bounds the widened surface is that both package managers verify fetched
+package signatures against the distro keys baked into the pinned base image
+(`/etc/apk/keys` for apk, the base image's APT keyring for apt), fetched over
+HTTPS — the base digest pin is not what's doing the integrity work here, the
+package manager's own signature check is. On a build that actually executes
+this layer, the upgrade picks up OS-security fixes published after the base
+tag was cut (e.g. `libssl3`/`libcrypto3` in alpine's `v3.24` repo) instead of
+waiting for the next base-tag bump. See ADR-010 for the full rationale and the
+`perl-base` force-purge that goes with it on the scanner-bridge side.
+
+**Does this layer actually execute on every release?** Only if it isn't
+served from cache. `release.yml`'s `docker` job caches every layer via
+`type=gha`, keyed on the `RUN` string plus the parent (pinned) base
+digest — neither of which changes release to release, so without
+intervention a cache hit would keep re-shipping whatever OS package
+versions were current when the layer was first cached, indefinitely, with
+nothing to detect the regression (`vuln-scan-image`'s `--fail-on critical`
+wouldn't catch a re-appearing HIGH). This applies equally to
+`scanner-bridge/Dockerfile`'s `apt-get upgrade` — same job, same cache
+mechanism, same `runtime` stage name. `release.yml`'s build step sets
+`no-cache-filters: runtime` for exactly this reason: it forces the `runtime`
+stage of *both* matrix legs to always re-execute, while `ui-builder`/
+`go-builder` (and scanner-bridge's builder stage) keep their expensive
+layers cached.
+
 ## UI linting
 
 ESLint uses a flat config (`ui/eslint.config.js`, ESLint 10) with the
@@ -141,7 +212,7 @@ blocked, which is not always the semver level it looks like (a docker tag bump
 | Dependency | Pinned at | Blocked by | Release condition |
 |---|---|---|---|
 | `typescript` | 6.0.3 | `typescript-eslint` (incl. its canary) declares `peer typescript >=4.8.4 <6.1.0`, so TS 7 fails `npm ci` with `ERESOLVE` and leaves the type-aware lint rules without a supported parser | `typescript-eslint`'s peer range admits 7.x |
-| `python` (scanner-bridge base image) | 3.13.14-slim | `guarddog` (all releases through 3.2.0, and `main`) constrains `pygit2 >=1.11,<1.19`, and `pygit2` ships `cp314` wheels only from 1.19.0 on. On 3.14 `uv` falls back to the pygit2 sdist, which links the builder's `libgit2-dev`; that `.so` is absent from the runtime stage (ADR-010), so the image fails its build-time import check with `libgit2.so.1.9: cannot open shared object file` (#184) | a `guarddog` release that allows `pygit2 >=1.19` |
+| `python` (scanner-bridge base image) | 3.13.15-slim | `guarddog` (all releases through 3.2.0, and `main`) constrains `pygit2 >=1.11,<1.19`, and `pygit2` ships `cp314` wheels only from 1.19.0 on. On 3.14 `uv` falls back to the pygit2 sdist, which links the builder's `libgit2-dev`; that `.so` is absent from the runtime stage (ADR-010), so the image fails its build-time import check with `libgit2.so.1.9: cannot open shared object file` (#184) | a `guarddog` release that allows `pygit2 >=1.19` |
 
 Removing a hold means deleting the `ignore:` entry **and** the row above in the
 same PR.

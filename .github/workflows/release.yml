@@ -91,6 +91,16 @@ jobs:
             SGW_TOKEN=${{ secrets.SGW_TOKEN }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          # Both Dockerfiles' runtime stage runs an OS-package upgrade
+          # (apk/apt-get, ADR-010) whose whole point is to pick up whatever
+          # the distro's security repo has published *at build time*. The
+          # GHA cache key for that layer is the RUN string + parent (pinned)
+          # base digest, neither of which changes release to release, so a
+          # cache hit would silently re-ship the OS package versions current
+          # when the layer was first cached. Force that one stage to always
+          # re-execute; ui-builder/go-builder (and scanner-bridge's builder
+          # stage) keep their expensive layers cached as before.
+          no-cache-filters: runtime
           platforms: linux/amd64
           # BuildKit attaches in-toto SLSA provenance (max: full build graph)
           # and a CycloneDX SBOM as OCI referrers on the pushed image.

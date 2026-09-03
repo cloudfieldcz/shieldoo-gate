@@ -96,6 +96,19 @@ func main() {
 		log.Logger = log.Output(logWriter)
 	}
 
+	// Graceful-shutdown context. Created here, at the top of main, so every
+	// background loop started below cancels on shutdown — the threat-feed refresh
+	// loop used to be handed context.Background() because this pair was created 200+
+	// lines further down, next to its first consumer. Its only hard constraint is
+	// that it exists before setupVulnScan, which latches the vuln-scan schedulers
+	// onto it.
+	//
+	// The deferred cancel is a backstop for an early return; the signal handler below
+	// calls cancel() explicitly before anything is torn down, so background loops
+	// always stop before the DB handle closes.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Init database
 	db, err := config.InitDB(cfg.Database)
 	if err != nil {
@@ -193,7 +206,7 @@ func main() {
 		builtin.NewObfuscationDetector(),
 		builtin.NewExfilDetector(),
 		builtin.NewPTHInspector(),
-		builtin.NewThreatFeedChecker(db),
+		builtin.NewThreatFeedChecker(db, cfg.ThreatFeed.Enabled),
 	}
 
 	// Optional: GuardDog scanner. We retain the *GuardDogScanner reference so the
@@ -465,31 +478,28 @@ func main() {
 		}
 	}()
 
-	// Init threat feed client with periodic refresh (if enabled)
+	// Init threat feed client with periodic refresh (if enabled). The client is
+	// hoisted out of the block so the admin API can reuse this one instance for
+	// POST /api/v1/feed/refresh — a second Client would double-register the feed
+	// as enabled and refresh on its own schedule.
+	var feedClient *threatfeed.Client
 	if cfg.ThreatFeed.Enabled && cfg.ThreatFeed.URL != "" {
-		feedClient := threatfeed.NewClient(db, cfg.ThreatFeed.URL)
+		feedClient = threatfeed.NewClient(db, cfg.ThreatFeed.URL)
 		refreshInterval := parseDuration(cfg.ThreatFeed.RefreshInterval, 1*time.Hour)
 
-		// Initial refresh in background; errors are logged, not fatal
-		go func() {
-			ctx := context.Background()
-			if err := feedClient.Refresh(ctx); err != nil {
-				log.Warn().Err(err).Msg("threat feed initial refresh failed")
-			} else {
-				log.Info().Msg("threat feed initial refresh completed")
-			}
-
-			ticker := time.NewTicker(refreshInterval)
-			defer ticker.Stop()
-			for range ticker.C {
-				if err := feedClient.Refresh(ctx); err != nil {
-					log.Warn().Err(err).Msg("threat feed periodic refresh failed")
-				} else {
-					log.Info().Msg("threat feed periodic refresh completed")
-				}
-			}
-		}()
-		log.Info().Str("url", cfg.ThreatFeed.URL).Dur("interval", refreshInterval).Msg("threat feed client started")
+		// Initial refresh plus the periodic loop, in the background; refresh
+		// errors are logged, not fatal. Client.Run owns the logging, the failure
+		// escalation (WARN, rising to ERROR once the feed has been failing for a
+		// while or is empty) and the enabled gauge — see internal/threatfeed. It
+		// gets the graceful-shutdown ctx, so an in-flight refresh is cancelled on
+		// SIGTERM rather than racing the DB handle closing.
+		go feedClient.Run(ctx, refreshInterval)
+		// Str, not Dur: no zerolog.DurationFieldUnit is set anywhere in this
+		// repo, so Dur would print "interval":3.6e+06 bare milliseconds.
+		log.Info().
+			Str("url", cfg.ThreatFeed.URL).
+			Str("interval", refreshInterval.String()).
+			Msg("threat feed client started")
 	}
 
 	// Resolve upstream URLs with sensible defaults.
@@ -533,6 +543,12 @@ func main() {
 	apiServer.SetPublicURLs(cfg.PublicURLs)
 	apiServer.SetTrustedProxies(cfg.Server.TrustedProxies)
 	apiServer.SetCSRFAllowedOrigins(cfg.Auth.AllowedOrigins)
+	if feedClient != nil {
+		// Same entry point the periodic loop calls, so a manual refresh logs,
+		// escalates and moves the feed health metrics exactly like a scheduled
+		// one.
+		apiServer.SetFeedRefresher(feedClient.RefreshNow)
+	}
 
 	// Init OIDC authentication (if enabled).
 	var oidcMw *auth.OIDCMiddleware
@@ -692,17 +708,16 @@ func main() {
 		return h
 	}
 
-	// Graceful shutdown context — created BEFORE setupVulnScan so the vuln-scan
-	// schedulers can latch on to it for cancellation.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	// Rate limiter — always constructed so endpoints outside the vuln-scan
 	// gate (project SBOM export) stay protected. Vuln-scan adds its own
 	// dimensions on top inside setupVulnScan.
 	defaultRate := rateOrDefault(cfg.VulnScan.RateLimit.UploadsPerHour, 60)
 	apiRateLimiter := auth.NewRateLimiter(defaultRate, 10).
-		WithDimensionLimit("sbom-download", 30.0/60.0, 5)
+		WithDimensionLimit("sbom-download", 30.0/60.0, 5).
+		// Manual feed refresh is an outbound fetch to a third-party host: 6/hour
+		// with a burst of 2 covers an operator retrying after fixing the feed,
+		// and stops an admin script from pointing the gate at the provider.
+		WithDimensionLimit("feed-refresh", 6.0/3600.0, 2)
 	apiServer.SetRateLimiter(apiRateLimiter)
 
 	// Vulnerability-scan wiring MUST run before apiServer.Routes() — Routes()

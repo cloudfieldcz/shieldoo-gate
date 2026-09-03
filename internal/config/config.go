@@ -35,23 +35,32 @@ type Config struct {
 
 // VulnScanConfig controls the push-from-CI vulnerability scan feature.
 type VulnScanConfig struct {
-	Enabled                bool                  `mapstructure:"enabled"`
-	MaxSBOMBytes           int64                 `mapstructure:"max_sbom_bytes"`            // default 500 MiB
-	MaxComponents          int                   `mapstructure:"max_components"`            // default 500000
-	MaxComponentsPerProject int                  `mapstructure:"max_components_per_project"` // default 200
-	MaxConcurrentScans     int                   `mapstructure:"max_concurrent_scans"`      // default 4
-	StaleThreshold         string                `mapstructure:"stale_threshold"`           // default "30d"
-	Rescan                 VulnRescanConfig      `mapstructure:"rescan"`
-	Retention              VulnRetentionConfig   `mapstructure:"retention"`
-	Scanners               VulnScannersConfig    `mapstructure:"scanners"`
-	Alerts                 VulnAlertsConfig      `mapstructure:"alerts"`
-	RateLimit              VulnRateLimitConfig   `mapstructure:"rate_limit"`
+	Enabled                 bool                     `mapstructure:"enabled"`
+	MaxSBOMBytes            int64                    `mapstructure:"max_sbom_bytes"`             // default 500 MiB
+	MaxComponents           int                      `mapstructure:"max_components"`             // default 500000
+	MaxComponentsPerProject int                      `mapstructure:"max_components_per_project"` // default 200
+	MaxConcurrentScans      int                      `mapstructure:"max_concurrent_scans"`       // default 4
+	StaleThreshold          string                   `mapstructure:"stale_threshold"`            // default "30d"
+	Rescan                  VulnRescanConfig         `mapstructure:"rescan"`
+	Retention               VulnRetentionConfig      `mapstructure:"retention"`
+	StaleRunReaper          VulnStaleRunReaperConfig `mapstructure:"stale_run_reaper"`
+	Scanners                VulnScannersConfig       `mapstructure:"scanners"`
+	Alerts                  VulnAlertsConfig         `mapstructure:"alerts"`
+	RateLimit               VulnRateLimitConfig      `mapstructure:"rate_limit"`
 }
 
 type VulnRescanConfig struct {
 	Interval      string `mapstructure:"interval"`       // default "6h"
 	MaxConcurrent int64  `mapstructure:"max_concurrent"` // default 4
 	Timeout       string `mapstructure:"timeout"`        // default "5m"
+}
+
+// VulnStaleRunReaperConfig controls the stale scan-run reaper, which ages out
+// scan_runs rows wedged in 'pending'/'running' by a process restart mid-scan. Such a
+// row excludes its component from every scheduled rescan until it is cleared.
+type VulnStaleRunReaperConfig struct {
+	Interval  string `mapstructure:"interval"`  // sweep cadence; default "15m"
+	Threshold string `mapstructure:"threshold"` // age past which an in-flight run is reaped; default max(4 x rescan.timeout, 1h)
 }
 
 type VulnRetentionConfig struct {
@@ -80,30 +89,30 @@ type VulnTrivyConfig struct {
 }
 
 type VulnAlertsConfig struct {
-	AggregationWindow   string `mapstructure:"aggregation_window"`     // default "5m"
-	AggregationMinEvents int   `mapstructure:"aggregation_min_events"` // default 3
-	IgnoreExpiredNotifyCreator bool `mapstructure:"ignore_expired_notify_creator"`
+	AggregationWindow          string `mapstructure:"aggregation_window"`     // default "5m"
+	AggregationMinEvents       int    `mapstructure:"aggregation_min_events"` // default 3
+	IgnoreExpiredNotifyCreator bool   `mapstructure:"ignore_expired_notify_creator"`
 }
 
 type VulnRateLimitConfig struct {
-	UploadsPerHour     int `mapstructure:"uploads_per_hour"`      // default 60
-	IgnoresPerHour     int `mapstructure:"ignores_per_hour"`      // default 30 per (token, component)
-	IgnoresGlobalHour  int `mapstructure:"ignores_global_per_hour"` // default 200
-	RescansPerHour     int `mapstructure:"rescans_per_hour"`      // default 6 per (token, component)
+	UploadsPerHour    int `mapstructure:"uploads_per_hour"`        // default 60
+	IgnoresPerHour    int `mapstructure:"ignores_per_hour"`        // default 30 per (token, component)
+	IgnoresGlobalHour int `mapstructure:"ignores_global_per_hour"` // default 200
+	RescansPerHour    int `mapstructure:"rescans_per_hour"`        // default 6 per (token, component)
 }
 
 // AIFeaturesConfig is the master AI feature flag block. Default is OFF.
 type AIFeaturesConfig struct {
-	Enabled              bool                       `mapstructure:"enabled"`
-	IgnoreReasonDrafter  AIDrafterConfig            `mapstructure:"ignore_reason_drafter"`
-	AnomalyDetection     AIAnomalyConfig            `mapstructure:"anomaly_detection"`
-	AzureOpenAI          AzureOpenAIConfig          `mapstructure:"azure_openai"`
+	Enabled             bool              `mapstructure:"enabled"`
+	IgnoreReasonDrafter AIDrafterConfig   `mapstructure:"ignore_reason_drafter"`
+	AnomalyDetection    AIAnomalyConfig   `mapstructure:"anomaly_detection"`
+	AzureOpenAI         AzureOpenAIConfig `mapstructure:"azure_openai"`
 }
 
 type AIDrafterConfig struct {
 	Enabled            bool    `mapstructure:"enabled"`
-	DailyTokenBudget   int64   `mapstructure:"daily_token_budget"` // default 5_000_000
-	MaxDraftTokens     int     `mapstructure:"max_draft_tokens"`   // default 200
+	DailyTokenBudget   int64   `mapstructure:"daily_token_budget"`    // default 5_000_000
+	MaxDraftTokens     int     `mapstructure:"max_draft_tokens"`      // default 200
 	RateLimitPerMinute float64 `mapstructure:"rate_limit_per_minute"` // default 1
 }
 
@@ -166,15 +175,15 @@ type ProxyAuthConfig struct {
 // AuthConfig holds OIDC authentication configuration for the admin API.
 // When Enabled is false (default), the admin API is fully open — backward compatible.
 type AuthConfig struct {
-	Enabled        bool     `mapstructure:"enabled"`
-	IssuerURL      string   `mapstructure:"issuer_url"`
-	ClientID       string   `mapstructure:"client_id"`
-	ClientSecretEnv string  `mapstructure:"client_secret_env"`
-	RedirectURL    string   `mapstructure:"redirect_url"`
+	Enabled         bool   `mapstructure:"enabled"`
+	IssuerURL       string `mapstructure:"issuer_url"`
+	ClientID        string `mapstructure:"client_id"`
+	ClientSecretEnv string `mapstructure:"client_secret_env"`
+	RedirectURL     string `mapstructure:"redirect_url"`
 	// PostLogoutRedirectURL is where the IdP returns the browser after RP-initiated logout.
 	// Must be registered in the IdP client's allowed post-logout redirect URIs. Empty → "/".
-	PostLogoutRedirectURL string `mapstructure:"post_logout_redirect_url"`
-	Scopes         []string `mapstructure:"scopes"`
+	PostLogoutRedirectURL string   `mapstructure:"post_logout_redirect_url"`
+	Scopes                []string `mapstructure:"scopes"`
 	// SessionTTL is the admin UI session lifetime (e.g. "15m"). Default 15m.
 	SessionTTL string `mapstructure:"session_ttl"`
 	// CookieInsecure drops the Secure attribute from auth cookies. Explicit opt-out
@@ -189,28 +198,28 @@ type AuthConfig struct {
 type RescanConfig struct {
 	Enabled       bool   `mapstructure:"enabled"`
 	Interval      string `mapstructure:"interval"`       // scheduler tick interval, default "6h"
-	BatchSize     int    `mapstructure:"batch_size"`      // max artifacts per tick, default 100
-	MaxConcurrent int    `mapstructure:"max_concurrent"`  // concurrent scans, default 5
+	BatchSize     int    `mapstructure:"batch_size"`     // max artifacts per tick, default 100
+	MaxConcurrent int    `mapstructure:"max_concurrent"` // concurrent scans, default 5
 }
 
 // knownEventTypes is the set of recognised event type strings for alert "on" filters.
 var knownEventTypes = map[string]bool{
-	"SERVED":           true,
-	"BLOCKED":          true,
-	"QUARANTINED":      true,
-	"SCAN_UNAVAILABLE": true,
-	"RELEASED":         true,
-	"SCANNED":          true,
-	"OVERRIDE_CREATED": true,
-	"OVERRIDE_REVOKED": true,
-	"TAG_MUTATED":      true,
-	"RESCAN_QUEUED":          true,
-	"ALLOWED_WITH_WARNING":   true,
-	"LICENSE_BLOCKED":        true,
-	"LICENSE_WARNED":         true,
-	"LICENSE_CHECK_SKIPPED":  true,
-	"PROJECT_NOT_FOUND":      true,
-	"SBOM_GENERATED":         true,
+	"SERVED":                true,
+	"BLOCKED":               true,
+	"QUARANTINED":           true,
+	"SCAN_UNAVAILABLE":      true,
+	"RELEASED":              true,
+	"SCANNED":               true,
+	"OVERRIDE_CREATED":      true,
+	"OVERRIDE_REVOKED":      true,
+	"TAG_MUTATED":           true,
+	"RESCAN_QUEUED":         true,
+	"ALLOWED_WITH_WARNING":  true,
+	"LICENSE_BLOCKED":       true,
+	"LICENSE_WARNED":        true,
+	"LICENSE_CHECK_SKIPPED": true,
+	"PROJECT_NOT_FOUND":     true,
+	"SBOM_GENERATED":        true,
 }
 
 type ServerConfig struct {
@@ -223,10 +232,10 @@ type ServerConfig struct {
 }
 
 type PortsConfig struct {
-	PyPI   int `mapstructure:"pypi"`
-	NPM    int `mapstructure:"npm"`
-	NuGet  int `mapstructure:"nuget"`
-	Docker int `mapstructure:"docker"`
+	PyPI     int `mapstructure:"pypi"`
+	NPM      int `mapstructure:"npm"`
+	NuGet    int `mapstructure:"nuget"`
+	Docker   int `mapstructure:"docker"`
 	Maven    int `mapstructure:"maven"`
 	RubyGems int `mapstructure:"rubygems"`
 	GoMod    int `mapstructure:"gomod"`
@@ -374,14 +383,14 @@ type ScannerRetryConfig struct {
 // The scanner uses Azure OpenAI or OpenAI API to analyze install-time scripts.
 type AIConfig struct {
 	Enabled         bool   `mapstructure:"enabled"`
-	Provider        string `mapstructure:"provider"`          // "azure_openai" (default) or "openai"
-	Model           string `mapstructure:"model"`             // e.g. "gpt-5.4-mini"
-	APIKeyEnv       string `mapstructure:"api_key_env"`       // env var name for API key
-	Timeout         string `mapstructure:"timeout"`           // per-API call timeout, default "15s"
-	MaxInputTokens  int    `mapstructure:"max_input_tokens"`  // max tokens sent to LLM, default 32000
-	BridgeSocket    string `mapstructure:"bridge_socket"`     // scanner-bridge Unix socket path
-	AzureEndpoint   string `mapstructure:"azure_endpoint"`    // Azure OpenAI endpoint URL
-	AzureDeployment string `mapstructure:"azure_deployment"`  // Azure deployment name
+	Provider        string `mapstructure:"provider"`         // "azure_openai" (default) or "openai"
+	Model           string `mapstructure:"model"`            // e.g. "gpt-5.4-mini"
+	APIKeyEnv       string `mapstructure:"api_key_env"`      // env var name for API key
+	Timeout         string `mapstructure:"timeout"`          // per-API call timeout, default "15s"
+	MaxInputTokens  int    `mapstructure:"max_input_tokens"` // max tokens sent to LLM, default 32000
+	BridgeSocket    string `mapstructure:"bridge_socket"`    // scanner-bridge Unix socket path
+	AzureEndpoint   string `mapstructure:"azure_endpoint"`   // Azure OpenAI endpoint URL
+	AzureDeployment string `mapstructure:"azure_deployment"` // Azure deployment name
 }
 
 // SandboxConfig holds configuration for the dynamic sandbox (gVisor) scanner.
@@ -389,16 +398,16 @@ type AIConfig struct {
 type SandboxConfig struct {
 	Enabled       bool   `mapstructure:"enabled"`
 	RuntimeBinary string `mapstructure:"runtime_binary"` // default "runsc"
-	Timeout       string `mapstructure:"timeout"`         // default "30s"
-	NetworkPolicy string `mapstructure:"network_policy"`  // "none" or "monitor"
-	MaxConcurrent int    `mapstructure:"max_concurrent"`  // default 2
+	Timeout       string `mapstructure:"timeout"`        // default "30s"
+	NetworkPolicy string `mapstructure:"network_policy"` // "none" or "monitor"
+	MaxConcurrent int    `mapstructure:"max_concurrent"` // default 2
 }
 
 // TyposquatConfig holds configuration for the built-in typosquatting detection scanner.
 type TyposquatConfig struct {
 	Enabled            bool     `mapstructure:"enabled"`
 	TopPackagesCount   int      `mapstructure:"top_packages_count"`
-	MaxEditDistance     int      `mapstructure:"max_edit_distance"`
+	MaxEditDistance    int      `mapstructure:"max_edit_distance"`
 	InternalNamespaces []string `mapstructure:"internal_namespaces"`
 	CombosquatSuffixes []string `mapstructure:"combosquat_suffixes"`
 	Allowlist          []string `mapstructure:"allowlist"`
@@ -418,31 +427,31 @@ type TyposquatConfig struct {
 // the policy engine ignores it. Mode "active" passes the LLM verdict through.
 type VersionDiffConfig struct {
 	Enabled                 bool     `mapstructure:"enabled"`
-	Mode                    string   `mapstructure:"mode"`                       // "shadow" | "active"
-	MaxArtifactSizeMB       int      `mapstructure:"max_artifact_size_mb"`       // default 50
-	MaxExtractedSizeMB      int      `mapstructure:"max_extracted_size_mb"`      // default 50
-	MaxExtractedFiles       int      `mapstructure:"max_extracted_files"`        // default 5000
-	ScannerTimeout          string   `mapstructure:"scanner_timeout"`            // default "55s" — must be < scanners.timeout
-	BridgeSocket            string   `mapstructure:"bridge_socket"`              // shared with ai-scanner; empty = reuse guarddog socket
+	Mode                    string   `mapstructure:"mode"`                  // "shadow" | "active"
+	MaxArtifactSizeMB       int      `mapstructure:"max_artifact_size_mb"`  // default 50
+	MaxExtractedSizeMB      int      `mapstructure:"max_extracted_size_mb"` // default 50
+	MaxExtractedFiles       int      `mapstructure:"max_extracted_files"`   // default 5000
+	ScannerTimeout          string   `mapstructure:"scanner_timeout"`       // default "55s" — must be < scanners.timeout
+	BridgeSocket            string   `mapstructure:"bridge_socket"`         // shared with ai-scanner; empty = reuse guarddog socket
 	Allowlist               []string `mapstructure:"allowlist"`
-	MinConfidence           float32  `mapstructure:"min_confidence"`             // default 0.6 — SUSPICIOUS below this is downgraded to CLEAN with audit_log entry
-	PerPackageRateLimit     int      `mapstructure:"per_package_rate_limit"`     // default 10 LLM calls/h/package; 0 = unlimited
-	DailyCostLimitUSD       float64  `mapstructure:"daily_cost_limit_usd"`       // default 5.0; circuit breaker auto-disables on exceed
-	CircuitBreakerThreshold int      `mapstructure:"circuit_breaker_threshold"`  // default 5 consecutive failures triggers 60 s pause
+	MinConfidence           float32  `mapstructure:"min_confidence"`            // default 0.6 — SUSPICIOUS below this is downgraded to CLEAN with audit_log entry
+	PerPackageRateLimit     int      `mapstructure:"per_package_rate_limit"`    // default 10 LLM calls/h/package; 0 = unlimited
+	DailyCostLimitUSD       float64  `mapstructure:"daily_cost_limit_usd"`      // default 5.0; circuit breaker auto-disables on exceed
+	CircuitBreakerThreshold int      `mapstructure:"circuit_breaker_threshold"` // default 5 consecutive failures triggers 60 s pause
 }
 
 // ReputationConfig holds configuration for the maintainer/package reputation scanner.
 // The scanner queries upstream registry APIs for metadata (maintainer history,
 // publication patterns, download counts) and produces a risk score.
 type ReputationConfig struct {
-	Enabled      bool                 `mapstructure:"enabled"`
-	CacheTTL     string               `mapstructure:"cache_ttl"`      // metadata cache TTL, default "24h"
-	CacheTTLJitter string             `mapstructure:"cache_ttl_jitter"` // random jitter added to TTL, default "2h"
-	Timeout      string               `mapstructure:"timeout"`        // per-request timeout, default "10s"
-	RateLimit    int                  `mapstructure:"rate_limit"`     // max upstream API requests per minute per ecosystem, default 30
-	RetentionDays int                 `mapstructure:"retention_days"` // delete stale entries older than this, default 30
-	Thresholds   ReputationThresholds `mapstructure:"thresholds"`
-	Signals      ReputationSignals    `mapstructure:"signals"`
+	Enabled        bool                 `mapstructure:"enabled"`
+	CacheTTL       string               `mapstructure:"cache_ttl"`        // metadata cache TTL, default "24h"
+	CacheTTLJitter string               `mapstructure:"cache_ttl_jitter"` // random jitter added to TTL, default "2h"
+	Timeout        string               `mapstructure:"timeout"`          // per-request timeout, default "10s"
+	RateLimit      int                  `mapstructure:"rate_limit"`       // max upstream API requests per minute per ecosystem, default 30
+	RetentionDays  int                  `mapstructure:"retention_days"`   // delete stale entries older than this, default 30
+	Thresholds     ReputationThresholds `mapstructure:"thresholds"`
+	Signals        ReputationSignals    `mapstructure:"signals"`
 }
 
 // ReputationThresholds controls verdict thresholds for reputation risk scores.
@@ -800,6 +809,10 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if err := c.validateThreatFeed(); err != nil {
+		return err
+	}
+
 	for _, p := range []struct {
 		eco string
 		set UpstreamSet
@@ -1046,6 +1059,26 @@ func (c *Config) validateProxyAuth() error {
 		log.Warn().Str("env_var", c.ProxyAuth.GlobalTokenEnv).Msg("config: proxy_auth.global_token_env references an unset environment variable")
 	}
 
+	return nil
+}
+
+// validateThreatFeed rejects `threat_feed.enabled: true` with no `url`.
+//
+// Without this the two surfaces that report on the feed contradict each other. main.go
+// only builds a threatfeed.Client when both the flag and the URL are set, so nothing
+// ever publishes shieldoo_gate_threat_feed_enabled and the metric reads 0 — "feed off,
+// nothing to alert on". ThreatFeedChecker, meanwhile, is handed the raw flag and
+// reports builtin-threat-feed permanently unhealthy on /api/v1/health, because the
+// table it queries stays empty forever. Neither is wrong on its own; together they say
+// opposite things about the same feed, and the deployment silently runs with the
+// known-malicious-hash layer switched off while believing it is on.
+//
+// Failing at startup is the honest answer: the operator asked for a feed and did not
+// say where it lives.
+func (c *Config) validateThreatFeed() error {
+	if c.ThreatFeed.Enabled && strings.TrimSpace(c.ThreatFeed.URL) == "" {
+		return fmt.Errorf("config: threat_feed.url is required when threat_feed.enabled is true (set the url, or set enabled: false)")
+	}
 	return nil
 }
 

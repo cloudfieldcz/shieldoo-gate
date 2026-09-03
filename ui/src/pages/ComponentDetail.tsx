@@ -276,6 +276,28 @@ function FindingTable({ findings, onIgnore }: { findings: ScanFinding[]; onIgnor
   )
 }
 
+// Renders what an ignore actually covers. A per-package ignore carries no
+// package_version (the field is json:"…,omitempty" server-side, and migration 040 nulled
+// it on every pre-existing row), so its absence is the signal. Without this the two
+// scopes render identically and an operator whose ignore stopped matching has no
+// in-product explanation — see ADR-021.
+function IgnoreScope({ ignore }: { ignore: Ignore }) {
+  if (!ignore.package_version) {
+    return <span className="font-mono text-xs">{ignore.package_name}</span>
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 flex-wrap">
+      <span className="font-mono text-xs">{ignore.package_name}@{ignore.package_version}</span>
+      <span
+        className="font-sans text-[10px] px-1.5 py-0.5 rounded border border-blue-200 bg-blue-50 text-blue-700 whitespace-nowrap"
+        title="Suppressed only while this package sits at this exact version. At any other version the CVE is reported again."
+      >
+        this version only
+      </span>
+    </span>
+  )
+}
+
 function IgnoredTable({ ignores, onRestore }: { ignores: Ignore[]; onRestore: (i: Ignore) => void }) {
   if (ignores.length === 0) {
     return <div className="text-sm text-gray-400 italic">No ignored CVEs.</div>
@@ -297,7 +319,7 @@ function IgnoredTable({ ignores, onRestore }: { ignores: Ignore[]; onRestore: (i
           {ignores.map((ig) => (
             <tr key={ig.id} className="hover:bg-gray-50">
               <td className="px-4 py-3 font-mono text-xs">{ig.cve_id}</td>
-              <td className="px-4 py-3 font-mono text-xs">{ig.package_name}</td>
+              <td className="px-4 py-3"><IgnoreScope ignore={ig} /></td>
               <td className="px-4 py-3 text-gray-700 text-xs truncate max-w-md" title={ig.reason}>{ig.reason}</td>
               <td className="px-4 py-3 text-xs text-gray-600">{ig.expires_at ? new Date(ig.expires_at).toLocaleDateString() : 'never'}</td>
               <td className="px-4 py-3 text-xs text-gray-600">{ig.created_by_email}</td>
@@ -340,7 +362,7 @@ function ExpiredIgnoresPanel({ ignores, onRestore }: { ignores: Ignore[]; onRest
           {ignores.map((ig) => (
             <tr key={ig.id} className="hover:bg-amber-50">
               <td className="px-4 py-3 font-mono text-xs">{ig.cve_id}</td>
-              <td className="px-4 py-3 font-mono text-xs">{ig.package_name}</td>
+              <td className="px-4 py-3"><IgnoreScope ignore={ig} /></td>
               <td className="px-4 py-3 text-gray-700 text-xs truncate max-w-md" title={ig.reason}>{ig.reason}</td>
               <td className="px-4 py-3 text-xs text-amber-700">
                 {ig.revoked_at ? new Date(ig.revoked_at).toLocaleDateString() : '—'}

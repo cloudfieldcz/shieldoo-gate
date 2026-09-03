@@ -287,8 +287,14 @@ policy:
 # ─── Threat Feed ───────────────────────────────────────────────────
 threat_feed:
   enabled: true                       # Enable community threat feed
-  url: "https://feed.shieldoo.io/malicious-packages.json"  # Feed URL
+  url: "https://feed.shieldoo.io/malicious-packages.json"  # Feed URL — REQUIRED when enabled
   refresh_interval: "1h"             # How often to refresh the feed
+# `enabled: true` with an empty `url` is REJECTED AT STARTUP. Without that check the
+# gate starts and two surfaces then disagree: no refresh client is built, so
+# shieldoo_gate_threat_feed_enabled reads 0 ("feed off, nothing to alert on"), while
+# GET /api/v1/health reports builtin-threat-feed permanently unhealthy because the
+# table it queries never fills — the deployment runs with the known-malicious-hash
+# layer switched off while believing it is on. Set the url, or set `enabled: false`.
 
 # ─── Rescan Scheduler (v1.1) ──────────────────────────────────────
 # Processes only manually triggered rescans (PENDING_SCAN status set via
@@ -425,6 +431,9 @@ vuln_scan:
     interval: "6h"                      # Scheduled rescan cadence
     max_concurrent: 4
     timeout: "5m"
+  stale_run_reaper:
+    interval: "15m"                     # Stale-run sweep cadence (also runs once at startup)
+    threshold: ""                       # Empty = max(4 x rescan.timeout, 1h); values below 1h clamped up
   retention:
     keep_n: 100                         # Most-recent successful runs kept per component
     interval: "1h"                      # Retention reaper cadence
@@ -614,7 +623,8 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 | `ProxyAuthConfig` | `proxy_auth` | `Enabled`, `GlobalTokenEnv` |
 | `ProjectsConfig` | `projects` | `Mode`, `DefaultLabel`, `LabelRegex`, `MaxCount`, `LazyCreateRate`, `CacheSize`, `CacheTTL`, `UsageFlushPeriod`, `BootstrapLabels` |
 | `SBOMConfig` | `sbom` | `Enabled`, `Format`, `AsyncWrite`, `TTL` |
-| `VulnScanConfig` | `vuln_scan` | `Enabled`, `MaxSBOMBytes`, `MaxComponents`, `MaxComponentsPerProject`, `MaxConcurrentScans`, `StaleThreshold`, `Rescan`, `Retention`, `Scanners`, `Alerts`, `RateLimit` |
+| `VulnScanConfig` | `vuln_scan` | `Enabled`, `MaxSBOMBytes`, `MaxComponents`, `MaxComponentsPerProject`, `MaxConcurrentScans`, `StaleThreshold`, `Rescan`, `Retention`, `StaleRunReaper`, `Scanners`, `Alerts`, `RateLimit` |
+| `VulnStaleRunReaperConfig` | `vuln_scan.stale_run_reaper` | `Interval`, `Threshold` |
 | `AIFeaturesConfig` | `ai_features` | `Enabled`, `IgnoreReasonDrafter`, `AnomalyDetection`, `AzureOpenAI` |
 | `AlertsConfig` | `alerts` | `Webhook`, `Slack`, `Email` |
 | `WebhookAlertConfig` | `alerts.webhook` | `Enabled`, `URL`, `SecretEnv`, `AllowInsecure`, `On` |

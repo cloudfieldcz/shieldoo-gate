@@ -545,3 +545,41 @@ database:
 	require.NoError(t, err)
 	assert.Equal(t, "https://mirror.internal.example.com", cfg.Upstreams.PyPI.Default)
 }
+
+// threat_feed.enabled: true with no url used to start cleanly and leave two surfaces
+// contradicting each other: main.go never builds a threatfeed.Client, so
+// shieldoo_gate_threat_feed_enabled stays 0 ("feed off, nothing to alert on"), while
+// ThreatFeedChecker is handed the raw flag and reports builtin-threat-feed permanently
+// unhealthy on /api/v1/health.
+func TestValidate_ThreatFeedEnabledWithoutURL_ReturnsError(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.ThreatFeed.Enabled = true
+	cfg.ThreatFeed.URL = ""
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "threat_feed.url is required")
+}
+
+func TestValidate_ThreatFeedEnabledWithBlankURL_ReturnsError(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.ThreatFeed.Enabled = true
+	cfg.ThreatFeed.URL = "   "
+	err := cfg.Validate()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "threat_feed.url is required")
+}
+
+func TestValidate_ThreatFeedEnabledWithURL_NoError(t *testing.T) {
+	cfg := validBaseConfig()
+	cfg.ThreatFeed.Enabled = true
+	cfg.ThreatFeed.URL = "https://feed.shieldoo.io/malicious-packages.json"
+	assert.NoError(t, cfg.Validate())
+}
+
+func TestValidate_ThreatFeedDisabledWithoutURL_NoError(t *testing.T) {
+	// The shipped default and the E2E shape: the feed is off, so its url is irrelevant.
+	cfg := validBaseConfig()
+	cfg.ThreatFeed.Enabled = false
+	cfg.ThreatFeed.URL = ""
+	assert.NoError(t, cfg.Validate())
+}
