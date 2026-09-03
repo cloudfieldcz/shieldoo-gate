@@ -501,7 +501,7 @@ The community threat feed (`internal/threatfeed/client.go`) provides a database 
 **Refresh cycle** (`Client.Run`, started from `main.go` in its own goroutine):
 1. On startup: initial fetch immediately, before the first tick (errors logged, not fatal)
 2. Periodic refresh via `time.Ticker` at configured interval (default 1 hour), until the context is cancelled
-3. Entries are upserted using `INSERT OR REPLACE`
+3. Entries are upserted with `INSERT … ON CONFLICT (sha256) DO UPDATE` — ANSI, so the same statement runs on SQLite and PostgreSQL, and unlike `INSERT OR REPLACE` it never deletes and re-inserts the row
 4. Every attempt — success or failure — updates the [feed health metrics](deployment.md#threat-feed-health) and emits exactly one log line
 
 `POST /api/v1/feed/refresh` triggers `Client.RefreshNow` — the same entry point
