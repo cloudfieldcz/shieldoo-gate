@@ -19,7 +19,7 @@
 # same pinned base image, so the venv's interpreter symlinks resolve in runtime.
 
 # ---- Builder: toolchain + dependency install ----
-FROM python:3.13.14-slim@sha256:eb43ff125d8d58d7449dcba7d336c23bcac412f526d861db493b9994d8010280 AS builder
+FROM python:3.13.15-slim@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285 AS builder
 
 ARG SGW_TOKEN=""
 # Basic-auth username = project label on a self-hosted Shieldoo Gate. We use
@@ -61,7 +61,7 @@ COPY proto/ proto/
 RUN python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. proto/scanner.proto
 
 # ---- Runtime: clean image, no build toolchain or -dev headers ----
-FROM python:3.13.14-slim@sha256:eb43ff125d8d58d7449dcba7d336c23bcac412f526d861db493b9994d8010280 AS runtime
+FROM python:3.13.15-slim@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285 AS runtime
 
 # Pull Debian-security patches for base-image OS packages on top of the pinned
 # base tag, then strip perl. The tag (python:3.13.14-slim) is pinned for
