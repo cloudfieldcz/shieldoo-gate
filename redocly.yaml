@@ -1,0 +1,40 @@
+# Redocly CLI configuration for `make lint-openapi`.
+#
+# The check exists because docs/api/openapi.yaml is normative — CLAUDE.md requires every
+# API change to update it — and until this branch nothing read it. It had been
+# unparseable as YAML on `main` for an unknown length of time.
+#
+# The ruleset is deliberately narrow: this is a *correctness* gate, not a style gate. A
+# lint that fails on 73 pre-existing documentation gaps is a lint everybody learns to
+# skip, and the failure this check has to catch is a spec that does not describe a valid
+# OpenAPI 3.1 document.
+#
+# The validator version is pinned in the Makefile (REDOCLY_VERSION); with an exact
+# version, `recommended` is a fixed set of rules rather than a moving target.
+extends:
+  - recommended
+
+rules:
+  # The gate. `struct` is Redocly's schema validation of the document itself: unknown or
+  # misplaced keywords, wrong types, broken $refs. It is what caught the 23 `nullable:
+  # true` properties this file carried — valid OpenAPI 3.0 syntax, and silently invalid
+  # under the `openapi: 3.1.0` the document declares.
+  struct: error
+
+  # Off: real documentation gaps, but not this check's job and not worth 73 red lines on
+  # every lint run. `securitySchemes` (BearerPAT, CookieSession, BasicPAT) are defined
+  # but no operation references them, so every operation looks unauthenticated to a
+  # generator. Fixing that means annotating ~73 operations with the right scheme, which
+  # is its own piece of work. See docs/development/ci.md.
+  security-defined: off
+  no-unused-components: off
+
+  # Off: style conventions this spec deliberately does not follow. Redirect-only auth
+  # flow endpoints document a 302 and nothing else, and error responses are described
+  # once in prose rather than repeated per operation.
+  operation-2xx-response: off
+  operation-4xx-response: off
+
+  # Off: the `servers` block intentionally uses example.com placeholders — the gate is
+  # self-hosted and has no canonical public host.
+  no-server-example.com: off

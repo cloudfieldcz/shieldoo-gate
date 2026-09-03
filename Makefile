@@ -1,6 +1,6 @@
 # Makefile — Shieldoo Gate
 
-.PHONY: build build-gate build-shdg test test-e2e test-e2e-containerized test-ui test-ui-update lint clean proto dev-keycloak-up dev-keycloak-down
+.PHONY: build build-gate build-shdg test test-e2e test-e2e-containerized test-ui test-ui-update lint lint-openapi clean proto dev-keycloak-up dev-keycloak-down
 
 BINARY := shieldoo-gate
 CMD_DIR := ./cmd/shieldoo-gate
@@ -88,8 +88,26 @@ test-ui:
 test-ui-update:
 	bash tests/ui-e2e/run.sh --update
 
-lint:
+lint: lint-openapi
 	go vet ./...
+
+# docs/api/openapi.yaml is normative — CLAUDE.md requires every API change to update it
+# — and nothing validated it until this target existed; it was unparseable as YAML on
+# main. A bare YAML parse is not enough: the file declares `openapi: 3.1.0` and carried
+# 23 properties written in 3.0's `nullable: true` syntax, which parses fine and is not a
+# valid 3.1 document.
+#
+# Redocly is pinned to an exact version, per CLAUDE.md's mandatory version pinning. That
+# pin also fixes what its `recommended` ruleset contains, so a new release cannot turn a
+# green branch red on its own. Which rules are enforced, and why the rest are off, is in
+# redocly.yaml.
+#
+# npx runs it straight from the registry rather than adding a lockfile for one lint tool;
+# the exact version is what makes that reproducible. Needs network and node.
+REDOCLY_VERSION := 2.51.1
+
+lint-openapi:
+	npx --yes @redocly/cli@$(REDOCLY_VERSION) lint docs/api/openapi.yaml
 
 clean:
 	rm -rf bin/

@@ -18,8 +18,10 @@ kept current by Dependabot (`.github/dependabot.yml`).
 Three jobs, all `permissions: contents: read`:
 
 - **`go`** — a "Trivy version parity" grep check (below), `make build`,
-  `make lint` (`go vet`), `make test` (`go test -race`). CGO is on
-  (go-sqlite3 + `-race` require it); gcc is present on `ubuntu-latest`.
+  `make lint` (OpenAPI spec validation + `go vet` — see below), `make test`
+  (`go test -race`). CGO is on (go-sqlite3 + `-race` require it); gcc is present on
+  `ubuntu-latest`. The job also sets up Node, because `make lint` shells out to the
+  pinned Redocly CLI.
 - **`ui`** — `npm ci`, `npm run lint` (ESLint 10 flat config), `npm run build`
   (`tsc` + Vite — the type-check gate).
 - **`ui-e2e`** — `make test-ui`: brings up a dedicated fresh open-mode gate and
@@ -34,6 +36,37 @@ Three jobs, all `permissions: contents: read`:
 
 Go and Node versions are pinned via `env:` and kept in lockstep with `go.mod`
 and `docker/Dockerfile`.
+
+#### OpenAPI spec validation
+
+`docs/api/openapi.yaml` is normative — CLAUDE.md requires every API change to update it
+— and until 2026-09 **nothing read it**. Neither the Makefile nor any workflow
+referenced the file, and it had been unparseable as YAML on `main` (an unquoted
+`sbom.enabled: false` inside a `description:`) for an unknown length of time.
+
+`make lint` now runs `redocly lint docs/api/openapi.yaml` before `go vet`, so the check
+fires locally and in CI from the same target.
+
+**Why a spec validator and not a YAML parse.** A parse would have caught the original
+breakage and nothing else. The document declares `openapi: 3.1.0` and carried 23
+properties written in OpenAPI 3.0's `nullable: true` form — perfectly valid YAML, and
+not a valid 3.1 schema; 3.1 expresses the same thing as `type: [string, "null"]`. Only a
+real validator sees that. (`openapi-spec-validator`, the Python alternative, reports the
+file as OK — JSON Schema tolerates unknown keywords — which is why Redocly was chosen.)
+
+**Pinning.** `REDOCLY_VERSION` in the Makefile pins `@redocly/cli` to an exact version,
+per CLAUDE.md's mandatory version-pinning rule. The pin also freezes what Redocly's
+`recommended` ruleset contains, so a new release cannot turn a green branch red on its
+own — bumping the version is a deliberate act. It runs via `npx --yes`, so there is no
+lockfile to maintain for a single lint tool; the exact version is what makes that
+reproducible. The check needs network and node.
+
+**Which rules are enforced** is in `redocly.yaml` at the repo root, with a reason next to
+each. In short: `struct` (the document is a valid OpenAPI 3.1 description) is an error;
+style rules are off. One known gap is recorded there rather than fixed —
+`security-defined`: the three `securitySchemes` (`BearerPAT`, `CookieSession`,
+`BasicPAT`) are defined but no operation references one, so every operation reads as
+unauthenticated to a code generator. Annotating ~73 operations is its own piece of work.
 
 #### Trivy version lockstep
 
