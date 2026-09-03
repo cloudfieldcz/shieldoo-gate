@@ -155,9 +155,7 @@ func (s *scanServiceImpl) Run(ctx context.Context, runID int64) error {
 	if run.Status != StatusPending {
 		return nil // idempotent
 	}
-	// Mark running.
-	if _, err := s.db.ExecContext(ctx,
-		`UPDATE scan_runs SET status = 'running' WHERE id = ?`, run.ID); err != nil {
+	if err := s.markRunning(ctx, run); err != nil {
 		return err
 	}
 
@@ -268,6 +266,37 @@ func (s *scanServiceImpl) Run(ctx context.Context, runID int64) error {
 		if evalErr := s.anomaly.Evaluate(ctx, run.ComponentID, run.ID, crit+high); evalErr != nil {
 			log.Warn().Err(evalErr).Int64("run_id", run.ID).Msg("scan_service: anomaly evaluate")
 		}
+	}
+	return nil
+}
+
+// markRunning transitions a pending run to 'running'.
+//
+// The status predicate is the third and last of the three writes that make a reap final.
+// Between Run's GetScanRun — which read the row as 'pending' — and this UPDATE, the
+// stale-run reaper can close the row. A blind write would resurrect it to 'running', the
+// scan would then complete and publish normally, and the component would be left with
+// status='done' next to error_message='reaped: stuck in pending'. Worse, the reap already
+// made the component rescan-eligible, so a second run may be in flight for it.
+//
+// Returns ErrScanRunTerminal when the row was closed underneath us; the caller stops
+// without touching it, leaving the reaper's diagnosis in place.
+func (s *scanServiceImpl) markRunning(ctx context.Context, run *ScanRun) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE scan_runs SET status = 'running' WHERE id = ? AND status = 'pending'`, run.ID)
+	if err != nil {
+		return fmt.Errorf("scan_service: starting run %d: %w", run.ID, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("scan_service: rows affected for run %d: %w", run.ID, err)
+	}
+	if affected == 0 {
+		log.Warn().
+			Int64("run_id", run.ID).
+			Int64("component_id", run.ComponentID).
+			Msg("scan_service: run was closed before it could start, not executed")
+		return fmt.Errorf("scan_service: starting run %d: %w", run.ID, ErrScanRunTerminal)
 	}
 	return nil
 }
