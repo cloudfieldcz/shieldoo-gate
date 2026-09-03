@@ -527,7 +527,9 @@ vuln_scan:
     # in-flight rows older than `threshold` as failed (error_message =
     # "reaped: stuck in <status>") and logs each one at WARN.
     interval: "15m"               # sweep cadence; also runs once at startup
-    threshold: ""                 # empty = max(4 x rescan.timeout, 1h); raise only if scans legitimately run longer
+    threshold: ""                 # empty = max(4 x rescan.timeout, 1h); raise only if scans legitimately run longer.
+                                  # Values below 1h are clamped up: the API's detached scan
+                                  # context alone allows a live run to last 10 minutes.
   retention:
     keep_n: 100                   # keep most recent N runs per Component
     interval: "1h"

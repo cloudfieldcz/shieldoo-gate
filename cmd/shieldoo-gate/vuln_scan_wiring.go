@@ -158,8 +158,17 @@ func setupVulnScan(ctx context.Context, cfg *config.Config, db *config.GateDB, b
 
 	// Stale scan-run reaper. Without it a single scan_runs row wedged in
 	// pending/running by a restart mid-scan excludes its component from every
-	// rescan cycle above, forever. Threshold defaults to max(4 x the per-component
-	// scan timeout, 1h) so it tracks the rescan timeout knob automatically.
+	// rescan cycle above, forever.
+	//
+	// Threshold defaults to max(4 x rescan.timeout, 1h). The derivation tracks the
+	// rescan timeout knob automatically, but note it only bounds the SCHEDULED path:
+	// the upload and manual-rescan paths run ScanService.Run under
+	// api.Server.detachedCtx(), a hardcoded 10m (internal/api/rescan.go), part of
+	// which can be spent blocked on the scan-concurrency semaphore with the row
+	// already 'pending'. 10m is therefore the true worst-case legitimate in-flight
+	// lifetime, and it is the 1h floor inside DefaultStaleRunThreshold — not the
+	// derivation — that dominates it. Raising rescan.timeout is safe (the derivation
+	// is monotonic); lowering the floor would not be.
 	staleReaperCfg := scheduler.StaleRunReaperConfig{
 		Interval:  parseDurationOr(cfg.VulnScan.StaleRunReaper.Interval, 15*time.Minute),
 		Threshold: parseDurationOr(cfg.VulnScan.StaleRunReaper.Threshold, scheduler.DefaultStaleRunThreshold(rescanCfg.Timeout)),

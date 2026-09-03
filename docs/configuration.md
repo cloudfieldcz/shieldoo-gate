@@ -427,7 +427,7 @@ vuln_scan:
     timeout: "5m"
   stale_run_reaper:
     interval: "15m"                     # Stale-run sweep cadence (also runs once at startup)
-    threshold: ""                       # Empty = max(4 x rescan.timeout, 1h)
+    threshold: ""                       # Empty = max(4 x rescan.timeout, 1h); values below 1h clamped up
   retention:
     keep_n: 100                         # Most-recent successful runs kept per component
     interval: "1h"                      # Retention reaper cadence
