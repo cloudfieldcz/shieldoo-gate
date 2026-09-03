@@ -609,10 +609,11 @@ once it has, the field is replaced by `stale_for`.
 
 **What this does not change.** `builtin-threat-feed` still returns `CLEAN` when
 the feed is empty. Making it report `SCAN_UNAVAILABLE` instead would turn a
-broken feed into a blocked pipeline for every artifact — a policy change on a
-security-critical path that needs an ADR, not a bug fix. Until then the feed's
-health is an observability signal: alert on it, do not rely on the scan verdict
-to tell you.
+broken third-party feed host into a blocked pipeline for every artifact in every
+ecosystem — a policy change on a security-critical path, analysed in
+[ADR-020](adr/ADR-020-threat-feed-empty-verdict.md), which is **proposed and
+undecided**. Until it is decided, the feed's health is an observability signal:
+alert on it, do not rely on the scan verdict to tell you.
 
 **3. `GET /api/v1/health`.** `ThreatFeedChecker.HealthCheck` reports the scanner
 unhealthy when the feed is configured but the local table is empty:
