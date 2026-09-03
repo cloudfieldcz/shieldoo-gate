@@ -15,7 +15,7 @@ Shieldoo Gate is a transparent caching proxy that scans every artifact before se
 - [Scanners](scanners.md) — scan engine, built-in and external scanners, aggregation, threat feed, [scratch cleanup / temp janitor](scanners.md#scratch-cleanup-temp-janitor)
 - [SBOM Export](sbom.md) — per-project CycloneDX 1.5 SBOM download (`GET /api/v1/projects/{id}/sbom`)
   - [Version-Diff Scanner](scanners/version-diff.md) — AI-driven cross-version semantic analysis (replaces v1.x heuristic, see [ADR-005](adr/ADR-005-ai-driven-version-diff.md))
-- [Vulnerability Scan](vulnerability-scan.md) — push-from-CI CycloneDX SBOM scanning (OSV + Trivy), scheduled rescans, per-component CVE ignore lifecycle, optional AI surfaces (see [ADR-007](adr/ADR-007-vulnerability-scan.md))
+- [Vulnerability Scan](vulnerability-scan.md) — push-from-CI CycloneDX SBOM scanning (OSV + Trivy), [background schedulers](vulnerability-scan.md#background-schedulers) (rescan, stale-run reaper, retention), per-component CVE ignore lifecycle, optional AI surfaces (see [ADR-007](adr/ADR-007-vulnerability-scan.md))
 - [Protocol Adapters](adapters.md) — PyPI, npm, NuGet, Docker, Maven, RubyGems, Go Modules proxy implementations and routing
 - [Policy Engine](policy.md) — evaluation order, overrides, allowlists, aggregation rules, policy tiers (v1.2), AI triage
 - [Configuration](configuration.md) — full `config.yaml` reference, environment variables, Go structs

@@ -425,6 +425,9 @@ vuln_scan:
     interval: "6h"                      # Scheduled rescan cadence
     max_concurrent: 4
     timeout: "5m"
+  stale_run_reaper:
+    interval: "15m"                     # Stale-run sweep cadence (also runs once at startup)
+    threshold: ""                       # Empty = max(4 x rescan.timeout, 1h)
   retention:
     keep_n: 100                         # Most-recent successful runs kept per component
     interval: "1h"                      # Retention reaper cadence
@@ -614,7 +617,8 @@ The configuration is deserialized into Go structs defined in `internal/config/co
 | `ProxyAuthConfig` | `proxy_auth` | `Enabled`, `GlobalTokenEnv` |
 | `ProjectsConfig` | `projects` | `Mode`, `DefaultLabel`, `LabelRegex`, `MaxCount`, `LazyCreateRate`, `CacheSize`, `CacheTTL`, `UsageFlushPeriod`, `BootstrapLabels` |
 | `SBOMConfig` | `sbom` | `Enabled`, `Format`, `AsyncWrite`, `TTL` |
-| `VulnScanConfig` | `vuln_scan` | `Enabled`, `MaxSBOMBytes`, `MaxComponents`, `MaxComponentsPerProject`, `MaxConcurrentScans`, `StaleThreshold`, `Rescan`, `Retention`, `Scanners`, `Alerts`, `RateLimit` |
+| `VulnScanConfig` | `vuln_scan` | `Enabled`, `MaxSBOMBytes`, `MaxComponents`, `MaxComponentsPerProject`, `MaxConcurrentScans`, `StaleThreshold`, `Rescan`, `Retention`, `StaleRunReaper`, `Scanners`, `Alerts`, `RateLimit` |
+| `VulnStaleRunReaperConfig` | `vuln_scan.stale_run_reaper` | `Interval`, `Threshold` |
 | `AIFeaturesConfig` | `ai_features` | `Enabled`, `IgnoreReasonDrafter`, `AnomalyDetection`, `AzureOpenAI` |
 | `AlertsConfig` | `alerts` | `Webhook`, `Slack`, `Email` |
 | `WebhookAlertConfig` | `alerts.webhook` | `Enabled`, `URL`, `SecretEnv`, `AllowInsecure`, `On` |
