@@ -59,10 +59,16 @@ Two structural problems made remediation harder than it should be:
    (`go-builder` stage) and `tests/e2e-shell/Dockerfile.test-runner`
    (`shdg-build` stage), CI `GO_VERSION` (`ci.yml`, `codeql.yml`,
    `release.yml`), and the `ARG GO_VERSION` / `ARG GO_SHA256` pair that
-   installs a *second*, tarball-based Go toolchain later in
-   `tests/e2e-shell/Dockerfile.test-runner` (onto `PATH` ahead of the
-   `shdg-build` one, for the e2e test client itself) must always name the
-   **same** version. That last location is a **two-value** bump: `GO_VERSION`
+   installs a *second*, independent Go toolchain later in the **same**
+   `tests/e2e-shell/Dockerfile.test-runner` file must always name the
+   **same** version. That file has two unrelated build stages, each with
+   its own Go toolchain and neither visible to the other: `shdg-build`
+   compiles the `shdg` CLI (only its finished binary is `COPY --from=`'d
+   into the final image — its toolchain never leaves that stage), while
+   the later `ARG GO_VERSION` tarball install puts a separate toolchain on
+   the final image's own `PATH`, for the e2e test client itself. Neither
+   stage's version implies or updates the other, so both must be bumped by
+   hand. The `ARG` location is also a **two-value** bump: `GO_VERSION`
    and `GO_SHA256` change together, or the Dockerfile's `sha256sum -c` fails
    the build — get the checksum from `https://go.dev/dl/?mode=json` (the
    `linux-amd64` archive entry for that version), never invent one. Bumping
