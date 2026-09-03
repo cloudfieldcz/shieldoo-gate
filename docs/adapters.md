@@ -365,6 +365,79 @@ Run the migration **before** any restart that would clear `/tmp`.
 latency/egress; (2) blob GC / retention (delete on tag-delete or quarantine purge) —
 push blobs currently accumulate in object storage with no lifecycle.
 
+### Tag Listing
+
+`GET /v2/{name}/tags/list` is implemented (OCI Distribution Spec `end-8a`/`end-8b`) so
+clients that enumerate tags before resolving a digest work through the gate: `crane ls`,
+`skopeo list-tags`, `oras repo tags`, Renovate's Docker datasource — and **Dependabot's
+`docker` ecosystem**, which calls tag listing before it compares digests. Without the
+endpoint a single gate-backed `FROM` made the whole Dependabot job exit 1, silently
+switching off base-image digest updates for every image in that job.
+
+- **Names only.** The response carries tag names — never a manifest or a blob — so the
+  endpoint adds no scan-bypass surface. Pulling any listed tag still runs the full
+  scan pipeline and still honours quarantine.
+- **Per-repository, not index enumeration.** The name resolves through the same
+  `RegistryResolver` as manifests and blobs, to exactly one upstream, so nothing is
+  merged across registries. [ADR-017](adr/ADR-017-multi-upstream-indexes.md)'s
+  "whole-index enumeration is default-only" limitation is about flat-name ecosystems
+  (RubyGems `/versions`, the PyPI root `/simple/`) whose entries cannot be attributed
+  back to one index; it does not apply here.
+- **Internal (pushed) namespaces** are answered from `docker_tags` — there is no upstream
+  to ask. A push-allowed name with no internal repository (or no tags yet) falls through
+  to the upstream registry, mirroring the manifest/blob serve path; a DB error fails
+  closed with `503` rather than reporting a foreign repository's tags under an internal
+  name. Internal listings implement `?n=`/`?last=` themselves and emit a `Link` header
+  when the page is truncated.
+- **The typosquat pre-scan applies**, exactly as on the manifest pull path: a name the
+  policy refuses to serve is not enumerable through the gate either (`403`, audited as
+  `BLOCKED`), and no upstream request is made. Without this, `crane ls <typo>` reached
+  upstream and left no audit trail.
+- **Pagination: only `n` and `last` are relayed.** Every other query parameter is dropped
+  before the upstream request — a relayed parameter can change what the *upstream*
+  resolves (a Distribution registry in pull-through-mirror mode honours `?ns=`, which
+  would escape the allowlist decision the resolver just made) and could carry a client
+  credential to a third party. `n` must be a non-negative integer or the request is
+  rejected with `400` before any upstream call, and the query is length-capped. A query
+  can never influence the upstream host or path.
+- **The `Link` header is rewritten**, not relayed: upstream returns
+  `</v2/{imagePath}/tags/list?…>` (and some registries return an absolute URL), which
+  would send a paginating client to the wrong repository through the gate — or straight to
+  the upstream registry. The gate re-emits `</v2/{name}/tags/list?n=…&last=…>; rel="next"`
+  built from the client-facing name and the two pagination parameters only, and **drops**
+  any link that is oversized or does not have the expected `rel="next"` shape (the client
+  stops paginating instead of leaving the gate). The upstream's own query parameters and
+  attribute tail are never echoed back into the client's next request.
+- **Upstream `401`/`403` becomes the gate's own `403`** and the upstream
+  `Www-Authenticate` challenge is dropped — relaying it would point the client's
+  credentials at the upstream token service. The gate never forwards client credentials
+  upstream, so "cannot authenticate to upstream" is reported as denied, not challenged.
+  For a **push-allowed** name that missed the internal store it becomes `404` instead
+  (same reasoning as the manifest `HEAD` path: the gate cannot serve it anyway, so
+  "cannot verify upstream" means "not present here"). Genuine `404 NAME_UNKNOWN` passes
+  through unchanged.
+- **A `200` body is decoded and re-encoded, not relayed.** The gate parses the upstream
+  tag list and emits its own `{"name", "tags"}` JSON with `Content-Type:
+  application/json` and `X-Content-Type-Options: nosniff`, so the "names only" property
+  is enforced rather than assumed — a hostile or broken upstream cannot deliver arbitrary
+  bytes (or a renderable media type such as `text/html`) to a client under the gate's own
+  origin. A `200` whose body is not an OCI tag list, or exceeds the 8 MiB cap, **fails
+  closed** with `502`. `name` is reported as the client asked for it (`python`, not
+  Docker Hub's `library/python`), matching the rewritten `Link` and the internal path.
+  Non-`200` error envelopes are relayed, but never under a renderable media type.
+- **`HEAD` on `tags/list` is not implemented** (it is not part of the spec) and returns
+  `404`.
+
+**Known limitation — internal-namespace shadowing.** `IsPushAllowed` is a *shape* test
+(a slash, no dot/colon in the first segment), not a namespace reservation, so
+`myteam/app` and `bitnami/nginx` are indistinguishable. A push-allowed name with no
+internal repository therefore falls through to the upstream — which is what makes
+`bitnami/nginx` (and every other namespaced Docker Hub image) listable at all, but it also
+means an internal namespace that has not been pushed to yet can be *listed* from a
+same-named public repository. This is the pre-existing pull-path semantics; the tag-list
+endpoint makes it enumerable rather than introducing it. Reserving internal namespaces
+explicitly in config would be the fix, and needs an ADR (it changes the pull path too).
+
 ### Routes
 
 | Method | Path | Description |
@@ -373,6 +446,7 @@ push blobs currently accumulate in object storage with no lifecycle.
 | `GET` | `/v2/{name}/manifests/{reference}` | Pull manifest (by tag or digest) — triggers scan pipeline |
 | `HEAD` | `/v2/{name}/manifests/{reference}` | Manifest discovery — required by docker daemon before GET. Cached: returns derived headers (digest, content-type, length) with no body; uncached: proxies HEAD upstream. The follow-up GET runs the scan pipeline. Honors quarantine. |
 | `GET` | `/v2/{name}/blobs/{digest}` | Pull layer blob — proxied to resolved upstream |
+| `GET` | `/v2/{name}/tags/list` | List a repository's tags — names only, no manifest or blob is served. Internally-pushed namespaces answer from `docker_tags`; every other name is proxied to the resolved upstream. Supports `?n=`/`?last=` paging. |
 | `POST` | `/v2/{name}/blobs/uploads/` | Initiate blob upload (push) — returns 202 with Location header |
 | `PUT` | `/v2/{name}/blobs/uploads/{uuid}` | Complete monolithic blob upload with digest verification |
 | `PATCH` | `/v2/{name}/blobs/uploads/{uuid}` | Chunked blob upload data (OCI Distribution Spec) |
