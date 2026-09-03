@@ -109,6 +109,17 @@ Generate (or re-use) a CycloneDX SBOM and upload it to the gate's
 `--fail-on=critical|high` without `--wait` is a usage error (exit 2): silently
 ignoring it would hide vulnerabilities and turn the CI gate into a no-op.
 
+**`--fail-on` gates on *new* findings, not on the total.** It reads the run's
+`new_critical_count` / `new_high_count`, i.e. the delta against the component's previous
+successful run — a CRITICAL that was already there last run does not fail the build.
+"New" is keyed on `(cve, package, version)`, so **bumping a dependency that still carries
+an unfixed CRITICAL fails a gate that went green before the bump**: the CVE now sits on a
+different version, which is a different vulnerable artefact. That is deliberate — see
+[Scan delta and alerting](../vulnerability-scan.md#scan-delta-and-alerting) and
+[ADR-022](../adr/ADR-022-version-aware-scan-delta.md) — but it is the behaviour to know
+about before you put `--fail-on critical` in a blocking pipeline. Raise a per-version
+ignore for the CVE you have accepted, and the bump stops re-firing.
+
 #### Source selection (`--sbom` / `--image` / `--dir`)
 
 These three flags describe **what** to scan and are mutually exclusive:
@@ -177,7 +188,7 @@ and polling endpoints.
 | Code | Meaning |
 |------|---------|
 | `0` | Upload accepted (and, when `--wait` is set, the scan finished within `fail-on` policy). |
-| `1` | Generic execution error (network, file I/O, gate 5xx) **or** `--fail-on critical/high` matched. |
+| `1` | Generic execution error (network, file I/O, gate 5xx) **or** `--fail-on critical/high` matched — i.e. the run reported a *new* CRITICAL (or HIGH) against the previous run, not a pre-existing one. See [Scan delta and alerting](../vulnerability-scan.md#scan-delta-and-alerting) for what counts as new. |
 | `2` | CLI / configuration error (missing required flags, invalid ecosystem, missing env). |
 | `3` | Scan run reached terminal status `failed`. |
 | `4` | `--wait` polling timed out before the scan reached a terminal status. |
