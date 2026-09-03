@@ -520,6 +520,14 @@ vuln_scan:
     interval: "6h"
     max_concurrent: 4
     timeout: "5m"
+  stale_run_reaper:
+    # A process restart mid-scan leaves a scan_runs row wedged in pending/running.
+    # ManifestRescanScheduler excludes any Component with such a row, so one orphan
+    # silently disables scheduled rescans for that Component forever. This reaper marks
+    # in-flight rows older than `threshold` as failed (error_message =
+    # "reaped: stuck in <status>") and logs each one at WARN.
+    interval: "15m"               # sweep cadence; also runs once at startup
+    threshold: ""                 # empty = max(4 x rescan.timeout, 1h); raise only if scans legitimately run longer
   retention:
     keep_n: 100                   # keep most recent N runs per Component
     interval: "1h"

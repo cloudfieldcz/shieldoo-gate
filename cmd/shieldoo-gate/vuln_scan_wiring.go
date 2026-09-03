@@ -22,7 +22,8 @@ import (
 )
 
 // setupVulnScan wires up the vulnerability-scan pipeline: component services, scan
-// service, rescan scheduler, retention reaper, ignore expiry watcher, AI surfaces.
+// service, rescan scheduler, stale-run reaper, retention reaper, ignore expiry watcher,
+// AI surfaces.
 // Mutates apiServer in place via SetVulnDeps + SetAIDeps.
 func setupVulnScan(ctx context.Context, cfg *config.Config, db *config.GateDB, blobStore cache.BlobStore, projectSvc project.Service, apiServer *api.Server, alerter alert.Alerter, gd *guarddog.GuardDogScanner) {
 	_ = projectSvc
@@ -154,6 +155,17 @@ func setupVulnScan(ctx context.Context, cfg *config.Config, db *config.GateDB, b
 	}
 	rescanScheduler := scheduler.NewManifestRescanScheduler(rescanCfg, db, store, scanSvc)
 	rescanScheduler.Start(ctx)
+
+	// Stale scan-run reaper. Without it a single scan_runs row wedged in
+	// pending/running by a restart mid-scan excludes its component from every
+	// rescan cycle above, forever. Threshold defaults to max(4 x the per-component
+	// scan timeout, 1h) so it tracks the rescan timeout knob automatically.
+	staleReaperCfg := scheduler.StaleRunReaperConfig{
+		Interval:  parseDurationOr(cfg.VulnScan.StaleRunReaper.Interval, 15*time.Minute),
+		Threshold: parseDurationOr(cfg.VulnScan.StaleRunReaper.Threshold, scheduler.DefaultStaleRunThreshold(rescanCfg.Timeout)),
+	}
+	staleRunReaper := scheduler.NewStaleRunReaper(staleReaperCfg, db)
+	staleRunReaper.Start(ctx)
 
 	retentionCfg := scheduler.ScanRunRetentionConfig{
 		KeepN:       cfg.VulnScan.Retention.KeepN,
