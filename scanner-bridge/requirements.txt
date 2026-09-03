@@ -593,9 +593,9 @@ nono-py==0.16.0 \
     --hash=sha256:b29757077d0578a0deaaf0e274b457a97a219c05f40e9fa631b737490fe06080 \
     --hash=sha256:ff58f014203384ec27d86b842dfb58fe70930375763fb1777dee58be35e8f20c
     # via guarddog
-openai==3.5.0 \
-    --hash=sha256:743738bb458a586d0d02d173bf398d29d7d7a80d182d167aa74f1c08814ecc78 \
-    --hash=sha256:7c0873d379655f65fa515c5692c8620e73bf6a6dce3e63f37589bc99bda3fdfd
+openai==3.7.0 \
+    --hash=sha256:008fa33e0a01dc71039c27355ef8f476eed690e8e48bec18183878dcd32fb841 \
+    --hash=sha256:e836eb7effee89df802cd0c7d1bad8de8c993976cf238c44d5b5b844f5aefd38
     # via -r requirements.in
 packaging==26.3 \
     --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79 \
