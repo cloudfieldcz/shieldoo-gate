@@ -560,6 +560,7 @@ attempt, at a level driven by whether the scanner can still detect anything:
 |---|---|
 | Refreshed, feed has entries | INFO |
 | **Refreshed, feed is empty** | **ERROR** |
+| Refreshed, entry count unavailable | INFO, `feed_entries: -1` — the refresh succeeded, only the count did not |
 | Fetch failed, feed has entries, under 3 consecutive failures | WARN |
 | Fetch failed, feed has entries, 3+ consecutive failures | ERROR |
 | Fetch failed, feed is empty | ERROR, from the first failure |

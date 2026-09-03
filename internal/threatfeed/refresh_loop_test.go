@@ -78,7 +78,7 @@ func TestClient_RefreshAndLog_PopulatedFeedFailures_WarnsThenEscalates(t *testin
 	resetFeedMetrics(t)
 	srv := feedServer(t, []FeedEntry{maliciousEntry("ddd444")})
 	client := NewClient(testDB(t), srv.URL)
-	require.NoError(t, client.Refresh(context.Background()))
+	require.NoError(t, client.refreshOnce(context.Background()).err)
 	srv.Close()
 
 	wantLevels := []string{"warn", "warn", "error", "error"}

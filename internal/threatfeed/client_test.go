@@ -23,7 +23,7 @@ func sampleFeed(entries []threatfeed.FeedEntry) []byte {
 	return data
 }
 
-func TestClient_Refresh_StoresEntries(t *testing.T) {
+func TestClient_RefreshNow_StoresEntries(t *testing.T) {
 	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
@@ -45,7 +45,7 @@ func TestClient_Refresh_StoresEntries(t *testing.T) {
 	defer srv.Close()
 
 	client := threatfeed.NewClient(db, srv.URL)
-	err = client.Refresh(context.Background())
+	err = client.RefreshNow(context.Background())
 	require.NoError(t, err)
 
 	var count int
@@ -54,17 +54,17 @@ func TestClient_Refresh_StoresEntries(t *testing.T) {
 	assert.Equal(t, 1, count)
 }
 
-func TestClient_Refresh_ServerDown_ReturnsError(t *testing.T) {
+func TestClient_RefreshNow_ServerDown_ReturnsError(t *testing.T) {
 	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
 
 	client := threatfeed.NewClient(db, "http://127.0.0.1:1") // unreachable
-	err = client.Refresh(context.Background())
+	err = client.RefreshNow(context.Background())
 	assert.Error(t, err)
 }
 
-func TestClient_Refresh_Idempotent(t *testing.T) {
+func TestClient_RefreshNow_Idempotent(t *testing.T) {
 	db, err := config.InitDB(config.SQLiteMemoryConfig())
 	require.NoError(t, err)
 	defer db.Close()
@@ -88,8 +88,8 @@ func TestClient_Refresh_Idempotent(t *testing.T) {
 	client := threatfeed.NewClient(db, srv.URL)
 
 	// Refresh twice.
-	require.NoError(t, client.Refresh(context.Background()))
-	require.NoError(t, client.Refresh(context.Background()))
+	require.NoError(t, client.RefreshNow(context.Background()))
+	require.NoError(t, client.RefreshNow(context.Background()))
 
 	var count int
 	err = db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM threat_feed").Scan(&count)

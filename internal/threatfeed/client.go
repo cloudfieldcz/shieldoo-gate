@@ -63,15 +63,14 @@ type refreshOutcome struct {
 	lastSuccess         time.Time // zero: never loaded in this process
 }
 
-// Refresh fetches the threat feed, upserts all entries into the threat_feed
-// table and updates the feed health metrics. It returns an error if the HTTP
-// request fails or the response cannot be parsed.
-func (c *Client) Refresh(ctx context.Context) error {
-	return c.refreshOnce(ctx).err
-}
-
 // refreshOnce runs one refresh, records the outcome in the client state and in
 // the Prometheus metrics, and returns it.
+//
+// It reports nothing. RefreshNow is the only entry point that turns an outcome
+// into a log line, and it is what both the periodic loop and POST
+// /api/v1/feed/refresh call — a feed that has silently stopped loading is the
+// failure this package exists to make visible, so there is deliberately no
+// exported way to refresh without reporting.
 func (c *Client) refreshOnce(ctx context.Context) refreshOutcome {
 	err := c.fetchAndStore(ctx)
 	now := time.Now()

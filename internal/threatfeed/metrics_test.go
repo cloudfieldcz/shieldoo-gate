@@ -125,7 +125,7 @@ func TestClient_Refresh_Success_RecordsTimestampAndEntries(t *testing.T) {
 	client := NewClient(testDB(t), srv.URL)
 
 	before := time.Now().Add(-time.Second)
-	require.NoError(t, client.Refresh(context.Background()))
+	require.NoError(t, client.refreshOnce(context.Background()).err)
 
 	successes, _ := metricValue(t, "shieldoo_gate_threat_feed_refresh_total", map[string]string{"result": resultSuccess})
 	assert.Equal(t, 1.0, successes)
@@ -144,7 +144,7 @@ func TestClient_Refresh_NeverLoaded_KeepsTimestampZeroAndEntriesZero(t *testing.
 	resetFeedMetrics(t)
 	client := NewClient(testDB(t), "https://feed.example.invalid/feed.json")
 
-	require.Error(t, client.Refresh(context.Background()))
+	require.Error(t, client.refreshOnce(context.Background()).err)
 
 	// This is the production shape: repeated failures, nothing ever loaded.
 	ts, found := metricValue(t, "shieldoo_gate_threat_feed_last_success_timestamp_seconds", nil)
@@ -167,7 +167,7 @@ func TestClient_Refresh_FailureAfterSuccess_KeepsLastSuccessAndCountsUp(t *testi
 	srv := feedServer(t, []FeedEntry{maliciousEntry("bbb222")})
 	db := testDB(t)
 	client := NewClient(db, srv.URL)
-	require.NoError(t, client.Refresh(context.Background()))
+	require.NoError(t, client.refreshOnce(context.Background()).err)
 
 	loadedAt, _ := metricValue(t, "shieldoo_gate_threat_feed_last_success_timestamp_seconds", nil)
 	require.NotZero(t, loadedAt)
@@ -175,7 +175,7 @@ func TestClient_Refresh_FailureAfterSuccess_KeepsLastSuccessAndCountsUp(t *testi
 	// The feed host goes away; the local table keeps its contents.
 	srv.Close()
 	for i := 1; i <= 3; i++ {
-		require.Error(t, client.Refresh(context.Background()))
+		require.Error(t, client.refreshOnce(context.Background()).err)
 
 		consecutive, _ := metricValue(t, "shieldoo_gate_threat_feed_consecutive_failures", nil)
 		assert.Equal(t, float64(i), consecutive)
@@ -204,7 +204,7 @@ func TestClient_Refresh_SuccessAfterFailures_ResetsConsecutiveGauge(t *testing.T
 	consecutive, _ := metricValue(t, "shieldoo_gate_threat_feed_consecutive_failures", nil)
 	require.Equal(t, 7.0, consecutive)
 
-	require.NoError(t, client.Refresh(context.Background()))
+	require.NoError(t, client.refreshOnce(context.Background()).err)
 
 	consecutive, _ = metricValue(t, "shieldoo_gate_threat_feed_consecutive_failures", nil)
 	assert.Equal(t, 0.0, consecutive, "a successful refresh must clear the consecutive-failure gauge")
