@@ -132,10 +132,16 @@ var (
 	ErrIgnoreExists     = errors.New("component: active ignore already exists")
 	ErrIgnoreNotFound   = errors.New("component: ignore not found")
 	ErrRateLimited      = errors.New("component: rate limit exceeded")
-	// ErrScanRunTerminal is returned by Store.UpdateScanRunStatus when the target run
-	// has already left 'pending'/'running' — typically reaped by the stale-run reaper
-	// while the scan was still executing. Its results must not be published.
-	ErrScanRunTerminal = errors.New("component: scan run already terminal")
+	// ErrScanRunTerminal is returned by Store.UpdateScanRunStatus and by
+	// scanServiceImpl.failRun when the UPDATE matched no row: the target run has
+	// already left 'pending'/'running' — typically reaped by the stale-run reaper while
+	// the scan was still executing — or no longer exists at all, having been deleted by
+	// the scan-run retention sweep mid-scan. The two facts are deliberately not split:
+	// both mean "this run is no longer yours to close", both call for the same response
+	// (do not publish, do not audit), and neither is reachable while a run is live, so a
+	// caller has nothing to do differently. Splitting them would add a sentinel that no
+	// call site could act on.
+	ErrScanRunTerminal = errors.New("component: scan run no longer open")
 )
 
 // componentNameRegex mirrors NormalizeLabel from the project package, slightly extended

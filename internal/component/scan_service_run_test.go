@@ -18,7 +18,12 @@ import (
 
 // memBlobStore is an in-memory cache.BlobStore. Only PutBlob/GetBlob are exercised by
 // ScanService.Run; the rest satisfy the interface.
-type memBlobStore struct{ blobs map[string][]byte }
+type memBlobStore struct {
+	blobs map[string][]byte
+	// onGet, when set, runs before every GetBlob. Used to simulate something happening
+	// to the scan_runs row while the scan is fetching its SBOM.
+	onGet func()
+}
 
 var _ cache.BlobStore = (*memBlobStore)(nil)
 
@@ -30,6 +35,9 @@ func (m *memBlobStore) PutBlob(_ context.Context, path string, data []byte) erro
 }
 
 func (m *memBlobStore) GetBlob(_ context.Context, path string) ([]byte, error) {
+	if m.onGet != nil {
+		m.onGet()
+	}
 	b, ok := m.blobs[path]
 	if !ok {
 		return nil, cache.ErrBlobNotFound
@@ -308,4 +316,72 @@ func TestScanServiceRun_LiveRun_ClosesToDone(t *testing.T) {
 	require.NoError(t, db.Get(&lastScanID, `SELECT last_scan_id FROM components WHERE id = ?`, componentID))
 	require.NotNil(t, lastScanID)
 	assert.Equal(t, runID, *lastScanID, "the happy path must still advance last_scan_id")
+}
+
+// reapRun applies the exact UPDATE StaleRunReaper.RunOnce writes.
+func reapRun(t *testing.T, db *config.GateDB, runID int64) {
+	t.Helper()
+	_, err := db.Exec(
+		`UPDATE scan_runs SET status = 'failed', finished_at = datetime('now'),
+		        error_message = 'reaped: stuck in running'
+		 WHERE id = ? AND status IN ('pending', 'running')`, runID)
+	require.NoError(t, err)
+}
+
+// The failure path needs the same protection as the success path. audit_log is
+// append-only, so a second scan_run_failed row for a run the reaper already closed would
+// be permanent.
+func TestScanServiceRun_FailsAfterBeingReaped_NoDuplicateAuditRow(t *testing.T) {
+	db := newTestDB(t)
+	blobs := newMemBlobStore()
+	store := component.NewStore(db)
+	ctx := context.Background()
+	audit := &recordingAudit{}
+
+	componentID, runID := seedPendingRun(t, db, blobs, "gate-image", 0)
+	// Reap the row and drop the blob, so the scan reaches failRun with a closed row.
+	blobs.onGet = func() {
+		reapRun(t, db, runID)
+		blobs.blobs = map[string][]byte{}
+	}
+
+	svc := component.NewScanService(component.ScanServiceConfig{}, component.ScanServiceDeps{
+		DB: db, Store: store, Blob: blobs, Audit: audit,
+	})
+	require.ErrorIs(t, svc.Run(ctx, runID), component.ErrScanRunTerminal)
+
+	run, err := store.GetScanRun(ctx, runID)
+	require.NoError(t, err)
+	assert.Equal(t, component.StatusFailed, run.Status)
+	assert.Equal(t, "reaped: stuck in running", run.ErrorMessage,
+		"the reaper's diagnosis must not be overwritten by the late failure")
+	assert.Empty(t, audit.entries, "no second scan_run_failed row may be appended")
+
+	var lastScanID *int64
+	require.NoError(t, db.Get(&lastScanID, `SELECT last_scan_id FROM components WHERE id = ?`, componentID))
+	assert.Nil(t, lastScanID)
+}
+
+func TestScanServiceRun_LiveRunFails_WritesOneAuditRow(t *testing.T) {
+	db := newTestDB(t)
+	blobs := newMemBlobStore()
+	store := component.NewStore(db)
+	ctx := context.Background()
+	audit := &recordingAudit{}
+
+	_, runID := seedPendingRun(t, db, blobs, "gate-image", 0)
+	blobs.blobs = map[string][]byte{} // blob gone, but nobody reaped the run
+
+	svc := component.NewScanService(component.ScanServiceConfig{}, component.ScanServiceDeps{
+		DB: db, Store: store, Blob: blobs, Audit: audit,
+	})
+	// A cleanly-recorded failure is not an error for the caller: failRun did its job.
+	require.NoError(t, svc.Run(ctx, runID))
+
+	run, err := store.GetScanRun(ctx, runID)
+	require.NoError(t, err)
+	assert.Equal(t, component.StatusFailed, run.Status)
+	assert.Contains(t, run.ErrorMessage, "fetch blob")
+	require.Len(t, audit.entries, 1, "the ordinary failure path still audits exactly once")
+	assert.Equal(t, model.EventScanRunFailed, audit.entries[0].EventType)
 }

@@ -192,16 +192,6 @@ func TestClearSuppression_VersionPinnedIgnore_ClearsWhatItStamped(t *testing.T) 
 	assert.Empty(t, suppressedFindingIDs(t, db, runID))
 }
 
-func TestIgnoreMatchKey_EmptyVersion_ReturnsVersionBlindKey(t *testing.T) {
-	assert.Equal(t, "CVE-1|pkg", component.IgnoreMatchKey("CVE-1", "pkg", ""))
-}
-
-func TestIgnoreMatchKey_WithVersion_ReturnsVersionedKey(t *testing.T) {
-	assert.Equal(t, "CVE-1|pkg|1.2.3", component.IgnoreMatchKey("CVE-1", "pkg", "1.2.3"))
-	assert.NotEqual(t, component.IgnoreMatchKey("CVE-1", "pkg", ""),
-		component.IgnoreMatchKey("CVE-1", "pkg", "1.2.3"))
-}
-
 func TestFindActiveIgnoresForRun_VersionPinnedIgnore_KeyedByVersion(t *testing.T) {
 	db := newTestDB(t)
 	store := component.NewStore(db)
@@ -221,10 +211,36 @@ func TestFindActiveIgnoresForRun_VersionPinnedIgnore_KeyedByVersion(t *testing.T
 
 	mapping, err := store.FindActiveIgnoresForRun(ctx, runID)
 	require.NoError(t, err)
-	assert.Equal(t, map[string]int64{
-		"CVE-2026-9999|stdlib|1.24.6": pinned.ID,
-		"CVE-2026-8888|oras-go":       blind.ID,
+	assert.Equal(t, map[component.IgnoreKey]int64{
+		{CVEID: "CVE-2026-9999", PackageName: "stdlib", PackageVersion: "1.24.6"}: pinned.ID,
+		{CVEID: "CVE-2026-8888", PackageName: "oras-go"}:                          blind.ID,
 	}, mapping)
+}
+
+// Package names come from operator-uploaded CycloneDX. A per-package ignore on a package
+// literally named "stdlib|1.24.6" must not suppress a finding for package "stdlib" at
+// version "1.24.6" — which is exactly what a "|"-joined string key would have done,
+// dropping a real finding out of critical_count and out of the shdg --fail-on gate.
+func TestFindActiveIgnoresForRun_PipeInPackageName_DoesNotCollideWithVersionedKey(t *testing.T) {
+	db := newTestDB(t)
+	store := component.NewStore(db)
+	ctx := context.Background()
+
+	componentID, runID, _ := seedRunWithFindings(t, db, "gate-image", "CVE-2026-9999", "stdlib", "1.24.6")
+	blind, err := store.CreateIgnore(ctx, &component.Ignore{
+		ComponentID: componentID, CVEID: "CVE-2026-9999", PackageName: "stdlib|1.24.6",
+		Reason: "hostile package name", CreatedByEmail: "ops@example.com",
+	})
+	require.NoError(t, err)
+
+	mapping, err := store.FindActiveIgnoresForRun(ctx, runID)
+	require.NoError(t, err)
+	assert.Equal(t, map[component.IgnoreKey]int64{
+		{CVEID: "CVE-2026-9999", PackageName: "stdlib|1.24.6"}: blind.ID,
+	}, mapping)
+	_, collides := mapping[component.IgnoreKey{
+		CVEID: "CVE-2026-9999", PackageName: "stdlib", PackageVersion: "1.24.6"}]
+	assert.False(t, collides, "a pipe in the package name must not forge a versioned key")
 }
 
 func TestUpdateScanRunStatus_RunningRun_TransitionsToDone(t *testing.T) {
@@ -267,6 +283,8 @@ func TestUpdateScanRunStatus_TerminalRun_RefusesAndKeepsRow(t *testing.T) {
 	assert.Zero(t, run.CriticalCount, "a refused update must not write counters")
 }
 
+// A run id that no longer exists — the retention sweep can delete a run mid-scan —
+// reports the same sentinel as a closed one. Both mean "not yours to close".
 func TestUpdateScanRunStatus_UnknownRun_ReturnsTerminal(t *testing.T) {
 	db := newTestDB(t)
 	store := component.NewStore(db)

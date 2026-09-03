@@ -272,12 +272,35 @@ func (s *scanServiceImpl) Run(ctx context.Context, runID int64) error {
 	return nil
 }
 
-// failRun transitions the run to failed and writes scan_run_failed audit row.
+// failRun transitions the run to failed and writes a scan_run_failed audit row.
+//
+// Carries the same status predicate as UpdateScanRunStatus, for the same reason: a run
+// the stale-run reaper already closed must keep the reaper's diagnosis rather than have
+// it overwritten by whatever this scan tripped over on its way out. The audit row is
+// written only when the transition actually happened — audit_log is append-only
+// (CLAUDE.md invariant 5), so a second scan_run_failed row for a run that was already
+// failed could never be cleaned up afterwards.
 func (s *scanServiceImpl) failRun(ctx context.Context, run *ScanRun, reason string) error {
 	now := time.Now().UTC()
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE scan_runs SET status = 'failed', finished_at = ?, error_message = ? WHERE id = ?`,
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE scan_runs SET status = 'failed', finished_at = ?, error_message = ?
+		 WHERE id = ? AND status IN ('pending', 'running')`,
 		now, reason, run.ID)
+	if err != nil {
+		return fmt.Errorf("scan_service: failing run %d: %w", run.ID, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("scan_service: rows affected for run %d: %w", run.ID, err)
+	}
+	if affected == 0 {
+		log.Warn().
+			Int64("run_id", run.ID).
+			Int64("component_id", run.ComponentID).
+			Str("reason", reason).
+			Msg("scan_service: run failed after it was closed elsewhere, status left as found")
+		return fmt.Errorf("scan_service: failing run %d: %w", run.ID, ErrScanRunTerminal)
+	}
 	if s.audit != nil {
 		_ = s.audit.WriteVulnEvent(ctx, model.AuditEntry{
 			EventType:   model.EventScanRunFailed,
@@ -286,7 +309,7 @@ func (s *scanServiceImpl) failRun(ctx context.Context, run *ScanRun, reason stri
 			Reason:      reason,
 		})
 	}
-	return err
+	return nil
 }
 
 func (s *scanServiceImpl) applyExistingIgnores(ctx context.Context, run *ScanRun, result *ScanResult) error {
@@ -302,9 +325,9 @@ func (s *scanServiceImpl) applyExistingIgnores(ctx context.Context, run *ScanRun
 		// cve_ignores(component_id, cve_id, package_name) allows only one active ignore
 		// per package, so at most one of the two keys is ever present — the ordering is
 		// belt and braces, not a precedence rule anyone can exploit.
-		id, ok := mapping[IgnoreMatchKey(f.CVEID, f.PackageName, f.PackageVersion)]
+		id, ok := mapping[IgnoreKey{CVEID: f.CVEID, PackageName: f.PackageName, PackageVersion: f.PackageVersion}]
 		if !ok {
-			id, ok = mapping[IgnoreMatchKey(f.CVEID, f.PackageName, "")]
+			id, ok = mapping[IgnoreKey{CVEID: f.CVEID, PackageName: f.PackageName}]
 		}
 		if ok {
 			f.IsSuppressed = true

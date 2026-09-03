@@ -464,26 +464,26 @@ func (s *Store) ListRecentRevokedIgnores(ctx context.Context, componentID int64,
 	return out, nil
 }
 
-// IgnoreMatchKey builds the lookup key that matches a scan finding against an active
-// ignore. Two shapes, one per suppression scope:
+// IgnoreKey identifies an active ignore for lookup against a scan finding.
+// PackageVersion is empty for a per-package ignore and set for a version-pinned one, so
+// the two scopes occupy distinct keys.
 //
-//	cve|package          — the ignore carries no package_version: it covers every version
-//	cve|package|version  — the ignore pins a package_version: it covers that version only
-//
-// Callers holding a finding must probe the versioned key first and fall back to the
-// version-blind one; see scanServiceImpl.applyExistingIgnores. Keeping the encoding in
-// one function is what keeps the two sides in step.
-func IgnoreMatchKey(cveID, packageName, packageVersion string) string {
-	if packageVersion == "" {
-		return cveID + "|" + packageName
-	}
-	return cveID + "|" + packageName + "|" + packageVersion
+// It is a comparable struct rather than a delimited string on purpose. Package names
+// come from operator-uploaded CycloneDX and are not fully trusted: with a "|"-joined key
+// a blind ignore on a package literally named `stdlib|1.24.6` would produce the exact
+// key a finding for `stdlib` at version `1.24.6` probes first, and would silently
+// suppress a different package's finding — dropping it from critical_count and from the
+// `shdg --fail-on` gate. A struct key cannot collide.
+type IgnoreKey struct {
+	CVEID          string
+	PackageName    string
+	PackageVersion string
 }
 
 // FindActiveIgnoresForRun returns active ignores for the component owning runID, keyed
-// by IgnoreMatchKey. Used by scan-time suppression. A version-pinned ignore lands under
-// its versioned key, so it can only ever match the exact version it was raised against.
-func (s *Store) FindActiveIgnoresForRun(ctx context.Context, runID int64) (map[string]int64, error) {
+// by IgnoreKey. Used by scan-time suppression. A version-pinned ignore lands under a key
+// carrying its version, so it can only ever match the exact version it was raised against.
+func (s *Store) FindActiveIgnoresForRun(ctx context.Context, runID int64) (map[IgnoreKey]int64, error) {
 	componentID, err := s.componentIDForRun(ctx, runID)
 	if err != nil {
 		return nil, err
@@ -501,9 +501,9 @@ func (s *Store) FindActiveIgnoresForRun(ctx context.Context, runID int64) (map[s
 	if err != nil {
 		return nil, err
 	}
-	m := make(map[string]int64, len(rows))
+	m := make(map[IgnoreKey]int64, len(rows))
 	for _, r := range rows {
-		m[IgnoreMatchKey(r.CVEID, r.PackageName, r.PackageVersion)] = r.ID
+		m[IgnoreKey{CVEID: r.CVEID, PackageName: r.PackageName, PackageVersion: r.PackageVersion}] = r.ID
 	}
 	return m, nil
 }
