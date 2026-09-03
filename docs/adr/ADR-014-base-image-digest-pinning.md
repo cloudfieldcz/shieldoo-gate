@@ -35,8 +35,9 @@ weekly); manual re-resolution remains a fallback when a base tag is bumped out o
 Builds are now reproducible and integrity-pinned to reviewed bytes. The cost is
 staleness: a digest pin freezes the image even after the upstream tag is rebuilt
 to fix a CVE. Two mitigations keep this from becoming a security regression:
-ADR-010's build-time `apt-get upgrade` still pulls Debian-security patches on top
-of the pinned Debian bases, and digests must be refreshed on a regular cadence
-(at minimum every release). Re-resolving a tag to its current index digest:
+ADR-010's build-time `apt-get upgrade` (scanner-bridge, Debian) and `apk upgrade`
+(gate, alpine — added 2026-09) still pull OS-security patches on top of the
+pinned bases, and digests must be refreshed on a regular cadence (at minimum
+every release). Re-resolving a tag to its current index digest:
 `docker buildx imagetools inspect <name:tag> --format '{{.Manifest.Digest}}'`.
 Automated digest bumping is now in place via Dependabot (`.github/dependabot.yml`).

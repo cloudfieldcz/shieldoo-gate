@@ -50,6 +50,22 @@ also verify the four `expectedChecksums` entries in `cmd/shdg/trivy.go` by
 downloading the real release tarballs and hashing them — never trust the
 upstream `checksums.txt` alone (see the comment above `expectedChecksums`).
 
+#### Runtime-stage OS package upgrades
+
+Both release Dockerfiles pin their base image by digest
+([ADR-014](../adr/ADR-014-base-image-digest-pinning.md)) but also run an
+upgrade of already-installed OS packages in the runtime stage, on top of that
+pinned base: `docker/Dockerfile`'s `apk upgrade --no-cache` (gate, alpine) and
+`scanner-bridge/Dockerfile`'s `apt-get upgrade -y` (scanner-bridge, Debian).
+Neither weakens the digest pin — both package managers already resolve
+against their *live* distro repos regardless of the base digest, so upgrading
+does not change the image's reproducibility posture. What it buys is that a
+plain rebuild picks up OS-security fixes published after the base tag was
+cut (e.g. `libssl3`/`libcrypto3` in alpine's `v3.24` repo) instead of waiting
+for the next base-tag bump. See [ADR-010](../adr/ADR-010-base-image-security-patching.md)
+for the full rationale and the `perl-base` force-purge that goes with it on
+the scanner-bridge side.
+
 ### Security scan (`codeql.yml`)
 
 - **CodeQL** — matrix over `go` and `javascript-typescript`, `security-extended`
