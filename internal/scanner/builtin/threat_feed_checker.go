@@ -33,7 +33,16 @@ func NewThreatFeedChecker(db *config.GateDB, feedEnabled bool) *ThreatFeedChecke
 
 // ErrFeedEmpty is returned by HealthCheck when the threat feed is configured
 // but the local table has no rows, i.e. the checker cannot detect anything.
-var ErrFeedEmpty = errors.New("builtin-threat-feed: local threat feed is empty, every artifact is reported CLEAN without being checked")
+//
+// The text is deliberately terse. GET /api/v1/health is unauthenticated (it is
+// registered before the protected admin group so liveness probes can reach it),
+// and this error is rendered verbatim into its body. Spelling out the
+// consequence there — "every artifact is reported CLEAN without being checked"
+// — hands any anonymous caller a precise signal for when the
+// known-malicious-hash layer is down, which is exactly when it pays to push a
+// package. The consequence is documented in docs/scanners.md and named in full
+// in the log lines, which are not public.
+var ErrFeedEmpty = errors.New("threat feed empty")
 
 func (c *ThreatFeedChecker) Name() string    { return "builtin-threat-feed" }
 func (c *ThreatFeedChecker) Version() string { return "1.0.0" }
@@ -51,6 +60,9 @@ func (c *ThreatFeedChecker) SupportedEcosystems() []scanner.Ecosystem {
 // back CLEAN, so the scanner is reported unhealthy — previously it certified
 // itself healthy on a gate whose feed had been dead for weeks.
 //
+// It is a single-row probe, not a count: the question is presence, and the only
+// caller is an unauthenticated endpoint that probes hit every few seconds.
+//
 // Staleness is deliberately not checked here: a feed that loaded once and has
 // gone stale still detects everything it contains, and the freshness question is
 // answered by shieldoo_gate_threat_feed_last_success_timestamp_seconds.
@@ -67,12 +79,16 @@ func (c *ThreatFeedChecker) HealthCheck(ctx context.Context) error {
 		return nil
 	}
 
-	var entries int64
-	if err := c.db.GetContext(ctx, &entries, "SELECT COUNT(*) FROM threat_feed"); err != nil {
-		return fmt.Errorf("builtin-threat-feed: counting threat feed entries: %w", err)
-	}
-	if entries == 0 {
+	// "Is there at least one row", not "how many rows" — the question is whether the
+	// scanner can detect anything at all. COUNT(*) scans the whole table, and this
+	// endpoint is unauthenticated and hit by Kubernetes probes roughly every 10 s.
+	var present int
+	err := c.db.GetContext(ctx, &present, "SELECT 1 FROM threat_feed LIMIT 1")
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
 		return ErrFeedEmpty
+	case err != nil:
+		return fmt.Errorf("builtin-threat-feed: probing threat feed entries: %w", err)
 	}
 	return nil
 }

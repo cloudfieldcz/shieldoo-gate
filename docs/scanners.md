@@ -630,8 +630,26 @@ unhealthy when the feed is configured but the local table is empty:
 
 ```json
 {"status":"ok","scanners":{"builtin-threat-feed":{"healthy":false,
-  "error":"builtin-threat-feed: local threat feed is empty, every artifact is reported CLEAN without being checked"}}}
+  "error":"threat feed empty"}}}
 ```
+
+**The endpoint is unauthenticated**, and deliberately so — it is registered before the
+protected admin group precisely so Kubernetes liveness and readiness probes can reach it
+without credentials. Two consequences shaped the code:
+
+- **The message is terse on purpose.** `healthy:false` on `builtin-threat-feed` already
+  says the scanner cannot detect anything; spelling out *"every artifact is reported
+  CLEAN without being checked"* in the public body would hand an anonymous caller a
+  precise, pollable signal for when the known-malicious-hash layer is down — which is
+  exactly when it pays to push a package. The full consequence is named in the log lines
+  above and on this page, neither of which is public. What remains disclosed is that the
+  feed is empty, which is the minimum a health endpoint can say and still be one; a
+  deployment that cannot accept even that should not expose `/api/v1/health` beyond its
+  cluster.
+- **The check is a single-row probe, not a count.** `SELECT 1 FROM threat_feed LIMIT 1`
+  answers the presence question in O(1). Helm probes hit this endpoint roughly every
+  10 s, and `COUNT(*)` over the whole feed table is not a query to put behind an
+  unauthenticated route.
 
 It answers "can this scanner detect anything", not "how fresh is the feed" —
 a feed that loaded once and has gone stale still detects everything it contains,

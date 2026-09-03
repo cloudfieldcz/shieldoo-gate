@@ -85,7 +85,12 @@ func TestThreatFeedChecker_HealthCheck_EmptyFeedEnabled_ReturnsError(t *testing.
 
 	require.Error(t, err, "a configured feed with no entries detects nothing and must not report healthy")
 	assert.ErrorIs(t, err, ErrFeedEmpty)
-	assert.Contains(t, err.Error(), "CLEAN", "the error must name the consequence, not just the row count")
+	// GET /api/v1/health is unauthenticated and renders this text verbatim. It must
+	// stay neutral: naming the consequence there would tell an anonymous caller
+	// exactly when the known-malicious-hash layer is down. The explanation lives in
+	// docs/scanners.md and in the (non-public) log lines.
+	assert.Equal(t, "threat feed empty", err.Error())
+	assert.NotContains(t, err.Error(), "CLEAN")
 }
 
 func TestThreatFeedChecker_HealthCheck_FeedDisabled_ReturnsNil(t *testing.T) {
@@ -110,5 +115,5 @@ func TestThreatFeedChecker_HealthCheck_DBUnavailable_ReturnsWrappedError(t *test
 
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrFeedEmpty, "an unreadable table must not be reported as an empty one")
-	assert.Contains(t, err.Error(), "builtin-threat-feed: counting threat feed entries")
+	assert.Contains(t, err.Error(), "builtin-threat-feed: probing threat feed entries")
 }
