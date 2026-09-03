@@ -61,21 +61,38 @@ Two structural problems made remediation harder than it should be:
    `release.yml`), and the `ARG GO_VERSION` / `ARG GO_SHA256` pair that
    installs a *second*, independent Go toolchain later in the **same**
    `tests/e2e-shell/Dockerfile.test-runner` file must always name the
-   **same** version. That file has two unrelated build stages, each with
-   its own Go toolchain and neither visible to the other: `shdg-build`
-   compiles the `shdg` CLI (only its finished binary is `COPY --from=`'d
-   into the final image — its toolchain never leaves that stage), while
-   the later `ARG GO_VERSION` tarball install puts a separate toolchain on
-   the final image's own `PATH`, for the e2e test client itself. Neither
-   stage's version implies or updates the other, so both must be bumped by
-   hand. The `ARG` location is also a **two-value** bump: `GO_VERSION`
-   and `GO_SHA256` change together, or the Dockerfile's `sha256sum -c` fails
-   the build — get the checksum from `https://go.dev/dl/?mode=json` (the
-   `linux-amd64` archive entry for that version), never invent one. Bumping
-   the Go patch level is done in lockstep across all **seven** locations. The
-   current target is **1.27.0** (carries the go1.26.6 stdlib fixes for
-   GO-2026-6218 (net/url), GO-2026-6091 (html/template), GO-2026-6090
-   (crypto/tls), GO-2026-6089 (net/http), GO-2026-6088 (encoding/xml),
+   **same** version. That file carries two unrelated Go toolchains in two
+   different stages, neither visible to the other: the `shdg-build` build
+   stage compiles the `shdg` CLI (only its finished binary is
+   `COPY --from=`'d into the final image — its toolchain never leaves that
+   stage), while the later `ARG GO_VERSION` tarball install runs in the
+   **final/runtime** stage and puts a separate toolchain on that image's
+   own `PATH`, for the e2e test client itself. Neither stage's version
+   implies or updates the other, so both must be bumped by hand. The `ARG`
+   location is also a **two-value** bump: `GO_VERSION` and `GO_SHA256`
+   change together, or the Dockerfile's `sha256sum -c` fails the build —
+   get the checksum from `https://go.dev/dl/?mode=json` (the `linux-amd64`
+   archive entry for that version), never invent one.
+
+   The two `FROM golang:<ver>-alpine@sha256:<digest>` locations are the
+   *same trap in a worse form*. Docker resolves a `name:tag@digest`
+   reference **by digest** and ignores the tag, so bumping only the version
+   in the tag keeps building the **old, unpatched** toolchain image — with a
+   green build, a correct-looking Dockerfile, and no checksum failure to
+   catch it. Unlike the `ARG GO_VERSION`/`ARG GO_SHA256` pair, nothing here
+   fails loudly when the two halves disagree. **The tag and the `@sha256:`
+   digest must always move together.** Take the new digest from the registry
+   (e.g. `docker buildx imagetools inspect golang:<ver>-alpine`) or from the
+   digest Dependabot proposes — never carry a digest across a version bump,
+   and never "resolve" the mismatch by dropping the digest, which the
+   SHA/digest-pinning rules in ADR-014/ADR-015 forbid. Both Go builder
+   stages are expected to pin the *same* digest, so a difference between
+   those two lines is itself a signal that one of them was missed.
+
+   Bumping the Go patch level is done in lockstep across all **seven**
+   locations. The current target is **1.27.0** (carries the go1.26.6 stdlib
+   fixes for GO-2026-6218 (net/url), GO-2026-6091 (html/template),
+   GO-2026-6090 (crypto/tls), GO-2026-6089 (net/http), GO-2026-6088 (encoding/xml),
    GO-2026-5972 (encoding/asn1) and GO-2026-5026 (net/http); previously
    1.26.5 for GO-2026-5856 / CVE-2026-39822 — crypto/tls Encrypted Client
    Hello privacy leak), validated with a full `make build && make lint &&
@@ -122,6 +139,9 @@ Two structural problems made remediation harder than it should be:
 ## References
 
 - [ADR-007 — vulnerability scan](./ADR-007-vulnerability-scan.md) (scan + ignore lifecycle)
+- [ADR-014 — base-image digest pinning](./ADR-014-base-image-digest-pinning.md)
+  (why every base image carries a `@sha256:` digest, and why it may never be dropped)
+- [ADR-015 — SHA-pin GitHub Actions](./ADR-015-sha-pin-github-actions.md)
 - CLAUDE.md — "Version Pinning — MANDATORY", security invariant #4
 - Go 1.26.4 / 1.25.11 release (2026-06-02): CVE-2026-42504 / -42507 / -27145
 - Go 1.26.6 / 1.27.0 release: GO-2026-6218 (net/url), GO-2026-6091
