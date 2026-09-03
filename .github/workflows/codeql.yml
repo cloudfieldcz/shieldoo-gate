@@ -28,7 +28,7 @@ env:
   # reference by digest, so editing only the tag silently keeps building the
   # old, unpatched image. See ADR-010 for the authoritative seven-location
   # list and the CVEs this version fixes.
-  GO_VERSION: "1.27.0"
+  GO_VERSION: "1.27.1"
 
 jobs:
   codeql:

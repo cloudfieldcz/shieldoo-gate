@@ -22,7 +22,7 @@
 # editing only the tag silently keeps building the old, unpatched image with
 # no checksum failure to catch it. See ADR-010 for the authoritative
 # seven-location list.
-FROM golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc AS shdg-build
+FROM golang:1.27.1-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS shdg-build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -118,8 +118,8 @@ RUN apt-get update && \
 # values in .github/workflows/{ci,codeql,release}.yml. See ADR-010 for the
 # authoritative seven-location list.
 # ---------------------------------------------------------------------------
-ARG GO_VERSION=1.27.0
-ARG GO_SHA256=675c26c449cbb18fc24b74650de1eabbae6e16f64326fd85a283fb3b58280685
+ARG GO_VERSION=1.27.1
+ARG GO_SHA256=63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz && \
     echo "${GO_SHA256}  /tmp/go.tar.gz" | sha256sum -c - && \
     tar -C /usr/local -xzf /tmp/go.tar.gz && \

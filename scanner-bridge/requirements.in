@@ -2,8 +2,8 @@
 guarddog==3.2.0           # 3.x: drops semgrep, adds nono-py sandbox + S3 scanning.
                           # Still declares pygit2<1.19 -> Python 3.14 stays blocked
                           # (no cp314 wheel for pygit2 <1.19). See docs/development/ci.md.
-grpcio==1.83.0
-grpcio-tools==1.83.0      # MUST stay in lockstep with grpcio
+grpcio==1.83.1
+grpcio-tools==1.83.1      # MUST stay in lockstep with grpcio
 httpx==0.28.1             # DEV/TEST ONLY — nothing in the running image imports it.
                           # ssrf_guard.py does `import httpx`, but that module is not
                           # in the Dockerfile COPY list and no shipped module imports
