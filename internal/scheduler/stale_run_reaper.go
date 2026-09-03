@@ -9,9 +9,22 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// StaleRunThresholdFloor is the lower bound on the stale-run threshold. A scan that
+// StaleRunThresholdFloor is the lower bound on the stale-run threshold, applied to the
+// derived default AND to an explicitly configured value (see withDefaults). A scan that
 // legitimately overruns its per-component budget must never be reaped out from under
-// itself, so even a very short configured scan timeout still buys an hour of grace.
+// itself.
+//
+// The floor has to dominate every producer of an in-flight scan_runs row, not just the
+// scheduled-rescan path:
+//
+//	scheduled rescan  — vuln_scan.rescan.timeout (default 5m)
+//	upload            — api.Server.detachedCtx(), hardcoded 10m
+//	manual rescan     — api.Server.detachedCtx(), hardcoded 10m
+//
+// The two API paths additionally spend part of that budget blocked on the scan
+// concurrency semaphore with the row already 'pending' and started_at ticking, so 10m
+// is the true worst-case legitimate lifetime. One hour dominates it with room to spare;
+// vuln_scan.rescan.timeout alone would not, which is why the floor is not derived.
 const StaleRunThresholdFloor = time.Hour
 
 // staleRunTimeoutMultiplier scales the configured per-component scan timeout into the
@@ -35,15 +48,27 @@ func DefaultStaleRunThreshold(scanTimeout time.Duration) time.Duration {
 // StaleRunReaperConfig configures the stale scan-run reaper.
 type StaleRunReaperConfig struct {
 	Interval  time.Duration // how often to sweep; default 15m
-	Threshold time.Duration // age past which a pending/running row is considered wedged; default 1h
+	Threshold time.Duration // age past which a pending/running row is considered wedged; default 1h, clamped up to StaleRunThresholdFloor
 }
 
 func (c StaleRunReaperConfig) withDefaults() StaleRunReaperConfig {
 	if c.Interval <= 0 {
 		c.Interval = 15 * time.Minute
 	}
-	if c.Threshold <= 0 {
+	switch {
+	case c.Threshold <= 0:
+		// Unset, negative, or an unparseable duration string upstream.
 		c.Threshold = DefaultStaleRunThreshold(0)
+	case c.Threshold < StaleRunThresholdFloor:
+		// An explicitly configured value below the floor would reap live scans on
+		// every sweep — the API's detached scan context alone allows 10 minutes.
+		// Clamp rather than honour it, and say so loudly: silently reaping healthy
+		// scans is a worse failure than the wedge this reaper exists to clear.
+		log.Warn().
+			Str("configured", c.Threshold.String()).
+			Str("clamped_to", StaleRunThresholdFloor.String()).
+			Msg("stale_run_reaper: configured threshold below the safe floor, clamping")
+		c.Threshold = StaleRunThresholdFloor
 	}
 	return c
 }
@@ -173,7 +198,7 @@ func (r *StaleRunReaper) RunOnce(ctx context.Context) (int, error) {
 			Int64("run_id", row.ID).
 			Int64("component_id", row.ComponentID).
 			Str("stuck_status", row.Status).
-			Dur("age", now.Sub(row.StartedAt).Round(time.Second)).
+			Str("age", now.Sub(row.StartedAt).Round(time.Second).String()).
 			Msg("stale_run_reaper: scan run stuck past threshold, marked failed")
 	}
 	return reaped, nil

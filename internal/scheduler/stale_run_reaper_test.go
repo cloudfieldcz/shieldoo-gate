@@ -2,7 +2,6 @@ package scheduler_test
 
 import (
 	"context"
-	"strconv"
 	"testing"
 	"time"
 
@@ -15,15 +14,20 @@ import (
 
 // seedStaleRun inserts one scan_run for componentID with the given status, started
 // hoursAgo hours in the past, and returns its id.
+//
+// started_at is bound as a Go time.Time rather than built with SQLite's datetime(),
+// so the stored representation matches exactly what production writes
+// (component.Store.CreateScanRun binds time.Now().UTC() the same way) and the test does
+// not depend on a vendor function that would not port to a Postgres harness.
 func seedStaleRun(t *testing.T, db *config.GateDB, componentID int64, status string, hoursAgo int) int64 {
 	t.Helper()
+	startedAt := time.Now().UTC().Add(-time.Duration(hoursAgo) * time.Hour)
 	res, err := db.Exec(
 		`INSERT INTO scan_runs
 		   (component_id, trigger, status, sbom_blob_path, sbom_size_bytes, sbom_format,
 		    sbom_sha256, started_at)
-		 VALUES (?, 'rescan', ?, 'sboms/components/x.json', 0, 'cyclonedx-json', '',
-		         datetime('now', ?))`,
-		componentID, status, "-"+strconv.Itoa(hoursAgo)+" hours")
+		 VALUES (?, 'rescan', ?, 'sboms/components/x.json', 0, 'cyclonedx-json', '', ?)`,
+		componentID, status, startedAt)
 	require.NoError(t, err)
 	id, err := res.LastInsertId()
 	require.NoError(t, err)
@@ -183,16 +187,18 @@ func TestStaleRunReaper_ReapedComponent_BecomesRescanEligible(t *testing.T) {
 	require.NoError(t, err)
 	seedStaleRun(t, db, componentID, "running", 2160)
 
+	// Runs the production predicate itself, not a copy of it, so the two cannot drift.
 	eligible := func() []int64 {
-		var ids []int64
-		require.NoError(t, db.Select(&ids,
-			`SELECT id FROM components
-			 WHERE enabled = TRUE
-			   AND NOT EXISTS (
-			     SELECT 1 FROM scan_runs sr
-			     WHERE sr.component_id = components.id
-			       AND sr.status IN ('pending', 'running')
-			   )`))
+		type row struct {
+			ID         int64  `db:"id"`
+			LastScanID *int64 `db:"last_scan_id"`
+		}
+		var rows []row
+		require.NoError(t, db.Select(&rows, scheduler.RescanEligibleComponentsQuery))
+		ids := make([]int64, 0, len(rows))
+		for _, r := range rows {
+			ids = append(ids, r.ID)
+		}
 		return ids
 	}
 	require.Empty(t, eligible(), "wedged component must start out excluded")
@@ -238,4 +244,62 @@ func TestDefaultStaleRunThreshold_ShortTimeout_ReturnsFloor(t *testing.T) {
 func TestDefaultStaleRunThreshold_LongTimeout_ReturnsFourTimesTimeout(t *testing.T) {
 	assert.Equal(t, 2*time.Hour, scheduler.DefaultStaleRunThreshold(30*time.Minute))
 	assert.Equal(t, 4*time.Hour, scheduler.DefaultStaleRunThreshold(time.Hour))
+}
+
+// TestStaleRunReaper_StuckRunning_LogsHumanReadableAge pins the WARN's age rendering.
+// zerolog's Dur() would emit a bare unlabelled millisecond count (7776000000), which is
+// the least readable option for the one line an operator eyeball-triages.
+func TestStaleRunReaper_StuckRunning_LogsHumanReadableAge(t *testing.T) {
+	db := reaperTestDB(t)
+	componentID := seedReaperComponent(t, db, "scanner-bridge-image")
+	seedStaleRun(t, db, componentID, "running", 2160) // 90 days
+
+	buf := captureLogs(t)
+	reaper := scheduler.NewStaleRunReaper(scheduler.StaleRunReaperConfig{
+		Threshold: time.Hour,
+	}, db)
+	_, err := reaper.RunOnce(context.Background())
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, `"age":"2160h0m0s"`, "age must be a human-readable duration string")
+	assert.NotContains(t, out, `"age":7776000000`, "age must not be a bare millisecond count")
+	assert.Contains(t, out, `"level":"warn"`)
+	assert.Contains(t, out, `"stuck_status":"running"`)
+}
+
+// TestStaleRunReaper_ThresholdBelowFloor_ClampedToFloor asserts a misconfigured
+// threshold cannot make the reaper kill live scans. The whole design rests on the floor
+// dominating every legitimate scan budget (the longest is the API's 10m detached
+// context), so honouring "30s" verbatim would be actively destructive.
+func TestStaleRunReaper_ThresholdBelowFloor_ClampedToFloor(t *testing.T) {
+	db := reaperTestDB(t)
+	componentID := seedReaperComponent(t, db, "gate")
+	runID := seedStaleRun(t, db, componentID, "running", 0) // started just now
+
+	reaper := scheduler.NewStaleRunReaper(scheduler.StaleRunReaperConfig{
+		Threshold: 30 * time.Second,
+	}, db)
+	reaped, err := reaper.RunOnce(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, reaped, "a 30s threshold must be clamped to the 1h floor")
+	assert.Equal(t, "running", readRun(t, db, runID).Status)
+}
+
+// TestStaleRunReaper_ThresholdAboveFloor_Honoured is the other half: a value above the
+// floor is used verbatim, so the clamp does not flatten every configuration to 1h.
+func TestStaleRunReaper_ThresholdAboveFloor_Honoured(t *testing.T) {
+	db := reaperTestDB(t)
+	componentID := seedReaperComponent(t, db, "gate-image")
+	youngID := seedStaleRun(t, db, componentID, "running", 1) // 1h old, inside a 2h threshold
+	oldID := seedStaleRun(t, db, componentID, "running", 3)   // 3h old, outside it
+
+	reaper := scheduler.NewStaleRunReaper(scheduler.StaleRunReaperConfig{
+		Threshold: 2 * time.Hour,
+	}, db)
+	reaped, err := reaper.RunOnce(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, reaped)
+	assert.Equal(t, "running", readRun(t, db, youngID).Status)
+	assert.Equal(t, "failed", readRun(t, db, oldID).Status)
 }
