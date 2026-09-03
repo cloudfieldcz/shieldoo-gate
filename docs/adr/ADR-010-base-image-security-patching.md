@@ -57,16 +57,23 @@ Two structural problems made remediation harder than it should be:
 2. **Unify the Go toolchain on a single patched version.** `go.mod`'s `go`
    directive, the `golang:<ver>-alpine` builder tag in both `docker/Dockerfile`
    (`go-builder` stage) and `tests/e2e-shell/Dockerfile.test-runner`
-   (`shdg-build` stage), and CI `GO_VERSION` (`ci.yml`, `codeql.yml`,
-   `release.yml`) must always name the **same** version. Bumping the Go patch
-   level is done in lockstep across all six locations. The current target is
-   **1.27.0** (carries the go1.26.6 stdlib fixes for GO-2026-6218 (net/url),
-   GO-2026-6091 (html/template), GO-2026-6090 (crypto/tls), GO-2026-6089
-   (net/http), GO-2026-6088 (encoding/xml), GO-2026-5972 (encoding/asn1) and
-   GO-2026-5026 (net/http); previously 1.26.5 for GO-2026-5856 /
-   CVE-2026-39822 — crypto/tls Encrypted Client Hello privacy leak),
-   validated with a full `make build && make lint && make test` pass plus a
-   clean `govulncheck ./...` after the jump.
+   (`shdg-build` stage), CI `GO_VERSION` (`ci.yml`, `codeql.yml`,
+   `release.yml`), and the `ARG GO_VERSION` / `ARG GO_SHA256` pair that
+   installs a *second*, tarball-based Go toolchain later in
+   `tests/e2e-shell/Dockerfile.test-runner` (onto `PATH` ahead of the
+   `shdg-build` one, for the e2e test client itself) must always name the
+   **same** version. That last location is a **two-value** bump: `GO_VERSION`
+   and `GO_SHA256` change together, or the Dockerfile's `sha256sum -c` fails
+   the build — get the checksum from `https://go.dev/dl/?mode=json` (the
+   `linux-amd64` archive entry for that version), never invent one. Bumping
+   the Go patch level is done in lockstep across all **seven** locations. The
+   current target is **1.27.0** (carries the go1.26.6 stdlib fixes for
+   GO-2026-6218 (net/url), GO-2026-6091 (html/template), GO-2026-6090
+   (crypto/tls), GO-2026-6089 (net/http), GO-2026-6088 (encoding/xml),
+   GO-2026-5972 (encoding/asn1) and GO-2026-5026 (net/http); previously
+   1.26.5 for GO-2026-5856 / CVE-2026-39822 — crypto/tls Encrypted Client
+   Hello privacy leak), validated with a full `make build && make lint &&
+   make test` pass plus a clean `govulncheck ./...` after the jump.
 
 3. **Third-party embedded binaries are tracked, not silently shipped.** Go-stdlib
    findings originating from bundled third-party binaries (e.g. `aquasec/trivy`'s
@@ -111,3 +118,7 @@ Two structural problems made remediation harder than it should be:
 - [ADR-007 — vulnerability scan](./ADR-007-vulnerability-scan.md) (scan + ignore lifecycle)
 - CLAUDE.md — "Version Pinning — MANDATORY", security invariant #4
 - Go 1.26.4 / 1.25.11 release (2026-06-02): CVE-2026-42504 / -42507 / -27145
+- Go 1.26.6 / 1.27.0 release: GO-2026-6218 (net/url), GO-2026-6091
+  (html/template), GO-2026-6090 (crypto/tls), GO-2026-6089 (net/http),
+  GO-2026-6088 (encoding/xml), GO-2026-5972 (encoding/asn1), GO-2026-5026
+  (net/http)
