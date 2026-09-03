@@ -1,8 +1,8 @@
 """Tests for ssrf_guard.
 
-These cover the validation gate (`validate_url`); the integrated `safe_get`
-fetch path needs a real public host or extensive mocking and is exercised in
-E2E.
+`validate_url` is the module's entire surface — there is no fetch helper, by
+design (see the module docstring). So these tests are the complete coverage,
+not the unit half of a pair.
 """
 
 import os

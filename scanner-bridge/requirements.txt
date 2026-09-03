@@ -8,7 +8,6 @@ anyio==4.14.1 \
     --hash=sha256:4e5533c5b8ff0a24f5d7a176cbe6877129cd183893f66b537f8f227d10527d72 \
     --hash=sha256:8d648a3544c1a700e3ff78615cd679e4c5c3f149904287e73687b2596963629e
     # via
-    #   httpx
     #   httpx2
     #   openai
 boto3==1.43.37 \
@@ -24,10 +23,7 @@ botocore==1.43.37 \
 certifi==2026.6.17 \
     --hash=sha256:024c88eeec92ca068db80f02b8b07c9cef7b9fe261d1d535abfd5abd6f6af432 \
     --hash=sha256:2227dcbaafe0d2f59279d1762ddddc37783ed4354594f194ffc31d20f41fc3db
-    # via
-    #   httpcore
-    #   httpx
-    #   requests
+    # via requests
 cffi==2.0.0 \
     --hash=sha256:00bdf7acc5f795150faa6957054fbbca2439db2f775ce831222b66f192f03beb \
     --hash=sha256:07b271772c100085dd28b74fa0cd81c8fb1a3ba18b21e03d7c27f3436a10606b \
@@ -425,21 +421,11 @@ guarddog==3.2.0 \
 h11==0.16.0 \
     --hash=sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1 \
     --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
-    # via
-    #   httpcore
-    #   httpcore2
-httpcore==1.0.9 \
-    --hash=sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55 \
-    --hash=sha256:6e34463af53fd2ab5d807f399a9b45ea31c3dfa2276f15a2c3f00afff6e176e8
-    # via httpx
+    # via httpcore2
 httpcore2==2.12.0 \
     --hash=sha256:7e04258ce01013d7d615e5b910a3b27fac937d7a95038227e79652b4ba3b4ceb \
     --hash=sha256:9293522bba0aa7c4c8e9e3f040c16575bd8868e155a77fa30c7a9085a5eae648
     # via httpx2
-httpx==0.28.1 \
-    --hash=sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc \
-    --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad
-    # via -r requirements.in
 httpx2==2.12.0 \
     --hash=sha256:7631fe9887a8a2275f4a2540e053aa670fcc50742864a9ae7c66e609fdcf12cf \
     --hash=sha256:cc8b6eecb8661c146b8f89a60e97456ee086e91a784ed31ac450c3a9e613dd36
@@ -450,7 +436,6 @@ idna==3.19 \
     # via
     #   -r requirements.in
     #   anyio
-    #   httpx
     #   httpx2
     #   requests
 iniconfig==2.3.0 \

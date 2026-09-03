@@ -1,7 +1,9 @@
 -- Components: technology components belonging to a Project that get vulnerability-scanned
 -- via CycloneDX SBOM uploads from CI. Each Component has a stable name (CI-supplied),
--- an ecosystem, and an optional repo_url that the AI Drafter can use after passing the
--- SSRF allowlist (see scanner-bridge/ssrf_guard.py).
+-- an ecosystem, and an optional repo_url. NOTE: repo_url is stored but not yet consumed —
+-- the AI Drafter does not fetch repo source in this release. When it does, the URL must
+-- pass scanner-bridge/ssrf_guard.py's validate_url first (and that fetch needs a
+-- connection-pinning client, which the guard deliberately does not provide).
 --
 -- ON DELETE RESTRICT on project_id (NOT CASCADE): a project cannot be hard-deleted while
 -- it owns components. This protects ignore audit evidence — a project-level cascade would
