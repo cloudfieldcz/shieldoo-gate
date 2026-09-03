@@ -57,14 +57,21 @@ Both release Dockerfiles pin their base image by digest
 upgrade of already-installed OS packages in the runtime stage, on top of that
 pinned base: `docker/Dockerfile`'s `apk upgrade --no-cache` (gate, alpine) and
 `scanner-bridge/Dockerfile`'s `apt-get upgrade -y` (scanner-bridge, Debian).
-Neither weakens the digest pin — both package managers already resolve
-against their *live* distro repos regardless of the base digest, so upgrading
-does not change the image's reproducibility posture. What it buys is that a
-plain rebuild picks up OS-security fixes published after the base tag was
-cut (e.g. `libssl3`/`libcrypto3` in alpine's `v3.24` repo) instead of waiting
-for the next base-tag bump. See [ADR-010](../adr/ADR-010-base-image-security-patching.md)
-for the full rationale and the `perl-base` force-purge that goes with it on
-the scanner-bridge side.
+This **does** widen what the runtime layer can pull in at build time — for
+`docker/Dockerfile` it now covers the entire installed base set, not just the
+two packages `apk add` itself installs — and that is a deliberate trade-off,
+not a false one: security currency, bought at the cost of byte-for-byte
+reproducibility of the OS layer, same framing as
+[ADR-010](../adr/ADR-010-base-image-security-patching.md)'s Consequences. What
+bounds the widened surface is that both package managers verify fetched
+package signatures against the distro keys baked into the pinned base image
+(`/etc/apk/keys` for apk, the base image's APT keyring for apt), fetched over
+HTTPS — the base digest pin is not what's doing the integrity work here, the
+package manager's own signature check is. On a build that actually executes
+this layer, the upgrade picks up OS-security fixes published after the base
+tag was cut (e.g. `libssl3`/`libcrypto3` in alpine's `v3.24` repo) instead of
+waiting for the next base-tag bump. See ADR-010 for the full rationale and the
+`perl-base` force-purge that goes with it on the scanner-bridge side.
 
 ### Security scan (`codeql.yml`)
 
