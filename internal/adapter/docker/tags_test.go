@@ -150,3 +150,99 @@ func TestGetTagByDigest_NoMatch_ReturnsEmpty(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, tags, 0)
 }
+
+func TestCountTags_EmptyRepo_ReturnsZero(t *testing.T) {
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo, err := docker.EnsureRepository(db, "", "myteam/myapp", true)
+	require.NoError(t, err)
+
+	count, err := docker.CountTags(db, repo.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
+
+func TestCountTags_WithTags_ReturnsCount(t *testing.T) {
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo, err := docker.EnsureRepository(db, "", "myteam/myapp", true)
+	require.NoError(t, err)
+	for _, tag := range []string{"v1.0", "v2.0", "v3.0"} {
+		require.NoError(t, docker.UpsertTag(db, repo.ID, tag, "sha256:aa", ""))
+	}
+
+	count, err := docker.CountTags(db, repo.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 3, count)
+}
+
+func TestListTagsPage_NoCursor_ReturnsFirstPageInOrder(t *testing.T) {
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo, err := docker.EnsureRepository(db, "", "myteam/myapp", true)
+	require.NoError(t, err)
+	for _, tag := range []string{"v3.0", "v1.0", "v2.0"} {
+		require.NoError(t, docker.UpsertTag(db, repo.ID, tag, "sha256:aa", ""))
+	}
+
+	page, err := docker.ListTagsPage(db, repo.ID, "", 2)
+	require.NoError(t, err)
+	require.Len(t, page, 2)
+	assert.Equal(t, "v1.0", page[0].Tag)
+	assert.Equal(t, "v2.0", page[1].Tag)
+}
+
+func TestListTagsPage_WithCursor_SkipsUpToCursor(t *testing.T) {
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo, err := docker.EnsureRepository(db, "", "myteam/myapp", true)
+	require.NoError(t, err)
+	for _, tag := range []string{"v1.0", "v2.0", "v3.0"} {
+		require.NoError(t, docker.UpsertTag(db, repo.ID, tag, "sha256:aa", ""))
+	}
+
+	page, err := docker.ListTagsPage(db, repo.ID, "v2.0", 10)
+	require.NoError(t, err)
+	require.Len(t, page, 1)
+	assert.Equal(t, "v3.0", page[0].Tag)
+}
+
+func TestListTagsPage_CursorPastEnd_ReturnsEmpty(t *testing.T) {
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+
+	repo, err := docker.EnsureRepository(db, "", "myteam/myapp", true)
+	require.NoError(t, err)
+	require.NoError(t, docker.UpsertTag(db, repo.ID, "v1.0", "sha256:aa", ""))
+
+	page, err := docker.ListTagsPage(db, repo.ID, "zzz", 10)
+	require.NoError(t, err)
+	assert.Empty(t, page)
+}
+
+func TestListTagsPage_OtherRepoTags_NotIncluded(t *testing.T) {
+	db, err := config.InitDB(config.SQLiteMemoryConfig())
+	require.NoError(t, err)
+	defer db.Close()
+
+	mine, err := docker.EnsureRepository(db, "", "myteam/myapp", true)
+	require.NoError(t, err)
+	other, err := docker.EnsureRepository(db, "", "myteam/other", true)
+	require.NoError(t, err)
+	require.NoError(t, docker.UpsertTag(db, mine.ID, "v1.0", "sha256:aa", ""))
+	require.NoError(t, docker.UpsertTag(db, other.ID, "v9.9", "sha256:bb", ""))
+
+	page, err := docker.ListTagsPage(db, mine.ID, "", 10)
+	require.NoError(t, err)
+	require.Len(t, page, 1)
+	assert.Equal(t, "v1.0", page[0].Tag)
+}

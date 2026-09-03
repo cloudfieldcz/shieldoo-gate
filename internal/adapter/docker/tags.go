@@ -54,6 +54,40 @@ func ListTags(db *config.GateDB, repoID int64) ([]DockerTag, error) {
 	return tags, nil
 }
 
+// tagColumns is the explicit column list for docker_tags queries.
+// Keep in sync with the DockerTag struct fields.
+const tagColumns = "id, repo_id, tag, manifest_digest, artifact_id, created_at, updated_at"
+
+// CountTags returns how many tags a repository has. Used to decide whether a
+// repository is served from the internal store at all, independently of any
+// pagination cursor.
+func CountTags(db *config.GateDB, repoID int64) (int, error) {
+	var count int
+	if err := db.Get(&count, "SELECT COUNT(*) FROM docker_tags WHERE repo_id = ?", repoID); err != nil {
+		return 0, fmt.Errorf("docker: counting tags for repo %d: %w", repoID, err)
+	}
+	return count, nil
+}
+
+// ListTagsPage returns at most `limit` tags for a repository that sort after
+// `after`, in ascending tag order. Passing an empty `after` starts at the first
+// tag.
+//
+// Filtering and ordering happen in the same statement so the cursor comparison
+// always uses the database's collation for `tag` — doing the `> after` filter in
+// Go would compare bytes while the database ordered by its own collation, which
+// can silently skip tags.
+func ListTagsPage(db *config.GateDB, repoID int64, after string, limit int) ([]DockerTag, error) {
+	var tags []DockerTag
+	err := db.Select(&tags,
+		"SELECT "+tagColumns+" FROM docker_tags WHERE repo_id = ? AND tag > ? ORDER BY tag LIMIT ?",
+		repoID, after, limit)
+	if err != nil {
+		return nil, fmt.Errorf("docker: listing tag page for repo %d: %w", repoID, err)
+	}
+	return tags, nil
+}
+
 // DeleteTag removes a tag from a repository.
 func DeleteTag(db *config.GateDB, repoID int64, tag string) error {
 	result, err := db.Exec(

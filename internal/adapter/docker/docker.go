@@ -175,6 +175,7 @@ func (a *DockerAdapter) handleV2Check(w http.ResponseWriter, r *http.Request) {
 // Expected path forms:
 //   - /v2/{name}/manifests/{ref}
 //   - /v2/{name}/blobs/{digest}
+//   - /v2/{name}/tags/list
 func (a *DockerAdapter) handleV2Wildcard(w http.ResponseWriter, r *http.Request) {
 	// chi wildcard gives us everything after /v2/
 	wildcardPath := chi.URLParam(r, "*")
@@ -184,6 +185,12 @@ func (a *DockerAdapter) handleV2Wildcard(w http.ResponseWriter, r *http.Request)
 	blobsIdx := strings.LastIndex(wildcardPath, "/blobs/")
 
 	switch {
+	// The tag-list suffix is fixed, so the image name is everything before it.
+	// Checked first: the suffix is unambiguous, while a repository could in
+	// principle be named ".../manifests"/".../blobs".
+	case strings.HasSuffix(wildcardPath, "/tags/list"):
+		a.handleTagsList(w, r, strings.TrimSuffix(wildcardPath, "/tags/list"))
+
 	case manifestsIdx > 0:
 		name := wildcardPath[:manifestsIdx]
 		ref := wildcardPath[manifestsIdx+len("/manifests/"):]
@@ -1356,15 +1363,25 @@ func (a *DockerAdapter) persistArtifact(
 	return nil
 }
 
-// proxyUpstream forwards the request to the upstream registry and relays the response.
-// Used for blob pass-through only.
-// SECURITY: Uses per-registry credentials from config, NOT client Authorization header.
-func (a *DockerAdapter) proxyUpstream(w http.ResponseWriter, r *http.Request, upstreamURL, registryHost, path string) {
+// doUpstreamGet issues an authenticated GET to the upstream registry, handling
+// the Docker Registry v2 Bearer token exchange when the first attempt returns
+// 401. On success it returns the response (the caller owns and must close
+// resp.Body); on failure it returns (nil, httpStatus, message) for the caller
+// to relay to the client.
+//
+// A 401 whose Www-Authenticate header is not parseable is returned as-is (with
+// its body already closed) so the caller relays the upstream status verbatim.
+//
+// SECURITY: Uses per-registry credentials from config, NOT the client
+// Authorization header.
+func (a *DockerAdapter) doUpstreamGet(r *http.Request, upstreamURL, registryHost, path, rawQuery string) (*http.Response, int, string) {
 	target := upstreamURL + path
+	if rawQuery != "" {
+		target += "?" + rawQuery
+	}
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
 	if err != nil {
-		http.Error(w, "upstream request error", http.StatusInternalServerError)
-		return
+		return nil, http.StatusInternalServerError, "upstream request error"
 	}
 
 	// Forward Accept header only. NEVER forward Authorization from client.
@@ -1378,8 +1395,7 @@ func (a *DockerAdapter) proxyUpstream(w http.ResponseWriter, r *http.Request, up
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		http.Error(w, "upstream unreachable", http.StatusBadGateway)
-		return
+		return nil, http.StatusBadGateway, "upstream unreachable"
 	}
 
 	// Handle 401 — Bearer token exchange (Docker Registry v2 auth flow).
@@ -1391,14 +1407,12 @@ func (a *DockerAdapter) proxyUpstream(w http.ResponseWriter, r *http.Request, up
 			token, tokenErr := a.tokenExch.exchangeToken(r.Context(), realm, service, scope)
 			if tokenErr != nil {
 				log.Error().Err(tokenErr).Str("target", target).Msg("docker: proxy upstream: token exchange failed")
-				http.Error(w, "upstream auth failed", http.StatusBadGateway)
-				return
+				return nil, http.StatusBadGateway, "upstream auth failed"
 			}
 			// Retry with Bearer token.
 			req2, err2 := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
 			if err2 != nil {
-				http.Error(w, "upstream request error", http.StatusInternalServerError)
-				return
+				return nil, http.StatusInternalServerError, "upstream request error"
 			}
 			if v := r.Header.Get("Accept"); v != "" {
 				req2.Header.Set("Accept", v)
@@ -1406,11 +1420,22 @@ func (a *DockerAdapter) proxyUpstream(w http.ResponseWriter, r *http.Request, up
 			req2.Header.Set("Authorization", "Bearer "+token)
 			resp, err = a.httpClient.Do(req2)
 			if err != nil {
-				http.Error(w, "upstream unreachable", http.StatusBadGateway)
-				return
+				return nil, http.StatusBadGateway, "upstream unreachable"
 			}
 		}
-		// If Www-Authenticate was not parseable, fall through and proxy the 401 as-is.
+		// If Www-Authenticate was not parseable, fall through and relay the 401 as-is.
+	}
+	return resp, 0, ""
+}
+
+// proxyUpstream forwards the request to the upstream registry and relays the response.
+// Used for blob pass-through only.
+// SECURITY: Uses per-registry credentials from config, NOT client Authorization header.
+func (a *DockerAdapter) proxyUpstream(w http.ResponseWriter, r *http.Request, upstreamURL, registryHost, path string) {
+	resp, errStatus, errMsg := a.doUpstreamGet(r, upstreamURL, registryHost, path, "")
+	if resp == nil {
+		http.Error(w, errMsg, errStatus)
+		return
 	}
 	defer resp.Body.Close()
 

@@ -56,6 +56,36 @@ _check_docker_pull_result() {
     return 1
 }
 
+# _tl_sha256_hex "<string>" → lowercase hex sha256 (coreutils/shasum/openssl fallbacks).
+_tl_sha256_hex() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s' "$1" | sha256sum | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
+    else
+        printf '%s' "$1" | openssl dgst -sha256 | awk '{print $NF}'
+    fi
+}
+
+# _tl_push_blob "<base>" "<digest>" "<content>" → echoes the final HTTP status.
+# Monolithic upload: POST opens a session, PUT sends the bytes with ?digest=.
+_tl_push_blob() {
+    local base="$1" digest="$2" content="$3"
+    local loc
+    loc=$(curl -s -D - -o /dev/null "${E2E_CURL_AUTH[@]}" -X POST "${base}/blobs/uploads/" \
+        | grep -i '^Location:' | tr -d '\r' | awk '{print $2}')
+    if [ -z "$loc" ]; then
+        echo "000"
+        return
+    fi
+    case "$loc" in
+        http*) : ;;
+        *) loc="${E2E_DOCKER_URL}${loc}" ;;
+    esac
+    curl -s -o /dev/null -w '%{http_code}' "${E2E_CURL_AUTH[@]}" \
+        -X PUT "${loc}?digest=${digest}" --data-binary "$content"
+}
+
 test_docker_registry() {
     log_section "Docker Registry Redesign Tests"
 
@@ -276,6 +306,174 @@ test_docker_registry() {
     else
         log_skip "Docker Registry: no repositories registered (pull tests may have timed out)"
     fi
+
+    # ==================================================================
+    # Part 5: TAG LISTING — GET /v2/{name}/tags/list (issue #196)
+    # Instant: names only, no manifests/blobs, no scan pipeline.
+    # ==================================================================
+
+    log_info "Docker Registry: testing tag listing..."
+
+    # Upstream (allowlisted registry) tag list — the endpoint Dependabot's
+    # docker ecosystem calls before it compares digests.
+    local tags_body tags_status
+    tags_body=$(curl -s -w "\n%{http_code}" "${E2E_CURL_AUTH[@]}" \
+        "${E2E_DOCKER_URL}/v2/ghcr.io/jitesoft/alpine/tags/list")
+    tags_status=$(tail -n1 <<< "$tags_body")
+    tags_body=$(sed '$d' <<< "$tags_body")
+    if [ "$tags_status" = "200" ]; then
+        local tag_count
+        tag_count=$(jq -r '.tags | length' <<< "$tags_body" 2>/dev/null || echo "0")
+        assert_eq "Docker Registry: tags/list reports the client-facing image name" \
+            "ghcr.io/jitesoft/alpine" "$(jq -r '.name' <<< "$tags_body" 2>/dev/null || echo "")"
+        if [ "$tag_count" -gt 0 ] 2>/dev/null; then
+            log_pass "Docker Registry: tags/list on ghcr.io returned ${tag_count} tags"
+        else
+            log_fail "Docker Registry: tags/list on ghcr.io returned an empty tag list"
+        fi
+    else
+        log_skip "Docker Registry: tags/list on ghcr.io returned HTTP ${tags_status}"
+    fi
+
+    # crane ls exercises the same endpoint through a real OCI client.
+    local crane_ls_output
+    if crane_ls_output=$(_timed_crane ls "${E2E_DOCKER_REGISTRY_HOST}/ghcr.io/jitesoft/alpine" --insecure 2>&1); then
+        if [ -n "$crane_ls_output" ]; then
+            log_pass "Docker Registry: crane ls lists tags through the gate"
+        else
+            log_fail "Docker Registry: crane ls returned no tags"
+        fi
+    else
+        log_skip "Docker Registry: crane ls failed: ${crane_ls_output}"
+    fi
+
+    # Pagination: ?n=1 must return at most one tag; when the upstream paginates,
+    # the Link header must point back at the gate (client-facing image name),
+    # never at the upstream registry or a different repository.
+    local page_headers page_body page_tags
+    local tags_page_file
+    tags_page_file=$(mktemp "${TMPDIR:-/tmp}/e2e_docker_tags_page.XXXXXX")
+    page_headers=$(curl -s -D - -o "$tags_page_file" "${E2E_CURL_AUTH[@]}" \
+        "${E2E_DOCKER_URL}/v2/ghcr.io/jitesoft/alpine/tags/list?n=1" 2>/dev/null || true)
+    page_body=$(cat "$tags_page_file" 2>/dev/null || echo '{}')
+    page_tags=$(jq -r '.tags | length' <<< "$page_body" 2>/dev/null || echo "0")
+    if [ "$page_tags" -le 1 ] 2>/dev/null; then
+        log_pass "Docker Registry: tags/list?n=1 honoured page size (${page_tags} tag)"
+    else
+        log_fail "Docker Registry: tags/list?n=1 returned ${page_tags} tags"
+    fi
+    local link_header
+    link_header=$(grep -i "^link:" <<< "$page_headers" || true)
+    if [ -n "$link_header" ]; then
+        assert_contains "Docker Registry: tags/list Link header rewritten to the gate path" \
+            "/v2/ghcr.io/jitesoft/alpine/tags/list" "$link_header"
+        if grep -qi "https\?://" <<< "$link_header"; then
+            log_fail "Docker Registry: tags/list Link header leaks an absolute upstream URL: ${link_header}"
+        else
+            log_pass "Docker Registry: tags/list Link header is gate-relative"
+        fi
+    else
+        log_skip "Docker Registry: upstream did not paginate tags/list (no Link header)"
+    fi
+
+    # Response hardening: the body is re-encoded by the gate, so the media type is
+    # always JSON and never sniffable.
+    local tags_hdrs
+    tags_hdrs=$(curl -s -D - -o /dev/null "${E2E_CURL_AUTH[@]}" \
+        "${E2E_DOCKER_URL}/v2/ghcr.io/jitesoft/alpine/tags/list" 2>/dev/null || true)
+    assert_contains "Docker Registry: tags/list sets nosniff" "nosniff" "$tags_hdrs"
+    assert_contains "Docker Registry: tags/list serves application/json" "application/json" "$tags_hdrs"
+
+    # Unknown query parameters must not reach the upstream (a mirror upstream
+    # honours ?ns=, which would escape the allowlist decision).
+    local tags_ns_status
+    tags_ns_status=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_CURL_AUTH[@]}" \
+        "${E2E_DOCKER_URL}/v2/ghcr.io/jitesoft/alpine/tags/list?ns=evil.example.com&n=1")
+    assert_eq "Docker Registry: tags/list ignores unknown query parameters" "200" "$tags_ns_status"
+
+    # Allowlist enforcement applies to tag listing too.
+    local tags_denied_status
+    tags_denied_status=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_CURL_AUTH[@]}" \
+        "${E2E_DOCKER_URL}/v2/evil.io/malware/pkg/tags/list")
+    assert_eq "Docker Registry: tags/list on disallowed registry returns 403" "403" "$tags_denied_status"
+
+    # Malformed pagination is rejected before any upstream request.
+    local tags_badn_status
+    tags_badn_status=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_CURL_AUTH[@]}" \
+        "${E2E_DOCKER_URL}/v2/ghcr.io/jitesoft/alpine/tags/list?n=nope")
+    assert_eq "Docker Registry: tags/list with invalid n returns 400" "400" "$tags_badn_status"
+
+    # Internal (pushed) namespace tag list comes from docker_tags, not upstream.
+    # A synthetic image is pushed over the raw registry API (same recipe as
+    # test_docker_push_durable.sh) so this does not depend on an upstream pull
+    # surviving the scan pipeline.
+    local TL_NS="myteam/taglisttest"
+    local TL_BASE="${E2E_DOCKER_URL}/v2/${TL_NS}"
+    local TL_CFG='{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}'
+    local TL_LAYER='shieldoo-taglist-e2e-layer'
+    local TL_CFG_DIGEST TL_LAYER_DIGEST
+    TL_CFG_DIGEST="sha256:$(_tl_sha256_hex "$TL_CFG")"
+    TL_LAYER_DIGEST="sha256:$(_tl_sha256_hex "$TL_LAYER")"
+
+    local tl_code
+    tl_code=$(_tl_push_blob "$TL_BASE" "$TL_CFG_DIGEST" "$TL_CFG")
+    if [ "$tl_code" != "201" ]; then
+        log_skip "Docker Registry: internal tags/list — config blob upload returned ${tl_code} (push API unavailable)"
+    else
+        tl_code=$(_tl_push_blob "$TL_BASE" "$TL_LAYER_DIGEST" "$TL_LAYER")
+        assert_eq "Docker Registry: internal tags/list — layer blob upload accepted" "201" "$tl_code"
+
+        local TL_MANIFEST
+        TL_MANIFEST=$(printf '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"%s","size":%d},"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar+gzip","digest":"%s","size":%d}]}' \
+            "$TL_CFG_DIGEST" "${#TL_CFG}" "$TL_LAYER_DIGEST" "${#TL_LAYER}")
+
+        local tl_put_code
+        tl_put_code=$(curl -s -o /dev/null -w '%{http_code}' "${E2E_CURL_AUTH[@]}" \
+            -X PUT -H "Content-Type: application/vnd.oci.image.manifest.v1+json" \
+            --data-binary "$TL_MANIFEST" "${TL_BASE}/manifests/v1")
+
+        if [ "$tl_put_code" != "201" ]; then
+            log_skip "Docker Registry: internal tags/list — manifest PUT returned ${tl_put_code} (blocked by policy)"
+        else
+            local internal_tags_body internal_tags_status
+            internal_tags_body=$(curl -s -w "\n%{http_code}" "${E2E_CURL_AUTH[@]}" "${TL_BASE}/tags/list")
+            internal_tags_status=$(tail -n1 <<< "$internal_tags_body")
+            internal_tags_body=$(sed '$d' <<< "$internal_tags_body")
+            assert_eq "Docker Registry: internal tags/list returns 200 for a pushed image" \
+                "200" "$internal_tags_status"
+            assert_contains "Docker Registry: internal tags/list lists the pushed tag" \
+                "v1" "$(jq -r '.tags | join(",")' <<< "$internal_tags_body" 2>/dev/null || echo "")"
+            assert_eq "Docker Registry: internal tags/list reports the internal image name" \
+                "$TL_NS" "$(jq -r '.name' <<< "$internal_tags_body" 2>/dev/null || echo "")"
+
+            # Internal listings paginate locally: ?n=1 caps the page and, when
+            # more tags exist, emits a gate-relative Link. With one tag there is
+            # no next page, so the Link header must be absent.
+            local internal_page_headers internal_page_tags
+            internal_page_headers=$(curl -s -D - -o "$tags_page_file" "${E2E_CURL_AUTH[@]}" \
+                "${TL_BASE}/tags/list?n=1" 2>/dev/null || true)
+            internal_page_tags=$(jq -r '.tags | length' < "$tags_page_file" 2>/dev/null || echo "0")
+            assert_eq "Docker Registry: internal tags/list?n=1 returns one tag" "1" "$internal_page_tags"
+            if grep -qi "^link:" <<< "$internal_page_headers"; then
+                log_fail "Docker Registry: internal tags/list emitted a Link header with no next page"
+            else
+                log_pass "Docker Registry: internal tags/list omits Link on the last page"
+            fi
+
+            # A push-allowed name that was never pushed must not be answered from
+            # the internal store — it falls through to upstream (404 once the gate
+            # cannot authenticate there), never 200 with foreign tags.
+            local unknown_status
+            unknown_status=$(curl -s -o /dev/null -w "%{http_code}" "${E2E_CURL_AUTH[@]}" \
+                "${E2E_DOCKER_URL}/v2/myteam/never-pushed-${RANDOM}/tags/list")
+            if [ "$unknown_status" = "404" ] || [ "$unknown_status" = "403" ]; then
+                log_pass "Docker Registry: never-pushed internal name does not list tags (HTTP ${unknown_status})"
+            else
+                log_fail "Docker Registry: never-pushed internal name returned HTTP ${unknown_status}"
+            fi
+        fi
+    fi
+    rm -f "$tags_page_file"
 
     # Gate logs contain docker scan pipeline entries
     local gate_logs

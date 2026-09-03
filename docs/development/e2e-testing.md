@@ -225,7 +225,7 @@ marked **(both)** run in `run_all.sh` and `run.sh`; **(container)** run only in
 | **`npm_multi_index`** | both | **Multi-upstream npm — see §5.** |
 | `nuget` | both | `dotnet restore` through the proxy (self-skips without `dotnet`). |
 | **`nuget_multi_index`** | both | **Multi-upstream NuGet — see §5.** |
-| `docker` / `docker_registry` | both | OCI pull/push via `crane`, multi-registry, allowlist 403s, tag API, sync, scan pipeline. |
+| `docker` / `docker_registry` | both | OCI pull/push via `crane`, multi-registry, allowlist 403s, tag listing (`GET /v2/{name}/tags/list` upstream + internal, `?n=` paging, gate-relative `Link`), tag API, sync, scan pipeline. |
 | `docker_push_durable` | container | Push durability + quarantine-gating (needs a durable backend pass). |
 | `maven` | both | `mvn`/coordinate fetch through the proxy. |
 | **`maven_multi_index`** | both | **Multi-upstream Maven — see §5.** |
