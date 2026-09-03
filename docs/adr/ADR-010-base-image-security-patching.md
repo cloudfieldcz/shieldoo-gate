@@ -12,8 +12,12 @@ and Go-stdlib CVEs in the two release images:
   of findings — `openssl`, `perl-base`, `ncurses`, `libsqlite3`, `glibc`,
   `util-linux`, etc. These come from the Debian base, not from our Python code
   (the source-tree `scanner-bridge` component is clean).
-- **`gate-image`** (`alpine`) findings are Go stdlib only, embedded in the compiled
-  binaries: `shieldoo-gate` (our binary) and the bundled `aquasec/trivy` binary.
+- **`gate-image`** (`alpine`) findings are Go stdlib embedded in the compiled
+  binaries (`shieldoo-gate` and the bundled `aquasec/trivy` binary) **plus**
+  alpine base-package CVEs — `libssl3`/`libcrypto3` at `3.5.7-r0` (2 HIGH + 6
+  MEDIUM + 12 LOW, fixed in `3.5.8-r0`), missed for the same structural reason
+  as the Debian findings below: the runtime stage only ran `apk add`, never
+  `apk upgrade` (added 2026-09, see Decision §1).
 
 Two structural problems made remediation harder than it should be:
 
@@ -32,11 +36,18 @@ Two structural problems made remediation harder than it should be:
 ## Decision
 
 1. **Pin the base tag, then layer security patches at build time.** The base image
-   stays pinned to an exact tag for reproducibility, and a `RUN apt-get update &&
-   apt-get upgrade -y && rm -rf /var/lib/apt/lists/*` layer in the **runtime** stage
-   pulls whatever fixed package versions Debian-security has published at build time.
-   This is a *bounded, deliberate* exception to strict version pinning: it applies
-   only to base-image OS packages (never to application dependencies), runs only in
+   stays pinned to an exact tag for reproducibility, and an OS-package-manager
+   upgrade layer in the **runtime** stage pulls whatever fixed package versions
+   the distro's security repo has published at build time: `RUN apt-get update &&
+   apt-get upgrade -y && rm -rf /var/lib/apt/lists/*` for `scanner-bridge-image`
+   (Debian), and `RUN apk upgrade --no-cache && apk add --no-cache …` for
+   `gate-image` (alpine, added 2026-09 — see Context above). Both package
+   managers verify fetched package signatures against the distro keys baked
+   into the pinned base layer (`/etc/apk/keys` for apk, the base image's APT
+   keyring for apt), fetched over HTTPS — that signature check, not the digest
+   pin, is what bounds the trust surface this upgrade step opens up. This is a
+   *bounded, deliberate* exception to strict version pinning: it applies only
+   to base-image OS packages (never to application dependencies), runs only in
    the final/runtime stage, and is reproducible-per-build because the base tag is
    pinned. Application dependencies remain strictly pinned with hashes
    (`requirements.txt` via `uv pip compile --generate-hashes`, `go.sum`,
@@ -116,14 +127,18 @@ Two structural problems made remediation harder than it should be:
 - **Positive:** OS CVEs with an upstream fix clear on the next image build without
   waiting for a base-tag bump. Stdlib findings become deterministic (one Go version
   everywhere). The remediation path for every image finding is now one of a small,
-  documented set: *bump base tag*, *apt upgrade clears it*, *bump Go*, *bump pinned
+  documented set: *bump base tag*, *apt/apk upgrade clears it*, *bump Go*, *bump pinned
   third-party image*, or *time-boxed `cve_ignore`*.
-- **Negative / accepted:** `apt-get upgrade` makes the runtime layer's exact OS
-  package set vary with Debian-security's publish state at build time — two builds of
-  the same commit on different days can differ in OS package patch levels. This is
-  the intended trade-off (security currency over byte-for-byte reproducibility of the
-  OS layer); the base tag and all application deps remain pinned, so application
-  behaviour is unchanged.
+- **Negative / accepted:** `apt-get upgrade` (scanner-bridge) and `apk upgrade`
+  (gate) make each runtime layer's exact OS package set vary with the distro's
+  security repo publish state at build time — two builds of the same commit on
+  different days can differ in OS package patch levels, and for `gate-image` this
+  now covers the *entire* installed base set (previously only the two packages
+  `apk add` itself installed). This is the intended trade-off (security currency
+  deliberately bought at the cost of byte-for-byte reproducibility of the OS
+  layer), bounded by each package manager's signature verification against the
+  distro keys baked into the pinned base (see Decision §1); the base tag and all
+  application deps remain pinned, so application behaviour is unchanged.
 - `perl-base` (both criticals + the perl highs/mediums) is **eliminated** by the
   force-purge above — removed from the dpkg DB, so the scanner no longer reports it.
 - Remaining no-upstream-fix OS CVEs (e.g. `ncurses`, `libsqlite3` at the 2026-06-15
