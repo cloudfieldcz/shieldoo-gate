@@ -242,10 +242,21 @@ func extractTrivyBinary(tarPath, target string) error {
 		//      explicitly rather than being skipped)
 		//   2. exact-name match (not filepath.Base — `subdir/trivy` is skipped)
 		//   3. only regular files (no symlinks / hardlinks / devices)
-		//   4. per-entry size cap (200 MiB — Trivy v0.70 binary is ~70 MB
-		//      compressed, ~150 MB raw; pick a value comfortably above the real
-		//      binary and below "abuse"). The outer 200 MiB cap on the on-disk
-		//      tarball is independent.
+		//   4. per-entry size cap (400 MiB). Measured raw trivy binary sizes
+		//      at the 0.74.0 pin: Linux-64bit 168,456,354 B (~160.7 MiB),
+		//      Linux-ARM64 156,106,914 B (~148.9 MiB), macOS-64bit
+		//      172,598,512 B (~164.6 MiB, the largest), macOS-ARM64
+		//      161,425,922 B (~153.9 MiB) — measured directly by extracting
+		//      each release tarball, not estimated. 400 MiB leaves ~235 MiB
+		//      of headroom over the largest (the cap is ~2.4x that binary),
+		//      versus the previous 200 MiB cap's ~35 MiB (~18% headroom) —
+		//      the old comment's "~150 MB raw" baseline was stale and the
+		//      real margin had shrunk to nearly nothing. Re-measure and
+		//      adjust on every version bump; this is still a meaningful
+		//      bomb cap, not a `math.MaxInt64` free pass. The outer 200 MiB
+		//      cap on the on-disk *compressed* tarball (~50 MB real, see
+		//      `download`) is a separate, independent check and is
+		//      unaffected by this raw-size cap.
 		if strings.Contains(h.Name, "..") {
 			return fmt.Errorf("tar entry name contains '..' — refusing: %q", h.Name)
 		}
@@ -255,7 +266,7 @@ func extractTrivyBinary(tarPath, target string) error {
 		if h.Typeflag != tar.TypeReg {
 			return fmt.Errorf("tar entry 'trivy' is not a regular file (typeflag=%d) — refusing", h.Typeflag)
 		}
-		const perEntryCap = 200 << 20
+		const perEntryCap = 400 << 20
 		out, err := os.Create(target)
 		if err != nil {
 			return err
