@@ -76,7 +76,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
 FROM aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 AS trivy
 
 # Stage 3: Runtime image
-FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS runtime
+FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS runtime
 
 # The base tag is pinned by digest for reproducibility (ADR-014); `apk
 # upgrade` deliberately widens the build-time surface beyond that pin (the
