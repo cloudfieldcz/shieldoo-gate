@@ -14,7 +14,7 @@ pytest-asyncio==1.4.0
 
 # Security-driven transitive pins — fixes flagged by the Shieldoo vuln scanner
 # Bump alongside `uv pip compile` runs; keep one CVE reference per line.
-cryptography==50.0.1          # GHSA-g6cj-pr64-35w5 / CVE-2026-69247 (PKCS#7
+cryptography==50.0.2          # GHSA-g6cj-pr64-35w5 / CVE-2026-69247 (PKCS#7
                               # EnvelopedData Bleichenbacher oracle, fixed in 50.0.0);
                               # 50.0.1 rebuilds the wheels against OpenSSL 4.0.2,
                               # superseding GHSA-537c-gmf6-5ccf (OpenSSL in wheels)
