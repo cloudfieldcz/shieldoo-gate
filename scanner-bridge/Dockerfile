@@ -19,7 +19,7 @@
 # same pinned base image, so the venv's interpreter symlinks resolve in runtime.
 
 # ---- Builder: toolchain + dependency install ----
-FROM python:3.13.15-slim@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285 AS builder
+FROM python:3.13.18-slim@sha256:ae14d4ce8771606477a81446e7ef429edd6762305fc50c84507c1041fa8285d1 AS builder
 
 ARG SGW_TOKEN=""
 # Basic-auth username = project label on a self-hosted Shieldoo Gate. We use
@@ -61,10 +61,10 @@ COPY proto/ proto/
 RUN python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. proto/scanner.proto
 
 # ---- Runtime: clean image, no build toolchain or -dev headers ----
-FROM python:3.13.15-slim@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285 AS runtime
+FROM python:3.13.18-slim@sha256:ae14d4ce8771606477a81446e7ef429edd6762305fc50c84507c1041fa8285d1 AS runtime
 
 # Pull Debian-security patches for base-image OS packages on top of the pinned
-# base tag, then strip perl. The tag (python:3.13.15-slim) is pinned for
+# base tag, then strip perl. The tag (python:3.13.18-slim) is pinned for
 # reproducibility; `apt-get upgrade` adds whatever fixed package versions
 # Debian-security has published at build time (e.g. openssl 3.5.6-1~deb13u2 for
 # CVE-2026-45447). `perl-base` is a Debian "essential" package shipped by the
@@ -98,15 +98,16 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Python bump fails here rather than on the first scan in production.
 RUN python -c "import _cffi_backend; import pygit2; import grpc; import guarddog"
 
-# Upgrade the base-image pip to a patched release. pip is shipped by the base
-# image (not a runtime dependency of the bridge, which only runs `python
-# main.py`), so it is flagged by the scanner but not covered by requirements.txt.
-# Hash-pinned via pip-bootstrap.txt, not just version-pinned: an exact version
-# alone still trusts the index to serve the same bytes under that version.
-# Addressed by absolute path because the pip being patched is the base image's,
-# not the venv's (the venv has no pip).
-COPY pip-bootstrap.txt .
-RUN /usr/local/bin/python -m pip install --no-cache-dir --require-hashes -r pip-bootstrap.txt
+# Remove the base-image pip entirely. pip is NOT a runtime dependency of the
+# bridge (it only runs `python main.py` out of /opt/venv, and the venv has no
+# pip), but the vuln scanner flags the libraries pip vendors (msgpack,
+# setuptools, ...) and the wheel bundled for ensurepip. Deleting pip removes
+# those findings instead of chasing pip releases. Nothing in the image installs
+# packages at runtime. `uv` lives in the builder stage only.
+RUN /usr/local/bin/python -m pip uninstall -y pip \
+ && rm -f /usr/local/lib/python3*/ensurepip/_bundled/*.whl \
+ && rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.* \
+ && ! /usr/local/bin/python -m pip --version
 
 COPY extractors/ extractors/
 COPY extractors_diff/ extractors_diff/

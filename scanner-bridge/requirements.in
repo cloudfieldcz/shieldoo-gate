@@ -2,27 +2,27 @@
 guarddog==3.2.0           # 3.x: drops semgrep, adds nono-py sandbox + S3 scanning.
                           # Still declares pygit2<1.19 -> Python 3.14 stays blocked
                           # (no cp314 wheel for pygit2 <1.19). See docs/development/ci.md.
-grpcio==1.83.1
-grpcio-tools==1.83.1      # MUST stay in lockstep with grpcio
-openai==3.7.0             # major: httpx -> httpx2 (OS trust store instead of certifi;
+grpcio==1.84.1
+grpcio-tools==1.84.1      # MUST stay in lockstep with grpcio
+openai==3.37.0             # major: httpx -> httpx2 (OS trust store instead of certifi;
                           # the python:slim base ships ca-certificates). No API change
                           # on the surface we use (chat.completions.create,
                           # AsyncOpenAI/AsyncAzureOpenAI kwargs) — 3.0.0 is the only
-                          # 3.x release with breaking changes; 3.1-3.7 are additive.
+                          # 3.x release with breaking changes; 3.1-3.37 are additive.
 pytest==9.1.1
 pytest-asyncio==1.4.0
 
 # Security-driven transitive pins — fixes flagged by the Shieldoo vuln scanner
 # Bump alongside `uv pip compile` runs; keep one CVE reference per line.
-cryptography==50.0.1          # GHSA-g6cj-pr64-35w5 / CVE-2026-69247 (PKCS#7
+cryptography==50.0.2          # GHSA-g6cj-pr64-35w5 / CVE-2026-69247 (PKCS#7
                               # EnvelopedData Bleichenbacher oracle, fixed in 50.0.0);
                               # 50.0.1 rebuilds the wheels against OpenSSL 4.0.2,
                               # superseding GHSA-537c-gmf6-5ccf (OpenSSL in wheels)
-urllib3==2.7.0                # CVE-2026-44431 / CVE-2026-44432
+urllib3==2.8.0                # CVE-2026-44431 / CVE-2026-44432
 pygments==2.21.0              # CVE-2026-4539
-idna==3.19                    # CVE-2026-45409 / GHSA-65pc-fj4g-8rjx
-pyjwt[crypto]==2.13.0         # PYSEC-2026-175 / -177 / -178 / -179
-setuptools==84.0.0            # GHSA / dependabot #36 — MANIFEST.in exclusion bypass
+idna==3.20                    # CVE-2026-45409 / GHSA-65pc-fj4g-8rjx
+pyjwt[crypto]==2.15.1         # PYSEC-2026-175 / -177 / -178 / -179
+setuptools==84.2.1            # GHSA / dependabot #36 — MANIFEST.in exclusion bypass
                               # in sdist via NFC/NFD collision. Transitive via
                               # grpcio-tools; pinned here so uv keeps it in the lock.
 # Removed with the guarddog 2.x -> 3.0 bump: starlette / python-multipart were
@@ -32,3 +32,5 @@ setuptools==84.0.0            # GHSA / dependabot #36 — MANIFEST.in exclusion 
 # Removed with the openai 2.x -> 3.x bump: distro / tqdm were openai-only
 # transitive deps that openai 3.3 dropped. httpcore stays (via the explicit
 # httpx pin above); openai now brings httpx2 + httpcore2 + truststore instead.
+anyio==4.14.2                 # CRITICAL fix (transitive via httpx/openai); pinned so uv keeps it
+certifi==2026.10.19           # CRITICAL fix (transitive); pinned so uv keeps it

@@ -26,7 +26,7 @@ const (
 	// this: the "Trivy version parity" step in .github/workflows/ci.yml
 	// greps both files and fails the build if the versions disagree. See
 	// docs/development/ci.md ("Trivy version lockstep").
-	trivyVersion = "0.74.0"
+	trivyVersion = "0.76.1"
 
 	// defaultTrivyBaseURL is the GitHub releases host. Override via the second
 	// arg to ensureTrivy in tests.
@@ -41,16 +41,16 @@ const (
 //
 // IMPLEMENTER: replace the placeholders below with real values from
 //
-//	curl -L https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_checksums.txt
+//	curl -L https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_checksums.txt
 //
 // A unit test (TestExpectedChecksums_AllPinned) FAILS the build if any value
 // is missing or still starts with the placeholder, so the placeholder cannot
 // ship to production.
 var expectedChecksums = map[string]string{
-	"trivy_0.74.0_Linux-64bit.tar.gz": "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a",
-	"trivy_0.74.0_Linux-ARM64.tar.gz": "b94ce1976bbf3c15b514b605ee88be7c6d94a29be2302847ff01cb794d47aad5",
-	"trivy_0.74.0_macOS-64bit.tar.gz": "472816f6888dda689d075c30254d4210b4d1035acf365aa72332f584c2f60485",
-	"trivy_0.74.0_macOS-ARM64.tar.gz": "1caada5e0e2091909357c7525d3aa76f4b660b13821bc143b190c7483e31cc11",
+	"trivy_0.76.1_Linux-64bit.tar.gz": "c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0",
+	"trivy_0.76.1_Linux-ARM64.tar.gz": "e174dff2a6dba5e3ae41f8d0537a6324405bd08132497340304c6b20e0f16a1f",
+	"trivy_0.76.1_macOS-64bit.tar.gz": "7aa762eacd582052d053b62dcf972a1ab058abe39a57ccae234ed8894945b6b7",
+	"trivy_0.76.1_macOS-ARM64.tar.gz": "11a9b6cd2752011b54f01ea4bd0dbfa9f0c41dc6538d5a3f9d23955f471bf4e5",
 }
 
 // ErrUnsupportedPlatform is returned when shdg runs on a (GOOS, GOARCH) for
@@ -243,12 +243,12 @@ func extractTrivyBinary(tarPath, target string) error {
 		//   2. exact-name match (not filepath.Base — `subdir/trivy` is skipped)
 		//   3. only regular files (no symlinks / hardlinks / devices)
 		//   4. per-entry size cap (400 MiB). Measured raw trivy binary sizes
-		//      at the 0.74.0 pin: Linux-64bit 168,456,354 B (~160.7 MiB),
-		//      Linux-ARM64 156,106,914 B (~148.9 MiB), macOS-64bit
-		//      172,598,512 B (~164.6 MiB, the largest), macOS-ARM64
-		//      161,425,922 B (~153.9 MiB) — measured directly by extracting
-		//      each release tarball, not estimated. 400 MiB leaves ~235 MiB
-		//      of headroom over the largest (the cap is ~2.4x that binary),
+		//      at the 0.76.1 pin: Linux-64bit 176,029,856 B (~167.9 MiB),
+		//      Linux-ARM64 162,857,120 B (~155.3 MiB), macOS-64bit
+		//      180,174,352 B (~171.8 MiB, the largest), macOS-ARM64
+		//      168,234,370 B (~160.4 MiB) — measured directly by extracting
+		//      each release tarball, not estimated. 400 MiB leaves ~228 MiB
+		//      of headroom over the largest (the cap is ~2.3x that binary),
 		//      versus the previous 200 MiB cap's ~35 MiB (~18% headroom) —
 		//      the old comment's "~150 MB raw" baseline was stale and the
 		//      real margin had shrunk to nearly nothing. Re-measure and
