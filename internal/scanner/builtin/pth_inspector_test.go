@@ -54,7 +54,7 @@ func TestPTHInspector_MaliciousPTH_ReturnsMalicious(t *testing.T) {
 
 func TestPTHInspector_CleanPackage_ReturnsClean(t *testing.T) {
 	whlPath := createTestWhl(t, map[string]string{
-		"setup.py":           "from setuptools import setup\nsetup(name='test')\n",
+		"setup.py":              "from setuptools import setup\nsetup(name='test')\n",
 		"mypackage/__init__.py": "# empty\n",
 	})
 
@@ -203,4 +203,47 @@ func TestPTHInspector_SupportedEcosystems_OnlyPyPI(t *testing.T) {
 	ecosystems := s.SupportedEcosystems()
 	require.Len(t, ecosystems, 1)
 	assert.Equal(t, scanner.EcosystemPyPI, ecosystems[0])
+}
+
+const (
+	setuptoolsPTH       = "import os; var = 'SETUPTOOLS_USE_DISTUTILS'; enabled = os.environ.get(var, 'local') == 'local'; enabled and __import__('_distutils_hack').add_shim(); \n"
+	setuptoolsLegacyPTH = "import os; var = 'SETUPTOOLS_USE_DISTUTILS'; enabled = os.environ.get(var, 'stdlib') == 'local'; enabled and __import__('_distutils_hack').add_shim(); \n"
+)
+
+func scanWheel(t *testing.T, name string, files map[string]string) scanner.ScanResult {
+	t.Helper()
+	result, err := builtin.NewPTHInspector().Scan(context.Background(), scanner.Artifact{
+		ID:        "pypi:" + name + ":84.2.1:" + name + "-84.2.1-py3-none-any.whl",
+		Ecosystem: scanner.EcosystemPyPI,
+		Name:      name,
+		Version:   "84.2.1",
+		LocalPath: createTestWhl(t, files),
+	})
+	require.NoError(t, err)
+	return result
+}
+
+func TestPTHInspector_SetuptoolsCanonicalPTH_ReturnsClean(t *testing.T) {
+	for _, content := range []string{setuptoolsPTH, setuptoolsLegacyPTH} {
+		result := scanWheel(t, "setuptools", map[string]string{"distutils-precedence.pth": content})
+		assert.Equal(t, scanner.VerdictClean, result.Verdict)
+		assert.Empty(t, result.Findings)
+	}
+}
+
+func TestPTHInspector_SetuptoolsPTHInOtherPackage_ReturnsMalicious(t *testing.T) {
+	result := scanWheel(t, "setuptoolz", map[string]string{"distutils-precedence.pth": setuptoolsPTH})
+	assert.Equal(t, scanner.VerdictMalicious, result.Verdict)
+}
+
+func TestPTHInspector_SetuptoolsModifiedPTH_ReturnsMalicious(t *testing.T) {
+	result := scanWheel(t, "setuptools", map[string]string{
+		"distutils-precedence.pth": setuptoolsPTH + "import os; os.system('id')\n",
+	})
+	assert.Equal(t, scanner.VerdictMalicious, result.Verdict)
+}
+
+func TestPTHInspector_SetuptoolsCanonicalPTHWrongPath_ReturnsMalicious(t *testing.T) {
+	result := scanWheel(t, "setuptools", map[string]string{"extra/distutils-precedence.pth": setuptoolsPTH})
+	assert.Equal(t, scanner.VerdictMalicious, result.Verdict)
 }
