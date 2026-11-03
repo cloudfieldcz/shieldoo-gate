@@ -101,7 +101,9 @@ Two structural problems made remediation harder than it should be:
    those two lines is itself a signal that one of them was missed.
 
    Bumping the Go patch level is done in lockstep across all **seven**
-   locations. The current target is **1.27.0** (carries the go1.26.6 stdlib
+   locations. The current target is **1.27.3** (carries the go1.27.2 fixes for
+   GO-2026-6613 (net/http) and the bundled net/http/internal/http2 copy of
+   GO-2026-6617 / GO-2026-6612; previously 1.27.0, which carried the go1.26.6 stdlib
    fixes for GO-2026-6218 (net/url), GO-2026-6091 (html/template),
    GO-2026-6090 (crypto/tls), GO-2026-6089 (net/http), GO-2026-6088 (encoding/xml),
    GO-2026-5972 (encoding/asn1) and GO-2026-5026 (net/http); previously
