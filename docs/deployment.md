@@ -81,7 +81,7 @@ The main Dockerfile (`docker/Dockerfile`) uses a multi-stage build:
 
 1. **Node UI builder** — Builds the React admin UI (`npm ci && npm run build`)
 2. **Go builder** — Compiles the Go binary with CGO enabled (required for SQLite)
-3. **Trivy builder** — Copies the Trivy v0.74.0 binary
+3. **Trivy builder** — Copies the Trivy v0.76.1 binary
 4. **Runtime** — Alpine-based image combining all built artifacts
 
 The scanner-bridge has its own Dockerfile (`scanner-bridge/Dockerfile`) that:
@@ -89,28 +89,20 @@ The scanner-bridge has its own Dockerfile (`scanner-bridge/Dockerfile`) that:
 2. Creates a virtualenv at `/opt/venv` and installs pinned dependencies from
    `requirements.txt` into it
 3. Compiles protobuf definitions at build time
-4. Upgrades the base image's own `pip` from `pip-bootstrap.txt` under
-   `--require-hashes` (see below)
+4. Removes the base image's own `pip` from the runtime stage (see below)
 5. Runs `python main.py` as the entrypoint (`/opt/venv/bin` is first on `PATH`)
 
-### Why pip is hash-pinned in its own file
+### Why the runtime image has no pip
 
-`pip` ships with the base image and is not a runtime dependency of the bridge,
-but the vulnerability scanner still sees it, so it is upgraded to a patched
-release at build time. That upgrade reads `scanner-bridge/pip-bootstrap.txt`
-under `--require-hashes` rather than passing `pip==<version>` inline: an exact
-version alone still trusts the index to serve the same bytes under that version
-number, which is precisely the threat model this project exists to address.
-
-Note that the base image usually already ships the pinned version, so the step
-is a no-op and the digests are **not** exercised on a normal build. When bumping
-the pin, take the digests from `https://pypi.org/pypi/pip/<version>/json`
-(`urls[].digests.sha256`) — never from a local download — and verify them with a
-forced download rather than trusting a green build:
-
-```
-docker run --rm --user root <image> /usr/local/bin/python -m pip install --no-cache-dir --require-hashes --force-reinstall --ignore-installed -r /app/pip-bootstrap.txt
-```
+`pip` ships with the `python:slim` base image, but the bridge never uses it at
+runtime: it runs `python main.py` out of `/opt/venv`, and the venv has no pip.
+The vulnerability scanner still sees the base-image pip, the libraries it
+vendors (`msgpack`, `setuptools`, `certifi`, `urllib3` in `pip/_vendor/`) and
+the wheel bundled for `ensurepip`. The runtime stage therefore uninstalls pip
+and deletes the `ensurepip` wheel. The build fails if `python -m pip` still
+works afterwards. Until 2026-11 the image upgraded pip from a hash-pinned
+`pip-bootstrap.txt` instead, but each pip release still vendored outdated
+libraries.
 
 ### Where TLS trust comes from
 
@@ -211,7 +203,7 @@ max_artifact_size_mb: 50
 **Scanner criticality** (`scanners.criticality`):
 
 ```yaml
-builtin-threat-feed: "required"
+builtin-threat-feed: "required"     # best_effort when threat_feed.enabled: false
 guarddog:            "required"
 ai-scanner:          "required"
 version-diff:        "required"     # safe since v0.15.4
@@ -220,6 +212,9 @@ builtin-reputation:  "best_effort"
 > ⚠️ A scanner marked `required` that is **not enabled/registered** aborts startup
 > (fatal). Only mark a scanner `required` if it is actually enabled in this
 > deployment — e.g. keep `builtin-reputation: best_effort` unless reputation is on.
+> `builtin-threat-feed` is always registered, but with `threat_feed.enabled: false`
+> its table stays empty and it can only return CLEAN. Mark it `best_effort` there,
+> so that a DB error in a no-op lookup cannot fail a request closed.
 
 **Scanner-bridge** (Compose service):
 
