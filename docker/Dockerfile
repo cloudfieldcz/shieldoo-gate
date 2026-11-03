@@ -34,7 +34,7 @@ RUN npm run build
 # such a reference by digest, so editing only the tag silently keeps building
 # the old, unpatched image with a green build and no checksum failure. See
 # ADR-010 for the authoritative seven-location list.
-FROM golang:1.27.1-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS go-builder
+FROM golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS go-builder
 
 ARG SGW_TOKEN=""
 # Same rationale as stage 1 — identify as project "shieldoo-gate" when
@@ -69,14 +69,14 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
 # and fails the build on mismatch — see docs/development/ci.md.
 # Trivy < 0.66 cannot decode CycloneDX 1.6 SBOMs; shdg's `trivy fs --format
 # cyclonedx` (no explicit spec version requested) emits CycloneDX 1.7 on both
-# 0.72.0 and this 0.74.0 pin (verified directly against real output — Trivy
+# 0.72.0 and this 0.76.1 pin (verified directly against real output — Trivy
 # picks the spec version, shdg does not request one), so the gate must run a
 # Trivy that can decode at least 1.6+ or every push-from-CI scan will
 # silently fall back to OSV-only and miss CVSS-derived severities.
-FROM aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 AS trivy
+FROM aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c AS trivy
 
 # Stage 3: Runtime image
-FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS runtime
+FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS runtime
 
 # The base tag is pinned by digest for reproducibility (ADR-014); `apk
 # upgrade` deliberately widens the build-time surface beyond that pin (the
