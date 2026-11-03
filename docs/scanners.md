@@ -94,7 +94,7 @@ Eight scanners are available built-in (six core + typosquatting + version diff).
 | **Install Hook Analyzer** | `install-hook-analyzer` | PyPI, npm | Detects suspicious `setup.py` hooks, `postinstall` scripts, and install-time code execution |
 | **Obfuscation Detector** | `obfuscation-detector` | PyPI, npm, NuGet, Docker | Detects `base64.decode(exec(...))`, packed JavaScript, encrypted blobs, and other obfuscation patterns |
 | **Exfil Detector** | `exfil-detector` | PyPI, npm, NuGet, Docker | Detects HTTP/DNS calls to non-registry domains during install, data exfiltration patterns |
-| **PTH Inspector** | `pth-inspector` | PyPI (wheels only) | Detects `.pth` files with executable code — the exact attack vector from the LiteLLM incident. Only `.whl` artifacts are inspected (the `.pth` auto-exec surface exists only in installed wheels); sdists and other non-wheel artifacts are skipped cleanly, so marking it `required` does not fail closed on every sdist |
+| **PTH Inspector** | `pth-inspector` | PyPI (wheels only) | Detects `.pth` files with executable code — the exact attack vector from the LiteLLM incident. Only `.whl` artifacts are inspected (the `.pth` auto-exec surface exists only in installed wheels); sdists and other non-wheel artifacts are skipped cleanly, so marking it `required` does not fail closed on every sdist. The `distutils-precedence.pth` shim at the root of a `setuptools` wheel is allowed when its SHA-256 matches a known canonical shim (see [PTH Inspector — setuptools shim](#pth-inspector--setuptools-shim)) |
 | **Threat Feed Checker** | `builtin-threat-feed` | PyPI, npm, NuGet, Docker | Fast-path SHA-256 lookup against the local threat feed database. If a match is found, immediately returns `MALICIOUS` |
 | **Typosquat Scanner** | `builtin-typosquat` | PyPI, npm, NuGet, Docker, Maven, RubyGems, Go | Detects typosquatting, homoglyph substitution, combosquatting, and namespace confusion by checking package names against popular packages |
 | **Version Diff Scanner (AI-driven, v2.0)** | `version-diff` | PyPI, npm, NuGet, Maven, RubyGems | Compares each new version against its most recent cached predecessor by sending the extracted diff (added/modified/removed files, install hooks, top-level executable code, all secret-redacted) to an LLM that classifies the cross-version delta as CLEAN / SUSPICIOUS / MALICIOUS. Replaces the v1.x static heuristic — see [§ Version Diff Scanner — AI-Driven Cross-Version Analysis (v2.0)](#version-diff-scanner--ai-driven-cross-version-analysis-v20) below and [ADR-005](adr/ADR-005-ai-driven-version-diff.md) |
@@ -107,6 +107,25 @@ All built-in scanners are in `internal/scanner/builtin/` (except version-diff in
 - `pth_inspector.go`
 - `threat_feed_checker.go`
 - `typosquat.go` + `typosquat_data.go`
+
+### PTH Inspector — setuptools shim
+
+Every `setuptools` wheel ships `distutils-precedence.pth`. This file contains `import os` and `__import__('_distutils_hack')`, so the line heuristic flags it. Without an exception, each setuptools release is quarantined and needs a manual release.
+
+The inspector skips this file only when all three conditions are true:
+
+1. The artifact name is `setuptools`.
+2. The file is at the wheel root (`distutils-precedence.pth`).
+3. The SHA-256 of the file is in `setuptoolsPTHHashes` in `pth_inspector.go`.
+
+The name condition is necessary. The shim imports `_distutils_hack` from its own wheel, so the same bytes in another package would run that package's code. Any change to the content gives a different hash, and the inspector reports the file as usual.
+
+| SHA-256 | setuptools versions | Default of `SETUPTOOLS_USE_DISTUTILS` |
+|---|---|---|
+| `2638ce9e2500e572a5e0de7faed6661eb569d1b696fcba07b0dd223da5f5d224` | 60 and later | `local` |
+| `7ea7ffef3fe2a117ee12c68ed6553617f0d7fd2f0590257c25c484959a3b7373` | 49 to 59 | `stdlib` |
+
+If setuptools changes the shim, the new release is quarantined again. Verify the new content and add its hash to the map.
 
 ### Threat Feed Checker — Special Role
 

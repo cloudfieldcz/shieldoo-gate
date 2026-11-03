@@ -3,8 +3,12 @@ package builtin
 import (
 	"archive/zip"
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 	"time"
@@ -25,7 +29,7 @@ func NewPTHInspector() *PTHInspector {
 }
 
 func (p *PTHInspector) Name() string    { return "pth-inspector" }
-func (p *PTHInspector) Version() string { return "1.0.0" }
+func (p *PTHInspector) Version() string { return "1.1.0" }
 
 func (p *PTHInspector) SupportedEcosystems() []scanner.Ecosystem {
 	return []scanner.Ecosystem{scanner.EcosystemPyPI}
@@ -71,8 +75,16 @@ func (p *PTHInspector) Scan(_ context.Context, artifact scanner.Artifact) (scann
 		if err != nil {
 			continue
 		}
+		content, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			continue
+		}
+		if isCanonicalSetuptoolsPTH(artifact.Name, f.Name, content) {
+			continue
+		}
 
-		scanner := bufio.NewScanner(rc)
+		scanner := bufio.NewScanner(bytes.NewReader(content))
 		lineNum := 0
 		for scanner.Scan() {
 			lineNum++
@@ -81,7 +93,6 @@ func (p *PTHInspector) Scan(_ context.Context, artifact scanner.Artifact) (scann
 				findings = append(findings, scanner2Finding(f.Name, lineNum, line))
 			}
 		}
-		rc.Close()
 	}
 
 	if len(findings) > 0 {
@@ -107,6 +118,26 @@ func wheelFilename(a scanner.Artifact) string {
 		return parts[3]
 	}
 	return a.LocalPath
+}
+
+// setuptoolsPTHHashes are the SHA-256 digests of the distutils-precedence.pth
+// shim that setuptools ships in every wheel: the 'local' default (>= 60) and
+// the older 'stdlib' default (49-59).
+var setuptoolsPTHHashes = map[string]bool{
+	"2638ce9e2500e572a5e0de7faed6661eb569d1b696fcba07b0dd223da5f5d224": true,
+	"7ea7ffef3fe2a117ee12c68ed6553617f0d7fd2f0590257c25c484959a3b7373": true,
+}
+
+// isCanonicalSetuptoolsPTH reports whether a .pth file is the byte-identical
+// setuptools shim at the wheel root. The package name is part of the check,
+// because the shim imports _distutils_hack from the same wheel: in any other
+// package the same bytes would load attacker code.
+func isCanonicalSetuptoolsPTH(pkgName, path string, content []byte) bool {
+	if !strings.EqualFold(pkgName, "setuptools") || path != "distutils-precedence.pth" {
+		return false
+	}
+	sum := sha256.Sum256(content)
+	return setuptoolsPTHHashes[hex.EncodeToString(sum[:])]
 }
 
 // isPTHExecutable returns true when a .pth line contains code that would be
