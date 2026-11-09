@@ -12,9 +12,9 @@
     "test:e2e:update": "playwright test --update-snapshots"
   },
   "dependencies": {
-    "@tanstack/react-query": "5.105.0",
+    "@tanstack/react-query": "5.106.1",
     "axios": "1.21.0",
-    "lucide-react": "1.64.0",
+    "lucide-react": "1.69.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "react-router-dom": "7.18.5",
@@ -22,20 +22,20 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
-    "@playwright/test": "1.64.1",
-    "@tailwindcss/postcss": "4.3.3",
+    "@playwright/test": "1.65.0",
+    "@tailwindcss/postcss": "4.3.4",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
-    "@vitejs/plugin-react": "6.1.2",
-    "eslint": "10.13.0",
+    "@vitejs/plugin-react": "6.2.1",
+    "eslint": "10.14.0",
     "eslint-plugin-react-hooks": "7.1.1",
     "eslint-plugin-react-refresh": "0.5.7",
-    "globals": "17.13.0",
+    "globals": "17.14.0",
     "postcss": "8.5.32",
-    "tailwindcss": "4.3.3",
+    "tailwindcss": "4.3.4",
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.1",
-    "vite": "8.3.5"
+    "vite": "8.3.6"
   },
   "overrides": {
     "follow-redirects": "1.16.2",
