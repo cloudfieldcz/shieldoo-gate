@@ -73,7 +73,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
 # picks the spec version, shdg does not request one), so the gate must run a
 # Trivy that can decode at least 1.6+ or every push-from-CI scan will
 # silently fall back to OSV-only and miss CVSS-derived severities.
-FROM aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c AS trivy
+FROM aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb AS trivy
 
 # Stage 3: Runtime image
 FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS runtime
