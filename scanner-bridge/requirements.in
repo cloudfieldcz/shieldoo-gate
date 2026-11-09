@@ -33,4 +33,4 @@ setuptools==84.2.1            # GHSA / dependabot #36 — MANIFEST.in exclusion 
 # transitive deps that openai 3.3 dropped. httpcore stays (via the explicit
 # httpx pin above); openai now brings httpx2 + httpcore2 + truststore instead.
 anyio==4.14.2                 # CRITICAL fix (transitive via httpx/openai); pinned so uv keeps it
-certifi==2026.10.19           # CRITICAL fix (transitive); pinned so uv keeps it
+certifi==2026.10.23           # CRITICAL fix (transitive); pinned so uv keeps it
