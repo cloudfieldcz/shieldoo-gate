@@ -34,7 +34,7 @@ RUN npm run build
 # such a reference by digest, so editing only the tag silently keeps building
 # the old, unpatched image with a green build and no checksum failure. See
 # ADR-010 for the authoritative seven-location list.
-FROM golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS go-builder
+FROM golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS go-builder
 
 ARG SGW_TOKEN=""
 # Same rationale as stage 1 — identify as project "shieldoo-gate" when
