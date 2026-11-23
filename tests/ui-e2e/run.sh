@@ -47,11 +47,11 @@ GATE_HOST_HEALTH="http://localhost:18080/api/v1/health"
 # architecture so baselines are portable — an Apple-Silicon (arm64) dev machine
 # pulls and runs this same amd64 image under emulation, byte-identical to the
 # amd64 CI runner. (The gate compose pins linux/amd64 for the same reason.)
-# The tag MUST match the @playwright/test minor in ui/package.json (1.64.x);
+# The tag MUST match the @playwright/test minor in ui/package.json (1.65.x);
 # bump tag + amd64 digest + package.json together. A minor bump ships a new
 # bundled Chromium revision, so leaving the image behind fails every test with
 # "browserType.launch: Executable doesn't exist at /ms-playwright/...".
-PW_IMAGE="mcr.microsoft.com/playwright:v1.64.1-jammy@sha256:883c6cbb79e6fcf2851f7e0132a88b68615f262e4958ae33b30370f99f3f8b4d"
+PW_IMAGE="mcr.microsoft.com/playwright:v1.65.1-jammy@sha256:6432732f927534b06dd1d25f88cd354d03951010001a9083487d88a233628dba"
 
 UPDATE_ARG=""
 KEEP_STACK=false

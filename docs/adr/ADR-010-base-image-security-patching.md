@@ -101,7 +101,9 @@ Two structural problems made remediation harder than it should be:
    those two lines is itself a signal that one of them was missed.
 
    Bumping the Go patch level is done in lockstep across all **seven**
-   locations. The current target is **1.27.3** (carries the go1.27.2 fixes for
+   locations. The current target is **1.27.4** (go1.27.4, released 2026-11-10,
+   carries security fixes to cgo, the go command, the compiler, the linker and
+   net/http; previously 1.27.3, which carried the go1.27.2 fixes for
    GO-2026-6613 (net/http) and the bundled net/http/internal/http2 copy of
    GO-2026-6617 / GO-2026-6612; previously 1.27.0, which carried the go1.26.6 stdlib
    fixes for GO-2026-6218 (net/url), GO-2026-6091 (html/template),

@@ -22,7 +22,7 @@
 # editing only the tag silently keeps building the old, unpatched image with
 # no checksum failure to catch it. See ADR-010 for the authoritative
 # seven-location list.
-FROM golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS shdg-build
+FROM golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS shdg-build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -40,7 +40,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Base utilities
 # ---------------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates=20260601~26.04.1 \
+        ca-certificates=20260816ubuntu0.26.04.2 \
         curl=8.18.0-1ubuntu2.* \
         file=1:5.46-5build2 \
         jq=1.8.1-* \
@@ -78,7 +78,7 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - && \
 ARG DOTNET_VERSION=10.0
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        "dotnet-sdk-${DOTNET_VERSION}=10.0.109-0ubuntu1~26.04.*" \
+        "dotnet-sdk-${DOTNET_VERSION}=10.0.115-0ubuntu1~26.04.*" \
     && rm -rf /var/lib/apt/lists/*
 
 # Disable .NET telemetry in test environment
@@ -118,8 +118,8 @@ RUN apt-get update && \
 # values in .github/workflows/{ci,codeql,release}.yml. See ADR-010 for the
 # authoritative seven-location list.
 # ---------------------------------------------------------------------------
-ARG GO_VERSION=1.27.3
-ARG GO_SHA256=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
+ARG GO_VERSION=1.27.4
+ARG GO_SHA256=7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz && \
     echo "${GO_SHA256}  /tmp/go.tar.gz" | sha256sum -c - && \
     tar -C /usr/local -xzf /tmp/go.tar.gz && \
