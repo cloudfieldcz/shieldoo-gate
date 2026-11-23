@@ -40,7 +40,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Base utilities
 # ---------------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates=20260601~26.04.1 \
+        ca-certificates=20260816ubuntu0.26.04.2 \
         curl=8.18.0-1ubuntu2.* \
         file=1:5.46-5build2 \
         jq=1.8.1-* \
@@ -78,7 +78,7 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - && \
 ARG DOTNET_VERSION=10.0
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        "dotnet-sdk-${DOTNET_VERSION}=10.0.109-0ubuntu1~26.04.*" \
+        "dotnet-sdk-${DOTNET_VERSION}=10.0.115-0ubuntu1~26.04.*" \
     && rm -rf /var/lib/apt/lists/*
 
 # Disable .NET telemetry in test environment
