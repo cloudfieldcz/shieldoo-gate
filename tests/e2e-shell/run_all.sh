@@ -107,7 +107,7 @@ if [ "${SGW_CACHE_BACKEND:-}" = "s3" ] || [ "${SGW_CACHE_BACKEND:-}" = "azure_bl
     if [ -f "$GATE_LOG" ]; then
         if [ "${SGW_CACHE_BACKEND}" = "s3" ]; then
             if grep -q "s3 cache store initialized" "$GATE_LOG"; then
-                log_pass "S3 cache backend active (MinIO)"
+                log_pass "S3 cache backend active (versitygw)"
             else
                 log_fail "S3 cache backend NOT detected in logs — may have fallen back to local"
             fi

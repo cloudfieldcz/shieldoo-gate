@@ -1,4 +1,4 @@
-# docker-compose.e2e.auth.yml — Override for E2E pass 2 (auth + PostgreSQL + MinIO)
+# docker-compose.e2e.auth.yml — Override for E2E pass 2 (auth + PostgreSQL + S3 via versitygw)
 #
 # Usage: docker compose -f docker-compose.e2e.yml -f docker-compose.e2e.auth.yml up
 #
@@ -27,22 +27,20 @@ services:
       - internal-net
     restart: "no"
 
-  minio:
-    image: minio/minio:RELEASE.2025-02-28T09-55-16Z
-    # Start MinIO, wait for readiness, create the bucket, then keep running.
-    entrypoint: >
-      /bin/sh -c "
-      minio server /data --console-address ':9001' &
-      MINIO_PID=$$!;
-      until mc alias set local http://localhost:9000 minioadmin minioadmin123 2>/dev/null; do sleep 0.5; done;
-      mc mb local/shieldoo-cache --ignore-existing;
-      wait $$MINIO_PID
-      "
+  s3:
+    # versitygw serves a posix directory as S3; each top-level directory is a
+    # bucket, so the entrypoint creates the bucket before the gateway starts.
+    # Metadata goes to a sidecar dir because overlayfs may lack user xattrs.
+    image: versity/versitygw:v1.11.0@sha256:8319a530d08d537426e2f855bae5280709795dc73a3f0c347973ef915d6343c5
+    entrypoint:
+      - /bin/sh
+      - -c
+      - mkdir -p /data/shieldoo-cache /meta && exec /usr/local/bin/versitygw --port :9000 --health /health posix --sidecar /meta /data
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin123
+      ROOT_ACCESS_KEY: e2eaccesskey
+      ROOT_SECRET_KEY: e2esecretkey123
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9000/health"]
       interval: 2s
       timeout: 3s
       retries: 15
@@ -56,7 +54,7 @@ services:
         condition: service_started
       postgres:
         condition: service_healthy
-      minio:
+      s3:
         condition: service_healthy
     environment:
       # Database → PostgreSQL
@@ -64,19 +62,19 @@ services:
       # production MUST use sslmode=require or sslmode=verify-full.
       SGW_DATABASE_BACKEND: "postgres"
       SGW_DATABASE_POSTGRES_DSN: "postgres://shieldoo:shieldoo_e2e_pass@postgres:5432/shieldoo_e2e?sslmode=disable&connect_timeout=5"
-      # Cache → S3 (MinIO)
+      # Cache → S3 (versitygw)
       # NOTE: The S3 backend will log a warning "non-HTTPS endpoint configured
-      # (potential SSRF risk)" for http://minio:9000 — this is expected in E2E
+      # (potential SSRF risk)" for http://s3:9000 — this is expected in E2E
       # and safe within the isolated Docker network.
       SGW_CACHE_BACKEND: "s3"
       SGW_CACHE_S3_BUCKET: "shieldoo-cache"
-      SGW_CACHE_S3_ENDPOINT: "http://minio:9000"
+      SGW_CACHE_S3_ENDPOINT: "http://s3:9000"
       SGW_CACHE_S3_REGION: "us-east-1"
       SGW_CACHE_S3_FORCE_PATH_STYLE: "true"
-      SGW_CACHE_S3_ACCESS_KEY_ENV: "MINIO_ACCESS_KEY"
-      SGW_CACHE_S3_SECRET_KEY_ENV: "MINIO_SECRET_KEY"
-      MINIO_ACCESS_KEY: "minioadmin"
-      MINIO_SECRET_KEY: "minioadmin123"
+      SGW_CACHE_S3_ACCESS_KEY_ENV: "S3_ACCESS_KEY"
+      SGW_CACHE_S3_SECRET_KEY_ENV: "S3_SECRET_KEY"
+      S3_ACCESS_KEY: "e2eaccesskey"
+      S3_SECRET_KEY: "e2esecretkey123"
 
       # Policy mode → balanced for pass 2
       SGW_POLICY_MODE: "balanced"
