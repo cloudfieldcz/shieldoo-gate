@@ -50,7 +50,7 @@ down with `down -v` (fresh volumes) before the next:
 | Pass | Policy mode | DB | Cache | Proxy auth | Extra |
 |---|---|---|---|---|---|
 | 1 | `strict` | SQLite | local FS | off | baseline |
-| 2 | `balanced` | PostgreSQL | S3 (MinIO) | on (PAT) | strict projects + license enforcement + AI triage (`docker-compose.e2e.auth.yml`) |
+| 2 | `balanced` | PostgreSQL | S3 (versitygw) | on (PAT) | strict projects + license enforcement + AI triage (`docker-compose.e2e.auth.yml`) |
 | 3 | `permissive` | PostgreSQL | Azure Blob (Azurite) | on | `docker-compose.e2e.azurite.yml` |
 | 4 | `balanced` | SQLite | local FS | off | AI bridge enabled (Azure OpenAI) — exercises the version-diff LLM path; **self-skips** if `tests/e2e-shell/.env` (Azure creds) is missing |
 
@@ -99,6 +99,7 @@ The stack is defined in `tests/e2e-shell/docker-compose.e2e.yml` (compose projec
 | `ca-init` | CA bundler | Concatenates the gate image's system roots **+** the test CA into the shared `e2e-ca` volume, then **stays alive** (`tail -f`) — see §2.3. |
 | `push-registry` | Local `registry:2.8.3` | Only the Docker **push** target — *not* an upstream. |
 | `docker-dind` | Docker-in-Docker (privileged, test-only) | Backs the `docker`/`crane` registry tests. Never used in production. |
+| `s3` (pass 2 only) | S3-compatible cache backend (`versity/versitygw`, posix backend) | Defined in `docker-compose.e2e.auth.yml`. The entrypoint creates the `shieldoo-cache` bucket as a directory before the gateway starts. It replaces MinIO, because the `minio/minio` image can no longer be pulled. |
 | `test-runner` | Runs the suite (containerized mode) | Built from `Dockerfile.test-runner`; all clients pre-installed; entrypoint `CMD ["./run_all.sh"]`; exits non-zero on any failure. |
 
 > **There is no `trivy` service.** Trivy is a CLI **inside the gate image**, run as

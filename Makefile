@@ -41,7 +41,7 @@ test-e2e-containerized:
 		docker compose -f tests/e2e-shell/docker-compose.e2e.yml up \
 		--abort-on-container-exit --exit-code-from test-runner
 	docker compose -f tests/e2e-shell/docker-compose.e2e.yml down -v --remove-orphans
-	@echo "=== E2E Run 2: balanced + Auth + PostgreSQL + MinIO (S3) + STRICT projects + license enforcement ==="
+	@echo "=== E2E Run 2: balanced + Auth + PostgreSQL + versitygw (S3) + STRICT projects + license enforcement ==="
 	SGW_POLICY_MODE=balanced SGW_POLICY_AI_TRIAGE_ENABLED=true \
 		SGW_PROJECTS_MODE=strict \
 		SGW_PROXY_AUTH_ENABLED=true SGW_PROXY_TOKEN=$$(openssl rand -hex 16) \

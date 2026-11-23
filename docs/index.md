@@ -100,7 +100,7 @@ Shieldoo Gate Protocol Adapter
 | — | Tag mutability detection | Done |
 | — | Dynamic sandbox (gVisor) | Done |
 | — | AI Scanner (LLM-based, Azure OpenAI) | Done |
-| — | E2E PostgreSQL + MinIO testing | Done |
+| — | E2E PostgreSQL + S3 (versitygw) testing | Done |
 | — | Typosquatting & namespace confusion detection | Done |
 | — | Version diff analysis | Done |
 | — | Maintainer reputation risk scoring | Done |
